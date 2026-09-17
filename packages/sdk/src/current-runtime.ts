@@ -28,6 +28,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
   let sync: MethodSync | undefined;
   let failure: unknown;
+  let runFailed = false;
   let browser: Awaited<ReturnType<typeof openBrowser>>;
   try {
     sync = syncFactory?.();
@@ -63,11 +64,12 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       },
       onEvent: async (event: any) => { await onEvent?.(event); sync?.snapshot(); if (flags.verbose) process.stderr.write(JSON.stringify(event) + "\n"); },
     });
+    runFailed = result.status !== 'completed';
     await sync?.finish();
     const display=sync&&flags['run-dir']?{...result,dashboard_sync:existsSync(join(authoringPath(flags['run-dir']),'method-pending.json'))?'pending':'saved'}:result;
     process.stdout.write(JSON.stringify(display, null, 2) + "\n");
     if (result.status !== "completed") process.exitCode = result.status === "needs_input" ? 2 : 1;
     return result;
   } catch (error) { failure = error; throw error; }
-  finally { try { await browser?.close(); } catch(error) { if(!failure&&!controller.signal.aborted)throw error; } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); await sync?.finish(failure); } }
+  finally { try { await browser?.close(); } catch(error) { if(!failure&&!runFailed&&!controller.signal.aborted)throw error; } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); await sync?.finish(failure); } }
 }

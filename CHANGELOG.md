@@ -1,3 +1,9 @@
+# 0.10.2
+
+- Stop the active step when a browser connection fails. Keep normal action failures available to the agent.
+- Preserve the original run error if browser cleanup also fails.
+- Use executor 0.8.2.
+
 # 0.10.1
 
 Use the calling Codex or Claude agent ahead of a generic configured default. Honor explicit agent selection and preserve it throughout a run. Remove the native Claude turn cap.

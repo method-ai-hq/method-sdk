@@ -21,6 +21,29 @@ from browser_use.tools.service import Tools
 CATALOG = json.loads((Path(__file__).parent / 'browser-runtime/tools.json').read_text())
 ALLOWED = {tool['name'] for tool in CATALOG}
 
+class BrowserDisconnected(Exception):
+    pass
+
+
+def require_browser(session):
+    if not session or not session.is_cdp_connected:
+        raise BrowserDisconnected('Browser connection lost. Chrome closed or disconnected.')
+
+
+async def call_browser(server, name, parameters):
+    require_browser(server.browser_session)
+    try:
+        content = await server._execute_tool(name, parameters)
+    except Exception as error:
+        require_browser(server.browser_session)
+        # Provider exception text can contain cookies or private connection URLs.
+        return {'isError': True, 'content': [{'type': 'text', 'text':
+            type(error).__name__ + ': browser action failed. Inspect the page and try another action.'}]}
+    require_browser(server.browser_session)
+    return {'content': [v.model_dump(by_alias=True, exclude_none=True) for v in content]
+            if isinstance(content, list) else [{'type': 'text', 'text': content}]}
+
+
 async def serve():
     server = BrowserUseServer()
     domains = set()
@@ -77,9 +100,9 @@ async def serve():
                 if name == 'browser_navigate':
                     host = urlparse(parameters['url']).hostname
                     if host: domains.add(host.lower())
-                content = await server._execute_tool(name, parameters)
-                result = {'content': [v.model_dump(by_alias=True, exclude_none=True) for v in content] if isinstance(content, list) else [{'type': 'text', 'text': content}]}
+                result = await call_browser(server, name, parameters)
                 # Followed links and sign-in redirects belong to this task's active tab.
+                require_browser(server.browser_session)
                 page = await server.browser_session.get_current_page()
                 if page and name != 'browser_list_tabs':
                     host = urlparse(await page.get_url()).hostname
@@ -95,9 +118,10 @@ async def serve():
             if method == 'close': return
         except Exception as error:
             # Avoid exporting exception text that can contain connection URLs or cookies.
-            protocol.write(json.dumps({'id': request['id'], 'error': type(error).__name__ + ': browser operation failed; inspect the browser and retry.'}) + '\n'); protocol.flush()
+            protocol.write(json.dumps({'id': request['id'], 'error': {'code': 'connection_failed', 'message': str(error) if isinstance(error, BrowserDisconnected) else type(error).__name__ + ': browser service failed.'}}) + '\n'); protocol.flush()
     if server.browser_session:
         with contextlib.suppress(Exception):
             await close_browser()
 
-asyncio.run(serve())
+if __name__ == '__main__':
+    asyncio.run(serve())

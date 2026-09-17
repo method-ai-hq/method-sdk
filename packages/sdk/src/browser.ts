@@ -58,18 +58,18 @@ export class BrowserService {
  private stopped=false; private child; private queue:Promise<any>=Promise.resolve();
  constructor(python:string){
   this.child=spawn(python,[fileURLToPath(new URL('./browser-service.py',import.meta.url))],{stdio:['pipe','pipe','ignore'],env:{...process.env,ANONYMIZED_TELEMETRY:'false'}});
-  createInterface({input:this.child.stdout!}).on('line',line=>{try{const r=JSON.parse(line),p=this.pending.get(r.id);if(p){this.pending.delete(r.id);r.error?p.reject(Error(r.error)):p.resolve(r.result);}}catch{this.fail(Error('Invalid browser response'));}});
+  createInterface({input:this.child.stdout!}).on('line',line=>{try{const r=JSON.parse(line),p=this.pending.get(r.id);if(p){this.pending.delete(r.id);r.error?p.reject(Object.assign(Error(r.error.message),{code:r.error.code})):p.resolve(r.result);}}catch{this.fail(Error('Invalid browser response'));}});
   this.child.stdin!.on('error',e=>this.fail(e));
-  this.child.on('error',e=>{this.stopped=true;this.fail(e);});this.child.on('exit',()=>{this.stopped=true;this.fail(Error('Browser service stopped.'));});
+  this.child.on('error',e=>{this.stopped=true;this.fail(e);});this.child.on('exit',()=>{this.stopped=true;this.fail(Object.assign(Error('Browser service stopped.'),{code:'connection_failed'}));});
  }
  private fail(e:Error){for(const p of this.pending.values())p.reject(e);this.pending.clear();}
  request(method:string,args:any={},signal?:AbortSignal):Promise<any>{
   const action=async()=>{
-   if(this.stopped)throw Error('Browser service stopped.');
+   if(this.stopped)throw Object.assign(Error('Browser service stopped.'),{code:'connection_failed'});
    if(signal?.aborted)throw signal.reason;
    const id=++this.id;
    return new Promise((resolve,reject)=>{
-    const abort=()=>{clean();this.pending.delete(id);this.child.kill('SIGTERM');reject(signal?.reason??Error('Browser cancelled or timed out'));};
+    const abort=()=>{clean();this.pending.delete(id);this.child.kill('SIGTERM');reject(signal?.reason??Object.assign(Error('Browser operation timed out.'),{code:'connection_failed'}));};
     const timer=setTimeout(abort,120_000);
     const clean=()=>{clearTimeout(timer);signal?.removeEventListener('abort',abort);};
     this.pending.set(id,{resolve:v=>{clean();resolve(v);},reject:e=>{clean();reject(e);}});
