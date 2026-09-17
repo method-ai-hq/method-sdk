@@ -27,7 +27,7 @@ export function compareVersions(left: string, right: string): number {
   for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0);
   return 0;
 }
-const chatgpt = "Codex ships inside the ChatGPT app";
+const chatgpt = "Install or update the Codex CLI";
 const again = "then check with `codex --version` and run this command again.";
 
 export function checkNode(version = process.versions.node): Finding {
@@ -40,12 +40,12 @@ export function checkNode(version = process.versions.node): Finding {
 export async function checkCodex(command = "codex"): Promise<Finding> {
   command = resolveExecutable(command);
   const version = await execute(command, ["--version"]);
-  if (version.missing) return { ok: false, detail: `The Codex CLI was not found on PATH. Method runs every step in Codex. ${chatgpt}: install or open the ChatGPT app, turn on Codex, ${again}` };
+  if (version.missing) return { ok: false, detail: `The Codex CLI was not found on PATH. ${chatgpt}: ${again}` };
   const found = parseVersion(version.stdout);
-  if (version.code !== 0 || !found) return { ok: false, detail: `\`codex --version\` did not print a version (${version.code === null ? "no exit code" : `exit ${version.code}`}${version.stderr.trim() ? `: ${version.stderr.trim().slice(0, 300)}` : ""}). ${chatgpt}: open the ChatGPT app, turn on Codex, ${again}` };
-  if (compareVersions(found, MINIMUM_CODEX_VERSION) < 0) return { ok: false, detail: `Codex CLI ${found} is installed, but ${MINIMUM_CODEX_VERSION} or later is required. ${chatgpt}: update the ChatGPT app, ${again}` };
+  if (version.code !== 0 || !found) return { ok: false, detail: `\`codex --version\` did not print a version (${version.code === null ? "no exit code" : `exit ${version.code}`}${version.stderr.trim() ? `: ${version.stderr.trim().slice(0, 300)}` : ""}). ${chatgpt}: ${again}` };
+  if (compareVersions(found, MINIMUM_CODEX_VERSION) < 0) return { ok: false, detail: `Codex CLI ${found} is installed, but ${MINIMUM_CODEX_VERSION} or later is required. ${chatgpt}: ${again}` };
   const help = await execute(command, ["exec", "--help"]);
-  if (help.code !== 0 || !help.stdout.includes("--dangerously-bypass-approvals-and-sandbox")) return { ok: false, detail: `Codex CLI ${found} does not support \`codex exec --dangerously-bypass-approvals-and-sandbox\`, which the local runner needs. ${chatgpt}: update the ChatGPT app, ${again}` };
+  if (help.code !== 0 || !help.stdout.includes("--dangerously-bypass-approvals-and-sandbox")) return { ok: false, detail: `Codex CLI ${found} does not support \`codex exec --dangerously-bypass-approvals-and-sandbox\`, which the local runner needs. ${chatgpt}: ${again}` };
   return { ok: true, detail: `Codex CLI ${found} with \`codex exec --dangerously-bypass-approvals-and-sandbox\`` };
 }
 
@@ -63,14 +63,4 @@ export function checkRunDirectory(root: string): Finding {
   } catch (error) {
     return { ok: false, detail: `Cannot write to ${directory}: ${error instanceof Error ? error.message : String(error)}. Run this command from a directory you can write to.` };
   }
-}
-
-export class RuntimeUnavailable extends Error {}
-/** Before a run: one paragraph describing what is missing, then exit 1. */
-export async function requireRuntime(): Promise<void> {
-  for (const finding of [checkNode(), await checkCodex()]) if (!finding.ok) throw new RuntimeUnavailable(finding.detail);
-}
-export async function doctor(root = process.cwd()): Promise<{ ok: boolean; lines: string[] }> {
-  const findings = [checkNode(), await checkCodex(), checkRunDirectory(root)];
-  return { ok: findings.every(finding => finding.ok), lines: findings.map(finding => `${finding.ok ? "ok" : "fail"}`.padEnd(6) + finding.detail) };
 }

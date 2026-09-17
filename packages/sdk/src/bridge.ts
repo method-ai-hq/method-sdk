@@ -5,7 +5,7 @@ import { z } from "zod";
 import { runMethod } from "./run-method.js";
 import { authoringPath } from "./authoring.js";
 import { loadWorkflow } from "../../workflow-language/src/validate.js";
-import { renderPrompt } from "../../compiler/src/conversion-report.js";
+import { renderPrompt } from "../../method-document/src/conversion-report.js";
 const lines = createInterface({input:process.stdin, terminal:false});
 const send = (value:unknown) => process.stdout.write(JSON.stringify(value)+"\n");
 async function main() {
@@ -15,6 +15,6 @@ async function main() {
   if(message.op === "load") return loadWorkflow(message.workflow);
   if(message.op === "prompt") return renderPrompt(loadWorkflow(message.workflow));
   const data = z.object({file:z.string(), config:z.record(z.unknown()), options:z.record(z.unknown()).default({})}).parse(message);
-  return runMethod(authoringPath(data.file), data.config, {...data.options, onEvent:(event:unknown)=>send({type:"event",event})});
+  return runMethod(authoringPath(data.file), data.config, {...data.options, onEvent:(event:unknown)=>{send({type:"event",event});}});
 }
 main().then(result=>send({type:"result",result}),error=>{send({type:"error",error:error instanceof Error?error.message:String(error)});process.exitCode=1;}).finally(()=>lines.close());

@@ -276,7 +276,7 @@ Save includes declared files, script and tool entrypoints, dependency lockfiles,
 Use method inspect RUN_DIRECTORY --out inspection.json for a saved run; online runs sync to the same Method dashboard.
 Use method bind ID NAME --file FOLDER to remember an input on this computer. Add --upload only to save that selected input folder privately in the account. Bundled examples stay in the version; day records stay separate.
 Use method state ID --enable --file state.json to opt into shared account state. Concurrent runs cannot overwrite it. Account state is JSON; an uploaded SQLite input is a snapshot, not a shared database. Use a live service connection for a shared database. A stopped run keeps ownership until continued or explicitly released with method state ID --release RUN_ID after inspecting its actions.
-Saved runs have their own process. Use --background to return immediately, method run-status DIR, method wait DIR, or method cancel DIR. Resume the same version with --resume --run-dir DIR. Use method sync DIR to retry uploads without repeating work.
+CLI runs of local files and saved Methods have their own process. Use --background to return immediately, method run-status DIR, method wait DIR, or method cancel DIR. Resume the same version with --resume --run-dir DIR. Use method sync DIR to retry uploads without repeating work.
 
 
 # Recipes
@@ -296,7 +296,7 @@ For a stale .lock, first confirm the process has stopped. Never remove an active
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
 For a save conflict, get the latest version and apply the change there. For an uncertain upload, retry the same file and command with its sidecar unchanged.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
-Older saved methods retain their original --resources, --state-dir, --recoveries and Codex options. The new config must not silently change their execution.
+Only method/3 and method/3.1 execute. Convert or rewrite older documents before starting a new run; old executor flags and checkpoints are unsupported.
 
 
 # Command reference
@@ -308,6 +308,81 @@ Success exits 0. Errors exit 1 with text on stderr, unless the command specifies
 
 Common errors:
 File commands require readable YAML or JSON. Editing commands report draft locks and leave the original file unchanged after a failed edit. Online commands require sign-in and network access. Use method authoring recovery for conflicts and interrupted saves.
+
+## doctor
+
+Check Node and configured runtime access without running a Method.
+
+Usage:
+
+```sh
+method doctor [--config FILE] [--agent codex|claude]
+```
+
+Arguments and defaults:
+A script-only configuration does not require an agent. Without config, check the selected local agent. Use validate FILE for the Method's own dependencies.
+
+Result and changes:
+Setup findings; no task execution.
+
+Errors:
+Missing executable, credentials, or provider choice.
+
+Example:
+
+```sh
+method doctor --config runtime.json
+```
+
+## inspect
+
+Export saved execution evidence.
+
+Usage:
+
+```sh
+method inspect RUN_DIRECTORY --out FILE
+```
+
+Arguments and defaults:
+Use a new output file. --include-files attaches declared result files.
+
+Result and changes:
+Saved inspection JSON.
+
+Errors:
+Missing run or existing output.
+
+Example:
+
+```sh
+method inspect runs/example --out inspection.json
+```
+
+## prompt
+
+Read the document as instructions.
+
+Usage:
+
+```sh
+method prompt FILE
+```
+
+Arguments and defaults:
+Current Method file.
+
+Result and changes:
+Text; no execution.
+
+Errors:
+Invalid document.
+
+Example:
+
+```sh
+method prompt task.method
+```
 
 ## bind
 
@@ -696,7 +771,7 @@ method check set FILE STEP_ID (--json JSON|--value-file FILE)
 ```
 
 Arguments and defaults:
-Current methods require an equals/count/present/file object, a run check, or an agent check. Put plain-English criteria in an agent check prompt. --text and --text-file apply only to older formats.
+Current methods require an equals/count/present/file object, a run check, or an agent check. Put plain-English criteria in an agent check prompt.
 
 Result and changes:
 JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
@@ -1219,7 +1294,7 @@ Current methods optionally use runtime.json beside a local file, or in the curre
 --resume: continue the same saved run.
 --human FILE: saved human answers for the current runtime.
 --verbose: print runtime events.
-Use method doctor to check the installed Node and Codex tools.
+Use method doctor to check the installed Node and configured tools.
 
 Result and changes:
 Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, and 2 when human input is needed.

@@ -10,8 +10,8 @@
     "packages/sdk"
   ],
   "scripts": {
-    "build": "npm run build --workspace @withmethod/sdk && node scripts/build-guide.mjs && node scripts/prepare-source.mjs",
-    "test": "vitest run && npm run test:runtime && npm run test:python",
+    "build": "node scripts/update-release-docs.mjs && npm run build --workspace @withmethod/sdk && node scripts/build-guide.mjs && node scripts/prepare-source.mjs",
+    "test": "node scripts/update-release-docs.mjs --check && vitest run && npm run test:runtime && npm run test:python",
     "test:runtime": "cd node_modules/@withmethod/runtime && node --test test/*.test.js",
     "test:python": "${PYTHON:-python3} -m unittest discover -s testkit/python -p '*_test.py'",
     "method": "tsx packages/sdk/src/method.ts",

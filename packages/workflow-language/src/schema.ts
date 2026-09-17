@@ -58,7 +58,7 @@ function currentShape<T>(validate: any): z.ZodType<T> {
 }
 export const CurrentStepSchema = currentShape<CurrentStep>(stepShape);
 export const CurrentCheckSchema = currentShape<CurrentCheck>(checkShape);
-export const CurrentWorkflowSchema = currentShape<CurrentWorkflow>(methodShape).transform(value => value.run_prompt === undefined ? value : {...value, run_prompt: value.run_prompt.trim()});
+export const CurrentWorkflowSchema = currentShape<CurrentWorkflow>(methodShape);
 export function documentSchema(format = "method/3.1") {
   if (!["method/3", "method/3.1"].includes(format)) throw Error("UNSUPPORTED_FORMAT: use method/3.1.");
   return methodSchema;

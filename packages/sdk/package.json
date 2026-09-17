@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/sdk",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Build and run reusable .method files with checked steps and saved results.",
   "license": "MIT",
   "type": "module",
@@ -36,7 +36,7 @@
     "prepack": "npm --prefix ../.. run build"
   },
   "dependencies": {
-    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/cba77e85a5a1e2da0695d896720e2c09210b6831",
+    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/f299dabb437529c5ce5ffe010c61160dcb89ec93",
     "fflate": "^0.8.3",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
@@ -84,9 +84,9 @@
       "default": "./dist/packages/contracts/src/method-package.js"
     },
     "./conversion": {
-      "types": "./dist/packages/compiler/src/conversion-report.d.ts",
-      "import": "./dist/packages/compiler/src/conversion-report.js",
-      "default": "./dist/packages/compiler/src/conversion-report.js"
+      "types": "./dist/packages/method-document/src/conversion-report.d.ts",
+      "import": "./dist/packages/method-document/src/conversion-report.js",
+      "default": "./dist/packages/method-document/src/conversion-report.js"
     },
     "./method-client": {
       "types": "./dist/packages/sdk/src/method-client.d.ts",

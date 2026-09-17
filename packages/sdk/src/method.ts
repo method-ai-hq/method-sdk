@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import packageInfo from '../package.json' with { type: 'json' };
+import runtimeInfo from '@withmethod/runtime/package.json' with { type: 'json' };
 import { startRunWorker, waitForRun, cancelRun, workerAlive } from './run-worker.js';
 import { useCompatibleRelease } from './compatible-release.js';
 import { methodCache } from './prepare.js';
@@ -24,6 +26,15 @@ import { methodHelp, overviewHelp as help } from "./method-help.js";
 function safePath(path: string) {
   return authoringPath(path);
 }
+async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>['values'], extra: string[] = []) {
+  if (process.env.METHOD_RUN_WORKER === '1' || (!/[/\\]method\.(?:js|ts)$/.test(process.argv[1] ?? '') && !flags.background)) return false;
+  if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
+  const directory = safePath(flags['run-dir'] ?? join(methodCache(), 'runs', randomUUID()));
+  const workerArgs = [...args.filter(arg => arg !== '--background'), ...extra];
+  if (!flags['run-dir']) workerArgs.push('--run-dir', directory);
+  await startRunWorker(workerArgs, directory, flags.background);
+  return true;
+}
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
   if (args[0] === '__worker') {
@@ -40,7 +51,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     const result=args[0]==='wait'?await waitForRun(directory):args[0]==='cancel'?cancelRun(directory):{running:workerAlive(directory),...(existsSync(join(directory,'worker.json'))?readDocument(join(directory,'worker.json')):{})};
     process.stdout.write(JSON.stringify(result)+'\n');return;
   }
-  if (args.length === 1 && args[0] === "--version") { process.stdout.write("Method SDK 0.7.1; runtime 0.5.1; current format method/3.1\n"); return; }
+  if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.1\n`); return; }
   if (args[0] === 'run' && /^https?:/.test(args[1] ?? '')) {
     const url = new URL(args[1]!);
     const match = url.pathname.match(/^\/methods\/([^/]+)$/);
@@ -53,7 +64,10 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   const localCommand = ["prompt", "inspect", "doctor"].includes(args[0] ?? "")
     || args[0] === "check" && /\.(method|workflow)$/i.test(args[1] ?? "")
     || ["run", "steps"].includes(args[0] ?? "") && /\.(method|workflow)$|^https?:\/\//i.test(args[1] ?? "");
-  if (localCommand) return localMain(args);
+  if (localCommand) {
+    if (args[0] === 'run' && await dispatchRunWorker(args, parse(args).values)) return;
+    return localMain(args);
+  }
   const requestedHelp = methodHelp(args);
   if (requestedHelp !== undefined) { process.stdout.write(requestedHelp); return; }
   if (args[0] === "progress") return progressMain(args.slice(1));
@@ -268,13 +282,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   const flags = parse(rest.slice(2)).values;
   if(saved.package && await useCompatibleRelease(saved.package.runtime,args))return;
   if (workflow.format === 'method/3' || workflow.format === 'method/3.1') {
-    if(process.env.METHOD_RUN_WORKER!=='1' && (/[/\\]method\.(?:js|ts)$/.test(process.argv[1]??'') || flags.background)) {
-      const directory=safePath(flags['run-dir']??join(methodCache(),'runs',randomUUID()));
-      let workerArgs=args.filter(a=>a!=='--background');
-      if(!values.version)workerArgs.push('--version',saved.version_id);
-      if(!flags['run-dir'])workerArgs.push('--run-dir',directory);
-      await startRunWorker(workerArgs,directory,flags.background);return;
-    }
+    if(await dispatchRunWorker(args, flags, values.version ? [] : ['--version', saved.version_id])) return;
     await runSaved(saved, flags, client); return;
   }
 

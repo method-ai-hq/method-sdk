@@ -22,6 +22,6 @@
     "src/**/*.ts",
     "../workflow-language/src/**/*.ts",
     "../contracts/src/**/*.ts",
-    "../compiler/src/**/*.ts"
+    "../method-document/src/**/*.ts"
   ]
 }

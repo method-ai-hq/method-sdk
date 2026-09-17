@@ -50,9 +50,9 @@ it('status does not list Methods, reveal account details, or start login',async(
  client.request.mockRejectedValue(Error('401: expired'));s.stdout.mockClear();await methodMain(['status'],()=>client);expect(s.result().signed_in).toBe(false);
  client.request.mockRejectedValue(Error('503: unavailable'));await expect(methodMain(['status'],()=>client)).rejects.toThrow('503');
 });
-it('leaves a pending save for retry when readback fails or differs, then confirms normalized content',async()=>{
+it('leaves a pending save for retry when readback fails or differs, then confirms exact preserved content',async()=>{
  const s=setup();const workflow=JSON.parse(JSON.stringify((await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(exampleWorkflow)));
- workflow.run_prompt='Read the saved result.';writeFileSync(s.file,JSON.stringify({...workflow,run_prompt:'\nRead the saved result.\n'}));
+ workflow.run_prompt='\nRead the saved result.\n';writeFileSync(s.file,JSON.stringify(workflow));
  let bad=true;let pack:any;
  const client:any={server:'https://example.test',token:()=> 'test-token',transfer:vi.fn(),request:vi.fn(async (path:string,verb:string,body:any)=>{if(path==='/api/cli/files/check')return {present:[]};if(verb==='POST'){pack=body.package;return {workflow_id:'wf_test',version_id:'v_test',version_number:1};}return {version_id:'v_test',package:pack,workflow:{...workflow,...(bad?{name:'wrong'}:{})}};})};
  await expect(methodMain(['save',s.file],()=>client)).rejects.toThrow('does not match');

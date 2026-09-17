@@ -4,12 +4,13 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { executionLabel } from "../../workflow-language/src/schema.js";
 import { loadWorkflow } from "../../workflow-language/src/validate.js";
-import { renderPrompt } from "../../compiler/src/conversion-report.js";
-import { checkNode, checkCodex } from "./doctor.js";
+import { renderPrompt } from "../../method-document/src/conversion-report.js";
+import { checkNode } from "./doctor.js";
 import { writePrivateJson } from "./files.js";
 import { isWorkflowLink, saveWorkflowLink } from "./link.js";
 import { inspectRun } from "./inspect.js";
 import type { MethodSync } from "./method-sync.js";
+import { checkConfiguration, resolveAgentProfiles } from './capabilities.js';
 const help = "Use method run, check, steps, prompt, inspect, or doctor. See method help.";
 export function parse(args: string[]) {
   return parseArgs({ args, allowPositionals: true, options: {
@@ -39,35 +40,18 @@ export async function localMain(args = process.argv.slice(2)) {
   }
   if (command === "doctor") {
     if (parsed.positionals.length !== 1) throw new Error(help);
-    {
-      const node = checkNode();
-      process.stdout.write(node.detail + "\n");
-      if (!node.ok) { process.exitCode = 1; return; }
-      if (flags.config) {
-        const { readDocument } = await import("@withmethod/runtime/io.js");
-        const { validateConfig } = await import("@withmethod/runtime/validate.js");
-        const { executable } = await import("@withmethod/runtime/io.js");
-        const config = validateConfig(await readDocument(flags.config));
-        for (const profile of Object.values(config.runtimes ?? {}) as any[]) await executable(profile.command);
-        for (const profile of Object.values(config.models ?? {}) as any[]) {
-          if (profile.backend === "openai-responses" && !process.env[profile.api_key_env]) throw Error(`Missing environment variable: ${profile.api_key_env}`);
-          if (profile.backend === "codex") { const finding = await checkCodex(profile.command); if (!finding.ok) throw Error(finding.detail); }
-        }
-        if (!Object.keys(config.models ?? {}).length) {
-          const finding = await checkCodex();
-          if (!finding.ok) throw Error(finding.detail);
-          process.stdout.write(finding.detail + "\n");
-        }
-        process.stdout.write("Runtime configuration checked. Unconfigured model profiles use Codex. No method was run.\n");
-      } else {
-        const finding = await checkCodex();
-        process.stdout.write(finding.detail + "\n");
-        if (!finding.ok) process.exitCode = 1;
-        process.stdout.write("Supply --config runtime.json to check the scripts and tools.\n");
-      }
-      return;
-    }
+    const node = checkNode();
+    process.stdout.write(node.detail + "\n");
+    if (!node.ok) { process.exitCode = 1; return; }
+    const {readDocument} = await import('@withmethod/runtime/io.js');
+    const {validateConfig} = await import('@withmethod/runtime/validate.js');
+    const config = flags.config ? validateConfig(await readDocument(flags.config)) : {allow_local_processes:true};
+    if (!flags.config || flags.agent) config.models = await resolveAgentProfiles({steps:{agent:{do:{kind:'agent',model:'default'}}}}, config, flags.agent);
+    await checkConfiguration(config);
+    process.stdout.write('Runtime configuration checked. No method was run. Use method validate FILE to check the Method and its declared dependencies.\n');
+    return;
   }
+
   if (!["check", "steps", "prompt", "run"].includes(command) || !target || parsed.positionals.length !== 2) throw new Error(help);
   if (command === "run") return run(target, flags);
   const workflow = loadWorkflow(readFileSync(resolve(target), "utf8"));

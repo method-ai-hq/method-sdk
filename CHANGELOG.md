@@ -1,3 +1,10 @@
+# 0.8.0
+
+- Use runtime 0.6.0 for the same browser-safe parser and validator across the SDK and executor. File values require path and sha256; text is preserved and bounded YAML aliases are accepted.
+- Run local files and saved Methods through the same background worker. Check configured agents and scripts without requiring Codex for script-only work.
+- Export typed runtime options and results. Remove obsolete legacy-execution instructions and Codex-only setup helpers.
+- Use matching JavaScript and Python release versions, clean staging, reproducible wheel timestamps, and archive hash checks. Correct shipped source instructions and generate install versions.
+
 # Release changes
 
 ## SDK 0.7.1 / runtime 0.5.1

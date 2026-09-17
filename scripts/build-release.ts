@@ -1,12 +1,15 @@
 import {execFileSync} from 'node:child_process';
-import {mkdirSync,readdirSync,readFileSync,writeFileSync,copyFileSync} from 'node:fs';
+import {rmSync,mkdirSync,readdirSync,readFileSync,writeFileSync,copyFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
+import {assertImmutableArtifacts} from './release-contract.js';
 const root=resolve(import.meta.dirname,'..'), output=join(root,'dist/release'), assets=join(root,'dist/release-assets');
+// Only generated release staging is removed. No old artifact can leak into the manifest.
+rmSync(output,{recursive:true,force:true});rmSync(assets,{recursive:true,force:true});
 mkdirSync(output,{recursive:true});mkdirSync(assets,{recursive:true});
 execFileSync('npm',['run','build'],{cwd:root,stdio:'inherit'});
 execFileSync('npm',['pack','--workspace','@withmethod/sdk','--ignore-scripts','--pack-destination',output],{cwd:root,stdio:'pipe'});
-execFileSync(process.env.PYTHON??'python3',['-m','pip','wheel','./packages/sdk-python','--no-deps','--wheel-dir',output],{cwd:root,stdio:'pipe'});
+execFileSync(process.env.PYTHON??'python3',['-m','pip','wheel','./packages/sdk-python','--no-deps','--wheel-dir',output],{cwd:root,stdio:'pipe',env:{...process.env,SOURCE_DATE_EPOCH:'315532800'}});
 execFileSync(process.execPath,['--import','tsx','scripts/build-cli-distributions.ts'],{cwd:root,stdio:'inherit'});
 const sdk=JSON.parse(readFileSync(join(root,'packages/sdk/package.json'),'utf8')).version;
 const runtime=JSON.parse(readFileSync(join(root,'node_modules/@withmethod/runtime/package.json'),'utf8')).version;
@@ -20,5 +23,10 @@ function visit(dir:string,prefix=''){
  }
 }
 visit(output);
+const priorResponse = await fetch('https://github.com/method-ai-hq/method-sdk/releases/latest/download/manifest.json');
+if (!priorResponse.ok) throw Error(`Cannot verify the prior public release: ${priorResponse.status}`);
+const prior = await priorResponse.json() as {schema:string;files:Array<{name:string;sha256:string}>};
+if(prior.schema !== 'method-release/1' || !Array.isArray(prior.files)) throw Error('Invalid prior release manifest');
+assertImmutableArtifacts(files, prior.files);
 writeFileSync(join(assets,'manifest.json'),JSON.stringify({schema:'method-release/1',sdk,runtime,python,commit:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),files},null,2)+'\n');
 console.log(`Prepared release ${sdk}: ${files.length} verified artifacts.`);
