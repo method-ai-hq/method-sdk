@@ -1,3 +1,7 @@
+# 0.10.5
+
+- Omit Node development headers and documentation from standalone CLI downloads. Keep Node, npm, and licenses.
+
 # 0.10.4
 
 - Accept dependency-free Node packages during run setup.

@@ -28,6 +28,8 @@ for(const [target,checksum] of Object.entries(targets)){
  }
  const stage=join(cache,target);rmSync(stage,{recursive:true,force:true});mkdirSync(stage);
  execFileSync('tar',['-xzf',archive,'--strip-components=1','-C',stage]);
+ // Keep Node, npm, and licenses. Headers and documentation are not runtime files.
+ for(const name of ['include','share','CHANGELOG.md','README.md'])rmSync(join(stage,name),{recursive:true,force:true});
  cpSync(join(sdk,'node_modules'),join(stage,'sdk/node_modules'),{recursive:true});
  writeFileSync(join(stage,'method'),'#!/bin/sh\nset -eu\nentry="$0"\nwhile [ -L "$entry" ]; do link="$(readlink "$entry")"; case "$link" in /*) entry="$link";; *) entry="$(dirname "$entry")/$link";; esac; done\nbase="$(CDPATH= cd -- "$(dirname -- "$entry")" && pwd)"\nexport METHOD_RELEASE_ROOT="$base"\nexec "$base/bin/node" "$base/sdk/node_modules/@withmethod/sdk/dist/packages/sdk/src/method.js" "$@"\n',{mode:0o755});
  const packed=join(cache,`method-${version}-${target}.tar.gz`);
