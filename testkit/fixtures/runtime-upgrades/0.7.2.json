@@ -1,0 +1,94 @@
+{
+  "provenance": {
+    "sdk": "0.9.4",
+    "release": "https://github.com/method-ai-hq/method-sdk/releases/tag/v0.9.4",
+    "operation": "collectPackage from the installed published SDK",
+    "runtime": "0.7.2"
+  },
+  "saved": {
+    "workflow_id": "wf_upgrade_test",
+    "version_id": "version_0_7_2",
+    "workflow": {
+      "format": "method/3.1",
+      "name": "Portable ledger",
+      "goal": "Read a bound folder and record one checked update.",
+      "inputs": {
+        "pause": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "state": {
+        "count": {
+          "type": "number",
+          "default": 0
+        }
+      },
+      "environment": {
+        "records": {
+          "type": "files",
+          "description": "Folder with message.txt and a test ledger."
+        }
+      },
+      "steps": {
+        "write": {
+          "in": {
+            "folder": "environment.records",
+            "count": "state.count"
+          },
+          "do": {
+            "kind": "run",
+            "runtime": "node",
+            "entrypoint": "write.mjs"
+          },
+          "out": {
+            "text": {
+              "type": "text"
+            }
+          },
+          "changes": [
+            "state.count",
+            "environment.records"
+          ],
+          "check": {
+            "kind": "run",
+            "runtime": "node",
+            "entrypoint": "check.mjs"
+          }
+        },
+        "confirm": {
+          "after": "write",
+          "when": "inputs.pause",
+          "ask": "Continue?",
+          "out": {
+            "answer": {
+              "type": "text"
+            }
+          }
+        }
+      },
+      "result": "text"
+    },
+    "package": {
+      "schema": "method-package/1",
+      "runtime": "0.7.2",
+      "files": [
+        {
+          "path": "check.mjs",
+          "sha256": "22678e2bc89f1532fd32017eb8748d016762e4f72983b29d3f2791a78438ee64",
+          "size": 399
+        },
+        {
+          "path": "write.mjs",
+          "sha256": "efb7c6cef97e84785c1d830f3c66201427aac045f4ab29f1fe0df05a8a552556",
+          "size": 331
+        }
+      ],
+      "digest": "d0b45b469402cc717cff524c56402eef3073f6056e0b076c564b781ab24a7a74"
+    }
+  },
+  "blobs": {
+    "22678e2bc89f1532fd32017eb8748d016762e4f72983b29d3f2791a78438ee64": "aW1wb3J0IHtyZWFkRmlsZVN5bmN9IGZyb20gJ25vZGU6ZnMnO2ltcG9ydCB7am9pbn0gZnJvbSAnbm9kZTpwYXRoJztsZXQgcz0nJztmb3IgYXdhaXQoY29uc3QgYyBvZiBwcm9jZXNzLnN0ZGluKXMrPWM7Y29uc3QgeD1KU09OLnBhcnNlKHMpO2NvbnN0IHZhbGlkPXJlYWRGaWxlU3luYyhqb2luKHguaW5wdXRzLmZvbGRlciwnbGVkZ2VyLnR4dCcpLCd1dGY4JykuZW5kc1dpdGgoeC5vdXRwdXRzLnRleHQrJ1xuJykmJnguc3RhdGVfYWZ0ZXIuY291bnQ9PT14LnN0YXRlX2JlZm9yZS5jb3VudCsxO2NvbnNvbGUubG9nKEpTT04uc3RyaW5naWZ5KHtzdGF0dXM6dmFsaWQ/J3Bhc3MnOidmYWlsJyxyZWFzb246J0NvbXBhcmUgdGhlIHNhdmVkIGxlZGdlciBhbmQgY291bnQuJyxldmlkZW5jZTpbXX0pKTsK",
+    "efb7c6cef97e84785c1d830f3c66201427aac045f4ab29f1fe0df05a8a552556": "aW1wb3J0IHtyZWFkRmlsZVN5bmMsYXBwZW5kRmlsZVN5bmN9IGZyb20gJ25vZGU6ZnMnO2ltcG9ydCB7am9pbn0gZnJvbSAnbm9kZTpwYXRoJztsZXQgcz0nJztmb3IgYXdhaXQoY29uc3QgYyBvZiBwcm9jZXNzLnN0ZGluKXMrPWM7Y29uc3QgeD1KU09OLnBhcnNlKHMpLHRleHQ9cmVhZEZpbGVTeW5jKGpvaW4oeC5mb2xkZXIsJ21lc3NhZ2UudHh0JyksJ3V0ZjgnKS50cmltKCk7YXBwZW5kRmlsZVN5bmMoam9pbih4LmZvbGRlciwnbGVkZ2VyLnR4dCcpLHRleHQrJ1xuJyk7Y29uc29sZS5sb2coSlNPTi5zdHJpbmdpZnkoe3RleHQsc3RhdGU6e2NvdW50OnguY291bnQrMX19KSk7Cg=="
+  }
+}

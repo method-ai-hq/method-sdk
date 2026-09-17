@@ -1,3 +1,4 @@
+import {browserConfig} from './browser.js';
 import { dirname, resolve } from "node:path";
 import { readDocument } from "@withmethod/runtime/io.js";
 import { validateConfig } from "@withmethod/runtime/validate.js";
@@ -21,5 +22,5 @@ export async function localSetup(file: string, flags: { config?: string; workspa
   for (const [name, path] of Object.entries(config.environment ?? {})) {
     if (method.environment?.[name]?.type === "files") config.environment[name] = authoringPath(resolve(dirname(configFile), String(path)));
   }
-  return { config, configFile, sourceRoot };
+  return { config:browserConfig(method,config), configFile, sourceRoot };
 }

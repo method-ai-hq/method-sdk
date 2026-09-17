@@ -35,7 +35,7 @@ export function pointer(value: Json | undefined, path: string): Json | undefined
 import { methodShape, stepShape, checkShape } from "@withmethod/runtime/document-validators.js";
 import { methodSchema } from "@withmethod/runtime/schema.js";
 export type RunExecution = { kind: "run"; runtime: string; entrypoint: string; args?: string[] };
-export type AgentExecution = { kind: "agent"; model: string; prompt: string; tools: string[] };
+export type AgentExecution = { kind: "agent"; model: string; prompt: string; tools?: string[]; browser?: string };
 export type Execution = RunExecution | AgentExecution | { kind: "call"; model: string; prompt: string };
 export type CurrentCheck = ExactCheck | RunExecution | AgentExecution;
 export type CurrentStep = BaseStep & {

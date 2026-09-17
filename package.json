@@ -16,7 +16,8 @@
     "test:python": "${PYTHON:-python3} -m unittest discover -s testkit/python -p '*_test.py'",
     "method": "tsx packages/sdk/src/method.ts",
     "pack": "npm run build && mkdir -p dist && npm pack --workspace @withmethod/sdk --ignore-scripts --pack-destination dist",
-    "release:build": "tsx scripts/build-release.ts"
+    "release:build": "tsx scripts/build-release.ts",
+    "test:browser": "tsx testkit/slow/browser.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.10",

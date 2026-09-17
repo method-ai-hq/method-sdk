@@ -32,6 +32,11 @@ export async function bindConnection(client:MethodClient,id:string,name:string,v
   const saved=await client.request<any>(`/api/cli/methods/${encodeURIComponent(id)}`);
   if(!saved.workflow.environment?.[name]||saved.workflow.environment[name].type==='files')throw Error('Use a declared service, browser, desktop, or tool binding.');
   // Values identify a connection. Credentials remain in the service's existing login store.
+  if(saved.workflow.environment[name].type==='browser'&&/^method-browser:[a-z][a-z0-9_-]*$/.test(value)){
+    if(upload)throw Error('Browser selection is private to this computer. Use method deploy to transfer a selected session.');
+    const file=localFile(client,id),old=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):{};
+    writePrivateJson(file,{...old,[name]:{kind:'connection',value}});return {saved:true,scope:'this computer',name};
+  }
   const url=new URL(value);if(!['https:','http:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Use a connection URL without credentials, query parameters, or a fragment.');
   if(upload)return client.request(`/api/cli/methods/${encodeURIComponent(id)}/bindings/${name}`,'PUT',{kind:'connection',value:url.href});
   const file=localFile(client,id),old=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):{};
@@ -44,6 +49,7 @@ export async function resolveBindings(client:MethodClient,id:string,method:any,c
   const remote=existsSync(snapshot)?JSON.parse(readFileSync(snapshot,'utf8')):await client.request<Record<string,any>>(`/api/cli/methods/${encodeURIComponent(id)}/bindings`);
   const environment={...config.environment},missing=[];
   for(const [name,definition] of Object.entries(method.environment??{}) as [string,any][]){
+    if(definition.type==='browser'&&!local[name]&&!remote[name]&&!environment[name]){environment[name]='method-browser:default';continue;}
     if(local[name]?.kind==='connection'){environment[name]=local[name].value;continue;}
     if(typeof local[name]==='string'&&existsSync(local[name])){environment[name]=local[name];continue;}
     if(environment[name]){if(definition.type==='files')environment[name]=resolve(root,environment[name]);continue;}

@@ -1,3 +1,5 @@
+import {recordDeploymentSource} from './deployment-source.js';
+import {openBrowser} from './browser.js';
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -26,6 +28,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
   let sync: MethodSync | undefined;
   let failure: unknown;
+  let browser: Awaited<ReturnType<typeof openBrowser>>;
   try {
     sync = syncFactory?.();
     await sync?.start(method, json(flags.inputs) ?? {}, {});
@@ -45,10 +48,13 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       if(resolvedFile){mkdirSync(dirname(resolvedFile),{recursive:true,mode:0o700});writePrivateJson(resolvedFile,config);}
       if(flags['run-dir']){const path=join(authoringPath(flags['run-dir']),'setup.json');const events=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):[];writePrivateJson(path,[...events,{at:new Date().toISOString(),type:'setup_completed'}]);}
     }
+    if(!flags.resume)recordDeploymentSource(authoringPath(flags['run-dir']!),sourceRoot,authoringPath(file),method,config);
+    browser = await openBrowser(method,config,flags['run-dir']!,controller.signal);
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
       inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
       human: json(flags.human), signal: controller.signal,
+      ...(browser ? {connections:browser.connections} : {}),
       sourceRoot,
       processPath: prepared.processPath,
       prepareBundle: prepared.prepareBundle,
@@ -63,5 +69,5 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     if (result.status !== "completed") process.exitCode = result.status === "needs_input" ? 2 : 1;
     return result;
   } catch (error) { failure = error; throw error; }
-  finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); await sync?.finish(failure); }
+  finally { try { await browser?.close(); } catch(error) { if(!failure&&!controller.signal.aborted)throw error; } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); await sync?.finish(failure); } }
 }

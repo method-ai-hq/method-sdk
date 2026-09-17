@@ -20,4 +20,8 @@ export function copyPublicExamples(destination) {
   }
 
 }
+const runtimeTarget=fileURLToPath(new URL('../dist/packages/sdk/src/',import.meta.url));
+mkdirSync(runtimeTarget,{recursive:true});
+cpSync(fileURLToPath(new URL('../src/browser-runtime/',import.meta.url)),resolve(runtimeTarget,'browser-runtime'),{recursive:true});
+cpSync(fileURLToPath(new URL('../src/browser-service.py',import.meta.url)),resolve(runtimeTarget,'browser-service.py'));
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) copyPublicExamples(fileURLToPath(new URL('../dist/packages/sdk/examples/', import.meta.url)));

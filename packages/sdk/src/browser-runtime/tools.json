@@ -1,0 +1,189 @@
+[
+  {
+    "name": "browser_navigate",
+    "description": "Navigate to a URL in the browser",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL to navigate to"
+        },
+        "new_tab": {
+          "type": "boolean",
+          "description": "Whether to open in a new tab",
+          "default": false
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "browser_click",
+    "description": "Click an element by index or at specific viewport coordinates. Use index for elements from browser_get_state, or coordinate_x/coordinate_y for pixel-precise clicking.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "description": "The index of the element to click (from browser_get_state). Provide this OR coordinate_x+coordinate_y."
+        },
+        "coordinate_x": {
+          "type": "integer",
+          "description": "X coordinate in pixels from the left edge of the viewport. Must be used together with coordinate_y. Provide this OR index."
+        },
+        "coordinate_y": {
+          "type": "integer",
+          "description": "Y coordinate in pixels from the top edge of the viewport. Must be used together with coordinate_x. Provide this OR index."
+        },
+        "new_tab": {
+          "type": "boolean",
+          "description": "Whether to open any resulting navigation in a new tab",
+          "default": false
+        }
+      }
+    }
+  },
+  {
+    "name": "browser_type",
+    "description": "Type text into an input field. Clears existing text by default; pass text=\"\" to clear only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "description": "The index of the input element (from browser_get_state)"
+        },
+        "text": {
+          "type": "string",
+          "description": "The text to type. Pass an empty string (\"\") to clear the field without typing."
+        }
+      },
+      "required": [
+        "index",
+        "text"
+      ]
+    }
+  },
+  {
+    "name": "browser_get_state",
+    "description": "Get the current state of the page including all interactive elements",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "include_screenshot": {
+          "type": "boolean",
+          "description": "Whether to include a screenshot of the current page",
+          "default": false
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "browser_get_html",
+    "description": "Get the raw HTML of the current page or a specific element by CSS selector",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "selector": {
+          "type": "string",
+          "description": "Optional CSS selector to get HTML of a specific element. If omitted, returns full page HTML."
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "browser_screenshot",
+    "description": "Take a screenshot of the current page. Returns viewport metadata as text and the screenshot as an image.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "full_page": {
+          "type": "boolean",
+          "description": "Whether to capture the full scrollable page or just the visible viewport",
+          "default": false
+        }
+      }
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "browser_scroll",
+    "description": "Scroll the page",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down"
+          ],
+          "description": "Direction to scroll",
+          "default": "down"
+        }
+      }
+    }
+  },
+  {
+    "name": "browser_go_back",
+    "description": "Go back to the previous page",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "browser_list_tabs",
+    "description": "List all open tabs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "browser_switch_tab",
+    "description": "Switch to a different tab",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tab_id": {
+          "type": "string",
+          "description": "4 Character Tab ID of the tab to switch to"
+        }
+      },
+      "required": [
+        "tab_id"
+      ]
+    }
+  },
+  {
+    "name": "browser_close_tab",
+    "description": "Close a tab",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "tab_id": {
+          "type": "string",
+          "description": "4 Character Tab ID of the tab to close"
+        }
+      },
+      "required": [
+        "tab_id"
+      ]
+    }
+  }
+]

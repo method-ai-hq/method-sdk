@@ -26,7 +26,7 @@ function fixture(version='0.7.0') {
  const flags={config,'run-dir':join(root,'run')};
  return {root,records,client,flags,saved:original.saved};
 }
-for(const version of ['0.7.0','0.7.1'])it(`runs a package collected by the published ${version} runtime without saving a new version`,async()=>{
+for(const version of ['0.7.0','0.7.1','0.7.2'])it(`runs a package collected by the published ${version} runtime without saving a new version`,async()=>{
  const f=fixture(version),before=JSON.stringify(f.saved);
  const result=await runSaved(f.saved,f.flags,f.client);
  expect(result).toMatchObject({status:'completed',result:'Hello from a local binding'});

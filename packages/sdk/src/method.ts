@@ -36,6 +36,18 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
 }
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
+  if (args[0] === 'deploy') {
+    const p=parseArgs({args:args.slice(1),options:{'from-run':{type:'string'},approve:{type:'string'},run:{type:'string'},login:{type:'string'},agent:{type:'string'},inputs:{type:'string'},resume:{type:'string'}}});
+    if([p.values['from-run'],p.values.approve,p.values.run,p.values.login].filter(Boolean).length!==1)throw Error('Use method deploy --from-run DIR, --approve ID, --run ID, or --login ID.');
+    const {prepareDeployment,approveDeployment}=await import('./deploy.js');
+    const result=p.values['from-run']?await prepareDeployment(safePath(p.values['from-run'])):p.values.approve?await approveDeployment(p.values.approve):p.values.login?await (await import('./runner-deploy.js')).loginRunner(p.values.login,p.values.agent):await (await import('./runner-deploy.js')).runDeployment(p.values.run!,p.values.inputs? safePath(p.values.inputs):undefined,p.values.resume);
+    process.stdout.write(JSON.stringify(result,null,2)+'\n');if(result.status==='needs_input')process.exitCode=2;return;
+  }
+  if (args[0] === 'browser' && args[1] === 'connect') {
+    const {configureBrowser}=await import('./browser.js');
+    const p=parseArgs({args:args.slice(2),options:{name:{type:'string'},cdp:{type:'string'}}});
+    process.stdout.write(JSON.stringify(configureBrowser(p.values.name??'default',p.values.cdp))+'\n');return;
+  }
   if (args[0] === '__worker') {
     const file = args[1]!; const directory=resolve(file,'..');
     writePrivateJson(join(directory,'worker.json'),{status:'running',pid:process.pid});

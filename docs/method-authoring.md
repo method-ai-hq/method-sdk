@@ -540,7 +540,7 @@ Use method schema for field definitions, method authoring execution for setup, a
 
 A method has format, name, goal, steps, result, and optional inputs, state, environment, and files.
 Each step has either do or ask. purpose, reading, and limits are optional. The do object selects kind: run, call, or agent.
-run uses runtime and entrypoint; call uses model and prompt; agent also declares tools.
+run uses runtime and entrypoint; call uses model and prompt; agent can select browser: environment.NAME and optional custom tools.
 Optional run_prompt is plain text for the outside agent that starts a saved Method. Write which Method to run, where to find its inputs, and what to show when finished. Save it with the Method version and update it when inputs or outputs change. The copy button appends the exact version link and shared CLI setup; do not repeat them in run_prompt. This field is not a step prompt and does not expand variables. Set it with method set task.method /run_prompt --text-file run-prompt.txt.
 
 In method/3.1, prompts use {{date}} for the step input declared as in.date. Nested fields such as {{customer.name}} are allowed. Only text, numbers, and booleans can be inserted; pass lists and records as structured inputs. Whitespace inside braces is allowed. Escape a literal placeholder with a backslash before its opening braces (use a YAML block scalar). Values are inserted once, never evaluated or expanded again. Unknown variables, invalid paths, and non-scalar values fail validation. Missing runtime values fail before model execution. Defaults belong in input declarations. Human ask text uses the same scope; agent check prompts use {{inputs.date}} and {{outputs.answer}}. Script commands, labels, and tool descriptions are not templates. Single braces are ordinary text.
@@ -564,13 +564,13 @@ Use reading.output_name to give a returned result a short, honest name. Use read
 Use method run FILE_OR_ID [--config runtime.json] [--workspace HELPERS_FOLDER] [--inputs inputs.json] [--state state.json] [--run-dir DIR].
 Explicit named model profiles keep their settings. For an unconfigured profile, Method uses --agent, the configured default, the identified calling agent, or the sole available supported agent. If a choice is needed, use --agent codex or --agent claude. Both use normal sign-in. The selected provider stays fixed on resume.
 A simple local-agent Method needs no runtime.json. When needed, put runtime.json beside the Method. New saved versions carry their helpers and runtime.json. Older versions without saved files still need --workspace DIR. --config overrides that file. Relative files-environment paths and executable paths in configuration resolve from the config folder. A bare executable name is found on PATH.
-Environment declarations name required connections. Their bindings do not supply browser control or signed-in accounts; the selected tools and services must provide that access.
+Environment declarations name required connections. An agent with browser: environment.NAME receives the standard direct browser-use controls. Codex or Claude chooses the browser actions. Method opens the selected browser, retains its sign-ins privately, and reuses the session across steps. On macOS, Method copies your last-used Chrome profile and runs headless. Sign in through Chrome before running the Method. Set METHOD_BROWSER_HEADLESS=0 when a visible browser is needed. Use method browser connect --cdp URL to attach to a Chrome session that permits control. Validation does not open a browser. Each run has a separate profile; resume reads the current page, not a saved web snapshot.
 Operator config supplies runtimes, tools, environment, and run limits. Optional models.PROFILE: {backend: codex, model: MODEL} selects a model; omit model to use the Codex default. command can select the Codex executable and reasoning_effort can override its setting.
 An explicit models.PROFILE with backend: openai-responses keeps the direct API path. It requires model, api_key_env, and max_output_tokens. Keep key values out of the config; api_key_env names an existing environment variable.
 runtimes.PROFILE uses command, version, optional args and env variable names. Scripts and Codex require allow_local_processes: true. They are trusted local processes.
-Tools declare description, in, out, run, and effects. Agent tools must be listed in both the step and config. Check tools cannot declare external effects.
+Custom script tools declare description, in, out, run, and effects. List custom tools in the step and config. Browser controls are supplied automatically; interactive controls require changes: [environment.NAME]. Check tools cannot declare external effects.
 Defaults: one hour per run, ten minutes per step, 100 model requests, 100 step invocations, 200 tool calls, and 16 MiB for input and output. Step defaults allow 32 agent turns/model requests. Override run limits with timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_output_bytes, max_request_bytes. Method enforces the Codex process timeout, prompt/output size, and declared Method tool-call limit. max_model_requests and max_agent_turns govern the direct API loop only; Codex manages its own internal requests and built-in tools. Codex usage and process logs are saved separately.
-Declared tools are exposed to each Codex step through a temporary local MCP connection. It uses the same script execution and checks as the API path. Codex also retains the user's installed tools. Method does not sandbox these processes. No persistent Codex configuration is edited.
+Declared tools are exposed to each Codex or Claude step through a temporary local MCP connection. It uses the same script execution and checks as the API path. Codex also retains the user's installed tools. Method does not sandbox these processes. No persistent Codex configuration is edited.
 Scripts receive one JSON object on stdin and return one JSON object on stdout. Write artifacts under METHOD_OUTPUT_DIR. State updates are returned under state.
 Save includes declared files, script and tool entrypoints, dependency lockfiles, and the runtime release. Run accepts a Method ID or dashboard URL and restores that version. Standard node and python runtimes are prepared automatically. Custom runtime settings stay explicit.
 Use method inspect RUN_DIRECTORY --out inspection.json for a saved run; online runs sync to the same Method dashboard.
@@ -608,6 +608,59 @@ Success exits 0. Errors exit 1 with text on stderr, unless the command specifies
 
 Common errors:
 File commands require readable YAML or JSON. Editing commands report draft locks and leave the original file unchanged after a failed edit. Online commands require sign-in and network access. Use method authoring recovery for conflicts and interrupted saves.
+
+## browser connect
+
+Select a private browser connection.
+
+Usage:
+
+```sh
+method browser connect [--name NAME] [--cdp URL]
+```
+
+Arguments and defaults:
+NAME defaults to default. --cdp attaches to a Chrome session that permits remote control. Without --cdp, Method runs headless. On macOS it copies your last-used Chrome profile to reuse sign-ins. Use method-browser:NAME for a named browser binding.
+
+Result and changes:
+Saves the browser selection on this computer. No browser is started by this command.
+
+Errors:
+Invalid name or endpoint. Credentials must not be in the URL.
+
+Example:
+
+```sh
+method browser connect
+```
+
+## deploy
+
+Prepare and approve a runner from a successful run, then run it with new inputs.
+
+Usage:
+
+```sh
+method deploy --from-run RUN_DIRECTORY
+method deploy --approve DEPLOYMENT_ID
+method deploy --run DEPLOYMENT_ID [--inputs FILE] [--resume RUN_ID]
+method deploy --login DEPLOYMENT_ID [--agent codex|claude]
+```
+
+Arguments and defaults:
+Preparation uses the selected Method runner and shows its files, inputs, state, and account scope. Approval applies that exact plan and checks access. --run starts a separate business run. --resume continues an existing runner run with the same inputs.
+
+Result and changes:
+Prepared review and approval command, or readiness and run command. Missing website sign-ins return a local viewer. Missing agent access returns a runner login command. Both continue the same deployment. Preparation transfers no user data. Session state stays outside the Method package and image.
+
+Errors:
+Changed files, missing runner access, unsupported local dependencies, or a writable folder without a shared connection. Missing setup exits 2.
+
+Example:
+
+```sh
+method deploy --from-run .method-runs/completed
+```
 
 ## doctor
 
