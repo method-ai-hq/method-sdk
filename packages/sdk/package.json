@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/sdk",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Build and run reusable .method files with checked steps and saved results.",
   "license": "MIT",
   "type": "module",
@@ -36,7 +36,7 @@
     "prepack": "npm --prefix ../.. run build"
   },
   "dependencies": {
-    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/1c2684bc6bcb92c43686101fb2f62c21489f852c",
+    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/0c1a08629ad5c9103deab7355b66f4108f9e83a0",
     "fflate": "^0.8.3",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"

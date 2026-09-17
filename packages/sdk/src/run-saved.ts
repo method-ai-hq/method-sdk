@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { assertCheckpointExecutor } from '@withmethod/runtime/executor-version.js';
 import { MethodClient } from './method-client.js';
 import { restorePackage, runtimeVersion } from './method-files.js';
 import { methodCache } from './prepare.js';
@@ -10,6 +11,9 @@ import { MethodSync } from './method-sync.js';
 import { writePrivateJson } from './files.js';
 import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
+
+// Older versions are listed only after their saved-package tests pass.
+const supportedPackageRuntimes = new Set([runtimeVersion, '0.7.0', '0.7.1']);
 
 export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values'], client:MethodClient) {
   const directory=resolve(flags['run-dir']??join(methodCache(),'runs',randomUUID()));
@@ -41,7 +45,9 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   let acquired=false, started=false, revision=0;
   const statePath=`/api/cli/methods/${encodeURIComponent(saved.workflow_id)}/state`;
   try {
-    if(saved.package&&saved.package.runtime!==runtimeVersion)throw Object.assign(new Error(`This Method needs runtime ${saved.package.runtime}. Save a new version with the installed SDK before starting a new run.`),{code:'needs_update'});
+    const resuming = !!flags.resume && existsSync(join(directory,'checkpoint.json'));
+    if (resuming) assertCheckpointExecutor(JSON.parse(readFileSync(join(directory,'checkpoint.json'),'utf8')));
+    else if(saved.package&&!supportedPackageRuntimes.has(saved.package.runtime))throw Object.assign(new Error(`This package records runtime ${saved.package.runtime}; installed executor: ${runtimeVersion}. Use an SDK release that supports this package runtime.`),{code:'needs_update'});
     if(flags.resume&&existsSync(join(directory,'checkpoint.json'))&&!existsSync(join(directory,'runtime.resolved.json'))){
       const file=join(directory,'saved.method');writePrivateJson(file,saved.workflow);
       return await runCurrentFile(file,{...flags,workspace:flags.workspace??process.cwd(),'run-dir':directory},()=>sync);
@@ -54,7 +60,6 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     const missing=Object.entries(saved.workflow.inputs??{}).filter(([key,def]:any)=>!Object.hasOwn(inputs,key)&&!Object.hasOwn(def,'default'));
     if(missing.length&&!existsSync(join(directory,'checkpoint.json')))throw Object.assign(new Error('Supply the required Method inputs with --inputs FILE.'),{code:'needs_input',missing:Object.fromEntries(missing)});
     const configFile=join(directory,'runtime.json');writePrivateJson(configFile,config);
-    const resuming = !!flags.resume && existsSync(join(directory,'checkpoint.json'));
     if(resuming)started=true;
     let stateFile=flags.state;
     const shared=await client.request<any>(statePath);

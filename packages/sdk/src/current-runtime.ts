@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { assertCheckpointExecutor } from '@withmethod/runtime/executor-version.js';
 import { checkAgents, resolveAgentProfiles } from './capabilities.js';
 import { prepareRuntime } from './prepare.js';
 import { writePrivateJson } from './files.js';
@@ -15,6 +16,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
   const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
+  if (flags.resume) assertCheckpointExecutor(json(join(flags['run-dir']!, 'checkpoint.json')));
   const setup = await localSetup(file, flags);
   let config = setup.config;
   const sourceRoot = setup.sourceRoot;
@@ -32,7 +34,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       && existsSync(join(dirname(resolvedFile), 'checkpoint.json'));
     let prepared:{config:any;processPath:string;prepareBundle:(path:string)=>Promise<void>};
     if(priorCheckpoint){
-      // Older checkpoints hash the supplied configuration before defaults are resolved.
+      // Direct executor runs retain the supplied config without SDK preparation.
       prepared={config,processPath:process.env.PATH??'',prepareBundle:async()=>{}};
     } else {
       if (flags.resume && resolvedFile && existsSync(resolvedFile)) config = JSON.parse(readFileSync(resolvedFile,'utf8'));

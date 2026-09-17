@@ -84,15 +84,15 @@ it('validates a simple local-agent Method without a configuration file', async()
  await methodMain(['validate',s.file]);expect(s.result().valid).toBe(true);
 });
 
-it('resumes a checkpoint from the previous SDK without adding setup fields to its configuration',async()=>{
+it('resumes a direct executor checkpoint from the same release without adding SDK setup fields',async()=>{
  const s=setup();
  const {runCurrentMethod}=await import('../../packages/sdk/src/current-runtime.js');
  const config=JSON.parse(exampleFiles['runtime.json']!);
  const directory=join(s.dir,'old-run');
- expect((await runCurrentMethod(s.file,config,{runDir:directory,inputs:{message:'legacy'}})).status).toBe('completed');
+ expect((await runCurrentMethod(s.file,config,{runDir:directory,inputs:{message:'direct'}})).status).toBe('completed');
  s.stdout.mockClear();
  await methodMain(['run',s.file,'--resume','--run-dir',directory]);
- expect(s.result()).toMatchObject({status:'completed',result:'legacy'});
+ expect(s.result()).toMatchObject({status:'completed',result:'direct'});
 });
 
 
