@@ -3,10 +3,10 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const http = require('node:http');
-const {chromium} = require(process.env.DAILY_BRIEFING_PLAYWRIGHT);
+const {chromium} = require('playwright');
 
 async function main(input) {
-  const root = await fs.realpath(path.join(process.env.DAILY_BRIEFING_EXAMPLE, 'website'));
+  const root = await fs.realpath(path.join(process.env.METHOD_OUTPUT_DIR, 'approved-output', 'website'));
   const presentation = 'website/reader.css';
   async function file(name) {
     const p = await fs.realpath(path.resolve(root, name));

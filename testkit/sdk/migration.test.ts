@@ -11,19 +11,8 @@ const dirs: string[] = [];
 const temp = () => { const dir = mkdtempSync(join(tmpdir(), "method-migration-")); dirs.push(dir); return dir; };
 afterEach(() => { dirs.splice(0).forEach(dir => rmSync(dir, { recursive: true, force: true })); });
 
-it("reads and resumes a legacy snapshot without changing its format, hash, or completed actions", async () => {
-  const workspace = temp(), directory = join(workspace, "run");
-  const workflow = loadMethod({ ...method(), format: "workflow/2" });
-  expect(workflow.format).toBe("workflow/2");
-  const execute = vi.fn(async () => ({ outputs: { copied_message: "Hello" } }));
-  const options = { workflow, inputs: {}, workspace, directory, runtime_revision: "test", executor: { name: "test", execute } };
-  expect((await runMethod(options)).status).toBe("succeeded");
-  const manifest = readFileSync(join(directory, "run.json"), "utf8");
-  renameSync(join(directory, "method.method"), join(directory, "workflow.workflow"));
-  expect(inspectRun(directory).workflow.format).toBe("workflow/2");
-  expect((await runMethod({ ...options, resume: true })).status).toBe("succeeded");
-  expect(execute).toHaveBeenCalledTimes(1);
-  expect(readFileSync(join(directory, "run.json"), "utf8")).toBe(manifest);
+it.each(["method/2", "workflow/2"])("rejects removed %s execution", format => {
+  expect(() => loadMethod({...method(),format})).toThrow("UNSUPPORTED_FORMAT");
 });
 
 it("uses the old production credential only for the new production host and clears it on logout", async () => {

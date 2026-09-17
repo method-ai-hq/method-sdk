@@ -1,5 +1,5 @@
 import { MAX_RESULT_BYTES, MAX_RESULT_TRANSFER_BYTES } from "../../workflow-language/src/result-files.js";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -34,6 +34,7 @@ export class MethodSync {
     readonly directory: string,
     workflowId: string,
     versionId: string,
+    runId?: string,
   ) {
     const path = join(directory, "method-sync.json");
     this.state = existsSync(path)
@@ -41,7 +42,7 @@ export class MethodSync {
       : {
           schema: "method-sync/1",
           server: client.server,
-          id: randomUUID(),
+          id: runId ?? randomUUID(),
           workflow_id: workflowId,
           version_id: versionId,
           sequence: 0,
@@ -70,11 +71,11 @@ export class MethodSync {
     await this.send(payload);
   }
   private async send(payload: unknown) {
-    const result = await this.client.request<{ id: string }>(
+    const result = await retryTransfer(() => this.client.request<{ id: string }>(
       `/api/cli/runs/${this.state.id}`,
       "PUT",
       payload,
-    );
+    ));
     if (!this.state.dashboard_id)
       process.stderr.write(
         `Dashboard: ${this.client.server}/runs/${result.id}\n`,
@@ -82,12 +83,15 @@ export class MethodSync {
     this.state.dashboard_id = result.id;
     this.save();
     this.warned = false;
+    const file=join(this.directory,'method-pending.json');
+    if(existsSync(file)&&JSON.parse(readFileSync(file,'utf8')).sequence===(payload as any).sequence)rmSync(file,{force:true});
   }
   async start(
     workflow: RunInspection["workflow"],
     inputs: RunInspection["inputs"],
     resources: RunInspection["resources"],
   ) {
+    if (this.timer) return;
     // Require the initial dashboard record before starting any business action.
     this.initial = {
       schema: "workflow-inspection/2",
@@ -97,7 +101,14 @@ export class MethodSync {
       inputs,
       resources,
       invocations: {},
+      events: existsSync(join(this.directory,"setup.json")) ? JSON.parse(readFileSync(join(this.directory,"setup.json"),"utf8")) : [],
     };
+    // A completed checkpoint remains completed when reconnecting or adding result files.
+    try {
+      const saved = inspectRun(this.directory, {includeFiles:true});
+      if (saved.status === 'succeeded') this.initial = saved;
+    } catch { /* Preparation has no checkpoint yet. */ }
+    writePrivateJson(join(this.directory,'setup-inspection.json'),this.initial);
     await this.upload(this.initial);
     this.timer = setInterval(() => this.capture(), 5000);
     this.timer.unref();
@@ -135,6 +146,7 @@ export class MethodSync {
     this.warned = true;
   }
   async finish(failure?: unknown) {
+    if(this.stopped)return;
     this.stopped = true;
     clearInterval(this.timer);
     clearTimeout(this.scheduled);
@@ -147,6 +159,7 @@ export class MethodSync {
         if (!this.initial) throw error;
         inspection = {
           ...this.initial,
+          events: existsSync(join(this.directory,"setup.json")) ? JSON.parse(readFileSync(join(this.directory,"setup.json"),"utf8")) : this.initial.events,
           status: "needs_attention",
           error:
             failure instanceof Error
@@ -206,5 +219,12 @@ export class MethodSync {
       }
     }
     await sync.upload(inspection);
+  }
+}
+
+async function retryTransfer<T>(send:()=>Promise<T>):Promise<T> {
+  for(let attempt=0;;attempt++)try{return await send();}catch(error){
+    if(attempt>=2||/\b4\d\d:/.test(String(error))&&!String(error).includes('429:'))throw error;
+    await new Promise(r=>setTimeout(r,500*2**attempt));
   }
 }

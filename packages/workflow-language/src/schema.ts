@@ -11,30 +11,9 @@ export type Shape = ValueType | { type: ValueType; description?: string | undefi
 export const ShapeSchema: z.ZodType<Shape> = z.lazy(() => z.union([TypeSchema, z.strictObject({ type: TypeSchema, description: Text.optional(), fields: z.record(NameSchema, ShapeSchema).optional(), items: ShapeSchema.optional(), format: Text.optional() })]));
 export const DataSchema = z.strictObject({ type: TypeSchema, description: Text.optional(), fields: z.record(NameSchema, ShapeSchema).optional(), items: ShapeSchema.optional(), format: Text.optional() });
 export const InputSchema = DataSchema.extend({ default: JsonSchema.optional() });
-export const StateSchema = InputSchema.extend({ file: z.string().min(1).max(500) });
 export const EnvironmentSchema = z.strictObject({ type: z.enum(["browser", "service", "desktop", "files", "tool"]), description: Text });
-export const CheckSchema = z.union([
-  Text,
-  z.strictObject({ equals: z.strictObject({ actual: ReferenceSchema, expected: ReferenceSchema }) }),
-  z.strictObject({ count: z.strictObject({ value: ReferenceSchema, min: z.number().int().nonnegative().optional(), max: z.number().int().nonnegative().optional() }) }),
-  z.strictObject({ present: ReferenceSchema }),
-  z.strictObject({ file: ReferenceSchema }),
-]);
-export const StepSchema = z.strictObject({
-  name: Text.optional(), in: z.record(NameSchema, ReferenceSchema).optional(), do: Text.optional(), ask: Text.optional(),
-  out: z.record(NameSchema, DataSchema).optional(), check: CheckSchema.optional(),
-  each: z.record(NameSchema, ReferenceSchema).optional(), when: ReferenceSchema.optional(),
-  after: z.union([NameSchema, z.array(NameSchema)]).optional(), changes: z.array(ReferenceSchema).optional(),
-});
-export const LegacyWorkflowSchema = z.strictObject({
-  format: z.enum(["method/2", "workflow/2"]), name: Text, goal: Text,
-  inputs: z.record(NameSchema, InputSchema).optional(), environment: z.record(NameSchema, EnvironmentSchema).optional(),
-  state: z.record(NameSchema, StateSchema).optional(), steps: z.record(NameSchema, StepSchema),
-  result: z.union([ReferenceSchema, z.record(NameSchema, ReferenceSchema)]),
-});
-export type LegacyWorkflow = z.infer<typeof LegacyWorkflowSchema>;
-export type LegacyStep = z.infer<typeof StepSchema>;
-export type LegacyCheck = z.infer<typeof CheckSchema>;
+export type ExactCheck = {equals:{actual:string;expected:string}} | {count:{value:string;min?:number;max?:number}} | {present:string} | {file:string};
+export type BaseStep = {name?:string; in?:Record<string,string>; ask?:string; out?:Record<string,z.infer<typeof DataSchema>>; each?:Record<string,string>; when?:string; after?:string|string[]; changes?:string[]};
 export type DataDefinition = z.infer<typeof DataSchema>;
 export const FileArtifactSchema = z.strictObject({ path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/) });
 
@@ -55,18 +34,18 @@ export function pointer(value: Json | undefined, path: string): Json | undefined
 // Current shape validation comes from the runtime's single JSON Schema.
 import { methodShape, stepShape, checkShape } from "@withmethod/runtime/document-validators.js";
 import { methodSchema } from "@withmethod/runtime/schema.js";
-import { zodToJsonSchema } from "zod-to-json-schema";
 export type RunExecution = { kind: "run"; runtime: string; entrypoint: string; args?: string[] };
 export type AgentExecution = { kind: "agent"; model: string; prompt: string; tools: string[] };
 export type Execution = RunExecution | AgentExecution | { kind: "call"; model: string; prompt: string };
-export type CurrentCheck = Exclude<LegacyCheck, string> | RunExecution | AgentExecution;
-export type CurrentStep = Omit<LegacyStep, "do" | "check"> & {
+export type CurrentCheck = ExactCheck | RunExecution | AgentExecution;
+export type CurrentStep = BaseStep & {
   purpose?: string; do?: Execution; check?: CurrentCheck;
   reading?: { inputs?: string; outputs?: string; output_name?: string; condition?: string; check?: string; check_name?: string };
   repeat?: { max_iterations: number; until?: string };
   limits?: { timeout_ms?: number; max_agent_turns?: number; max_model_requests?: number };
 };
-export type CurrentWorkflow = Omit<LegacyWorkflow, "format" | "state" | "steps"> & {
+export type CurrentWorkflow = {
+  name: string; goal: string; inputs?: Record<string,z.infer<typeof InputSchema>>; environment?: Record<string,z.infer<typeof EnvironmentSchema>>; result: string | Record<string,string>;
   format: "method/3" | "method/3.1"; run_prompt?: string; files?: string[];
   state?: Record<string, z.infer<typeof InputSchema>>; steps: Record<string, CurrentStep>;
 };
@@ -81,16 +60,16 @@ export const CurrentStepSchema = currentShape<CurrentStep>(stepShape);
 export const CurrentCheckSchema = currentShape<CurrentCheck>(checkShape);
 export const CurrentWorkflowSchema = currentShape<CurrentWorkflow>(methodShape).transform(value => value.run_prompt === undefined ? value : {...value, run_prompt: value.run_prompt.trim()});
 export function documentSchema(format = "method/3.1") {
-  return ["method/3", "method/3.1"].includes(format) ? methodSchema : zodToJsonSchema(LegacyWorkflowSchema);
+  if (!["method/3", "method/3.1"].includes(format)) throw Error("UNSUPPORTED_FORMAT: use method/3.1.");
+  return methodSchema;
 }
-export const WorkflowSchema = z.union([CurrentWorkflowSchema, LegacyWorkflowSchema]);
+export const WorkflowSchema = CurrentWorkflowSchema;
 export type Workflow = z.infer<typeof WorkflowSchema>;
 export function isCurrentWorkflow(workflow: Workflow): workflow is CurrentWorkflow { return workflow.format === "method/3" || workflow.format === "method/3.1"; }
 export type Step = Workflow["steps"][string];
 export type Check = NonNullable<Step["check"]>;
 export function executionText(step: Step): string {
   if (!step.do) return step.ask ?? "";
-  if (typeof step.do === "string") return step.do;
   return step.do.kind === "run" ? [step.do.runtime, step.do.entrypoint, ...(step.do.args ?? [])].join(" ") : step.do.prompt;
 }
 export function executionLabel(step: Step): string {

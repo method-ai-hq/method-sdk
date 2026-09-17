@@ -1,7 +1,6 @@
-import { isCurrentWorkflow } from "./schema.js";
 import { validateSemantics } from '@withmethod/runtime/semantics.js';
 import { parseDocument, stringify } from "yaml";
-import { WorkflowSchema, type Workflow, type LegacyWorkflow, type CurrentWorkflow, type Step, type Shape, type Json } from "./schema.js";
+import { WorkflowSchema, type Workflow, type Step, type Shape, type Json } from "./schema.js";
 
 export function parseDocumentValue(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -75,61 +74,11 @@ export function stepDependencies(workflow: Workflow, id: string): string[] {
   const step = workflow.steps[id]!, outputProducers = producers(workflow);
   return [...new Set([...(typeof step.after === "string" ? [step.after] : step.after ?? []), ...references(step).flatMap(ref => { const producer = outputProducers.get(ref.split(".")[0]!); return producer ? [producer] : []; })])];
 }
-export function loadWorkflow(value: LegacyWorkflow): LegacyWorkflow;
-export function loadWorkflow(value: CurrentWorkflow): CurrentWorkflow;
-export function loadWorkflow(value: unknown): Workflow;
 export function loadWorkflow(value: unknown): Workflow {
   const raw = parseDocumentValue(value);
-  if (raw && typeof raw === "object" && (raw as any).schema === "workflow/1") throw Error("WORKFLOW_FORMAT: this document uses workflow/1. Keep it as a reference and author a method/2 document before running it.");
+  const format = raw && typeof raw === "object" ? ((raw as any).format ?? (raw as any).schema) : undefined;
+  if (!["method/3", "method/3.1"].includes(format)) throw Error("UNSUPPORTED_FORMAT: legacy execution was removed. Author a method/3.1 document before running it.");
   const workflow = WorkflowSchema.parse(raw);
-  if (isCurrentWorkflow(workflow)) {
-    validateSemantics(workflow, (def: Shape, value: unknown) => { const errors = shapeErrors(def, value); if (errors.length) throw Error(errors.join("\n")); });
-    return workflow;
-  }
-  if (!Object.keys(workflow.steps).length) throw Error("A method needs at least one step.");
-  producers(workflow);
-  for (const [name, definition] of [...Object.entries(workflow.inputs ?? {}), ...Object.entries(workflow.state ?? {})]) {
-    validateShape(definition, name);
-    if ("default" in definition && definition.default !== undefined) { const errors = shapeErrors(definition, definition.default, name); if (errors.length) throw Error(errors.join("\n")); }
-  }
-  const files = new Set<string>();
-  for (const [name, state] of Object.entries(workflow.state ?? {})) {
-    if (state.file.startsWith("/") || state.file.includes("\\") || state.file.includes(":") || state.file.split("/").some(p => ["", ".", "..", "sensitive", ".method"].includes(p))) throw Error(`state.${name}: use a relative data file.`);
-    if (files.has(state.file)) throw Error(`State files must be distinct: ${state.file}.`); files.add(state.file);
-  }
-  for (const [id, step] of Object.entries(workflow.steps)) {
-    if (!!step.do === !!step.ask) throw Error(`${id}: supply either do or ask.`);
-    if (step.changes?.some(t => t.startsWith("environment.")) && !step.check) throw Error(`${id}: an external change needs an independent check.`);
-    if (step.ask && step.changes?.length) throw Error(`${id}: collect human decisions, then apply changes in a do step.`);
-    if (step.each && Object.keys(step.each).length !== 1) throw Error(`${id}: each needs one item name and collection.`);
-    const local: Record<string, Shape | undefined> = {};
-    for (const [alias, ref] of Object.entries(step.each ?? {})) { const shape = referenceShape(workflow, ref); if (!shape || shapeObject(shape).type !== "list") throw Error(`${id}: each requires a list.`); const s = shapeObject(shape); local[alias] = s.fields ? { type: "record", fields: s.fields } : s.items; }
-    for (const [alias, ref] of Object.entries(step.in ?? {})) { if (Object.hasOwn(local, alias)) throw Error(`${id}: duplicate input ${alias}.`); local[alias] = referenceShape(workflow, ref); }
-    if (step.when && shapeObject(referenceShape(workflow, step.when) ?? "text").type !== "boolean") throw Error(`${id}: when must name a boolean.`);
-    for (const [name, definition] of Object.entries(step.out ?? {})) { if (Object.hasOwn(local, name)) throw Error(`${id}: output ${name} conflicts with an input.`); validateShape(definition, `${id}.${name}`); }
-    for (const target of step.changes ?? []) {
-      if (!/^(state|environment)\.[a-z][a-z0-9_]*$/.test(target)) throw Error(`${id}: changes must name state or an environment target.`);
-      referenceShape(workflow, target);
-    }
-    if (new Set(step.changes).size !== (step.changes?.length ?? 0)) throw Error(`${id}: duplicate change target.`);
-    for (const dep of stepDependencies(workflow, id)) if (!workflow.steps[dep] || dep === id) throw Error(`${id}: invalid dependency ${dep}.`);
-    const context = { ...local, ...step.out };
-    for (const match of (step.do ?? step.ask ?? "").matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) checkLocalReference(local, match[1]!, id);
-    if (typeof step.check === "object") {
-      const c = step.check;
-      for (const ref of "equals" in c ? [c.equals.actual, c.equals.expected] : "count" in c ? [c.count.value] : "present" in c ? [c.present] : [c.file]) checkLocalReference(context, ref, id);
-      if ("count" in c && (c.count.min === undefined && c.count.max === undefined || (c.count.min ?? 0) > (c.count.max ?? Infinity))) throw Error(`${id}: invalid count range.`);
-    }
-  }
-  const visited = new Set<string>(), active = new Set<string>();
-  function visit(id: string) { if (active.has(id)) throw Error(`Dependency cycle at ${id}.`); if (visited.has(id)) return; active.add(id); stepDependencies(workflow, id).forEach(visit); active.delete(id); visited.add(id); }
-  Object.keys(workflow.steps).forEach(visit);
-  for (const ref of typeof workflow.result === "string" ? [workflow.result] : Object.values(workflow.result)) { if (ref.startsWith("environment.")) throw Error("The result must be data."); referenceShape(workflow, ref); }
+  validateSemantics(workflow, (def: Shape, value: unknown) => { const errors = shapeErrors(def, value); if (errors.length) throw Error(errors.join("\n")); });
   return workflow;
-}
-function checkLocalReference(context: Record<string, Shape | undefined>, ref: string, id: string) {
-  const [root, ...parts] = ref.trim().split(".");
-  if (!root || !Object.hasOwn(context, root)) throw Error(`${id}: unknown local name ${ref}.`);
-  let shape = context[root];
-  for (const part of parts) { const s = shape && shapeObject(shape); shape = s?.type === "record" ? s.fields?.[part] : s?.type === "list" && /^(0|[1-9][0-9]*)$/.test(part) ? s.fields ? { type: "record", fields: s.fields } : s.items : undefined; if (!shape) throw Error(`${id}: unknown local field ${ref}.`); }
 }

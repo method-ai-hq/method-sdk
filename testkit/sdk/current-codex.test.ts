@@ -57,7 +57,7 @@ it('stops a Codex process when its step times out', async () => {
 });
 it('requires local process permission for Codex and accepts the explicit API alternative', async () => {
   const f=fixture(''); f.config.allow_local_processes=false;
-  await expect(f.run()).rejects.toThrow('Codex requires allow_local_processes');
+  await expect(f.run()).rejects.toThrow('Local agents require allow_local_processes');
   expect(()=>validateConfig({ ...f.config, models: { writer: { backend:'openai-responses', model:'example', api_key_env:'TEST_KEY', max_output_tokens:100 } } })).not.toThrow();
 });
 it('rejects unauthenticated and undeclared tool calls', async () => {

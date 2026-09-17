@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "withmethod"
-version = "0.4.1"
+version = "0.5.0"
 description = "Run agentic methods in discrete verifiable steps."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,8 +25,6 @@ dependencies = []
 
 [project.scripts]
 withmethod = "withmethod.cli:main"
-method-python = "withmethod.cli:main"
-workflow-corp = "workflow_corp.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -19,6 +19,9 @@
     "allowJs": true
   },
   "include": [
-    "src/**/*.ts"
+    "src/**/*.ts",
+    "../workflow-language/src/**/*.ts",
+    "../contracts/src/**/*.ts",
+    "../compiler/src/**/*.ts"
   ]
 }

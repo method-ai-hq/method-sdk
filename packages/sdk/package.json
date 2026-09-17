@@ -1,17 +1,13 @@
 {
   "name": "@withmethod/sdk",
-  "version": "0.5.7",
+  "version": "0.7.0",
   "description": "Build and run reusable .method files with checked steps and saved results.",
   "license": "MIT",
   "type": "module",
   "main": "dist/packages/sdk/src/index.js",
   "types": "dist/packages/sdk/src/index.d.ts",
   "bin": {
-    "workflow": "dist/packages/sdk/src/cli.js",
-    "sdk": "dist/packages/sdk/src/cli.js",
-    "workflow-bridge": "dist/packages/sdk/src/bridge.js",
     "method": "dist/packages/sdk/src/method.js",
-    "method-run": "dist/packages/sdk/src/cli.js",
     "method-bridge": "dist/packages/sdk/src/bridge.js"
   },
   "files": [
@@ -36,18 +32,172 @@
     "mcp"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/packages/sdk/src/cli.js dist/packages/sdk/src/bridge.js dist/packages/sdk/src/method.js && node scripts/copy-examples.mjs",
-    "prepack": "npm run build && node ../../scripts/prepare-source.mjs"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/packages/sdk/src/bridge.js dist/packages/sdk/src/method.js && node scripts/copy-examples.mjs",
+    "prepack": "npm --prefix ../.. run build"
   },
   "dependencies": {
-    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/3ebd34dc147e0d893384d7807d7f6b018bef692c",
+    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/6efea93e44337eaff1780c4590454477e5bc7490",
     "fflate": "^0.8.3",
     "yaml": "^2.9.0",
-    "zod": "^3.25.76",
-    "zod-to-json-schema": "^3.25.2"
+    "zod": "^3.25.76"
   },
   "homepage": "https://docs.withmethod.ai/sdk/overview",
-  "bugs": {
-    "url": "https://github.com/method-ai-hq/method-sdk/issues"
+  "exports": {
+    ".": {
+      "types": "./dist/packages/sdk/src/index.d.ts",
+      "import": "./dist/packages/sdk/src/index.js",
+      "default": "./dist/packages/sdk/src/index.js"
+    },
+    "./schema": {
+      "types": "./dist/packages/workflow-language/src/schema.d.ts",
+      "import": "./dist/packages/workflow-language/src/schema.js",
+      "default": "./dist/packages/workflow-language/src/schema.js"
+    },
+    "./validate": {
+      "types": "./dist/packages/workflow-language/src/validate.d.ts",
+      "import": "./dist/packages/workflow-language/src/validate.js",
+      "default": "./dist/packages/workflow-language/src/validate.js"
+    },
+    "./execution": {
+      "types": "./dist/packages/workflow-language/src/execution.d.ts",
+      "import": "./dist/packages/workflow-language/src/execution.js",
+      "default": "./dist/packages/workflow-language/src/execution.js"
+    },
+    "./inspection": {
+      "types": "./dist/packages/workflow-language/src/inspection.d.ts",
+      "import": "./dist/packages/workflow-language/src/inspection.js",
+      "default": "./dist/packages/workflow-language/src/inspection.js"
+    },
+    "./result-files": {
+      "types": "./dist/packages/workflow-language/src/result-files.d.ts",
+      "import": "./dist/packages/workflow-language/src/result-files.js",
+      "default": "./dist/packages/workflow-language/src/result-files.js"
+    },
+    "./identity": {
+      "types": "./dist/packages/contracts/src/identity.d.ts",
+      "import": "./dist/packages/contracts/src/identity.js",
+      "default": "./dist/packages/contracts/src/identity.js"
+    },
+    "./method-package": {
+      "types": "./dist/packages/contracts/src/method-package.d.ts",
+      "import": "./dist/packages/contracts/src/method-package.js",
+      "default": "./dist/packages/contracts/src/method-package.js"
+    },
+    "./conversion": {
+      "types": "./dist/packages/compiler/src/conversion-report.d.ts",
+      "import": "./dist/packages/compiler/src/conversion-report.js",
+      "default": "./dist/packages/compiler/src/conversion-report.js"
+    },
+    "./method-client": {
+      "types": "./dist/packages/sdk/src/method-client.d.ts",
+      "import": "./dist/packages/sdk/src/method-client.js",
+      "default": "./dist/packages/sdk/src/method-client.js"
+    },
+    "./method-sync": {
+      "types": "./dist/packages/sdk/src/method-sync.d.ts",
+      "import": "./dist/packages/sdk/src/method-sync.js",
+      "default": "./dist/packages/sdk/src/method-sync.js"
+    },
+    "./method": {
+      "types": "./dist/packages/sdk/src/method.d.ts",
+      "import": "./dist/packages/sdk/src/method.js",
+      "default": "./dist/packages/sdk/src/method.js"
+    },
+    "./files": {
+      "types": "./dist/packages/sdk/src/files.d.ts",
+      "import": "./dist/packages/sdk/src/files.js",
+      "default": "./dist/packages/sdk/src/files.js"
+    },
+    "./inspect": {
+      "types": "./dist/packages/sdk/src/inspect.d.ts",
+      "import": "./dist/packages/sdk/src/inspect.js",
+      "default": "./dist/packages/sdk/src/inspect.js"
+    },
+    "./process": {
+      "types": "./dist/packages/sdk/src/process.d.ts",
+      "import": "./dist/packages/sdk/src/process.js",
+      "default": "./dist/packages/sdk/src/process.js"
+    },
+    "./executable": {
+      "types": "./dist/packages/sdk/src/executable.d.ts",
+      "import": "./dist/packages/sdk/src/executable.js",
+      "default": "./dist/packages/sdk/src/executable.js"
+    },
+    "./authoring": {
+      "types": "./dist/packages/sdk/src/authoring.d.ts",
+      "import": "./dist/packages/sdk/src/authoring.js",
+      "default": "./dist/packages/sdk/src/authoring.js"
+    },
+    "./method-help": {
+      "types": "./dist/packages/sdk/src/method-help.d.ts",
+      "import": "./dist/packages/sdk/src/method-help.js",
+      "default": "./dist/packages/sdk/src/method-help.js"
+    },
+    "./current-runtime": {
+      "types": "./dist/packages/sdk/src/current-runtime.d.ts",
+      "import": "./dist/packages/sdk/src/current-runtime.js",
+      "default": "./dist/packages/sdk/src/current-runtime.js"
+    },
+    "./local-setup": {
+      "types": "./dist/packages/sdk/src/local-setup.d.ts",
+      "import": "./dist/packages/sdk/src/local-setup.js",
+      "default": "./dist/packages/sdk/src/local-setup.js"
+    },
+    "./current-inspection": {
+      "types": "./dist/packages/sdk/src/current-inspection.d.ts",
+      "import": "./dist/packages/sdk/src/current-inspection.js",
+      "default": "./dist/packages/sdk/src/current-inspection.js"
+    },
+    "./copy-message-example": {
+      "types": "./dist/packages/sdk/src/copy-message-example.d.ts",
+      "import": "./dist/packages/sdk/src/copy-message-example.js",
+      "default": "./dist/packages/sdk/src/copy-message-example.js"
+    },
+    "./method-files": {
+      "types": "./dist/packages/sdk/src/method-files.d.ts",
+      "import": "./dist/packages/sdk/src/method-files.js",
+      "default": "./dist/packages/sdk/src/method-files.js"
+    },
+    "./bindings": {
+      "types": "./dist/packages/sdk/src/bindings.d.ts",
+      "import": "./dist/packages/sdk/src/bindings.js",
+      "default": "./dist/packages/sdk/src/bindings.js"
+    },
+    "./capabilities": {
+      "types": "./dist/packages/sdk/src/capabilities.d.ts",
+      "import": "./dist/packages/sdk/src/capabilities.js",
+      "default": "./dist/packages/sdk/src/capabilities.js"
+    },
+    "./prepare": {
+      "types": "./dist/packages/sdk/src/prepare.d.ts",
+      "import": "./dist/packages/sdk/src/prepare.js",
+      "default": "./dist/packages/sdk/src/prepare.js"
+    },
+    "./run-worker": {
+      "types": "./dist/packages/sdk/src/run-worker.d.ts",
+      "import": "./dist/packages/sdk/src/run-worker.js",
+      "default": "./dist/packages/sdk/src/run-worker.js"
+    },
+    "./local-cli": {
+      "types": "./dist/packages/sdk/src/local-cli.d.ts",
+      "import": "./dist/packages/sdk/src/local-cli.js",
+      "default": "./dist/packages/sdk/src/local-cli.js"
+    },
+    "./doctor": {
+      "types": "./dist/packages/sdk/src/doctor.d.ts",
+      "import": "./dist/packages/sdk/src/doctor.js",
+      "default": "./dist/packages/sdk/src/doctor.js"
+    },
+    "./run-saved": {
+      "types": "./dist/packages/sdk/src/run-saved.d.ts",
+      "import": "./dist/packages/sdk/src/run-saved.js",
+      "default": "./dist/packages/sdk/src/run-saved.js"
+    },
+    "./sdk-result-files": {
+      "types": "./dist/packages/sdk/src/result-files.d.ts",
+      "import": "./dist/packages/sdk/src/result-files.js",
+      "default": "./dist/packages/sdk/src/result-files.js"
+    },
+    "./package.json": "./package.json"
   }
 }

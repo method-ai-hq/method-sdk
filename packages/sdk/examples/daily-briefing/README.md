@@ -7,17 +7,15 @@ Read TASK.md, daily-briefing.method, and the complete approved output. The write
 Copy this folder to a new working folder before you change it. Then run:
 
 ```sh
-npm install
-npx playwright install --with-deps chromium
-python3 setup.py
 method validate daily-briefing.method
 method save daily-briefing.method
+method bind WORKFLOW_ID prepared_day --file sample
 method run WORKFLOW_ID --version VERSION_ID --inputs inputs.json
 ```
 
-Use the IDs returned by save. Python 3.10+, Node 22+, a POSIX shell, and a signed-in Codex CLI are required. Installing Linux system libraries can require administrator access. The photo conversion helper uses macOS sips when a new prepared day contains images; this small sample has no images. Codex uses your current default model. setup.py creates runtime.json and two executable wrappers, then checks that the example opens in the browser. Run setup.py again if you move the folder. --playwright accepts an existing Playwright installation. --prepared selects another prepared day folder; also change inputs.json to its date and timezone.
+Use the IDs returned by save. Method prepares Python, Node packages, and the browser. It uses the available signed-in coding agent. Use `method bind` with another folder to run another day. Add `--upload` only when you want that selected folder saved privately in your account for another computer.
 
-Open approved-output/website/index.html and approved-output/briefing.md after setup. Expand sessions, passages, and citations. These are the complete approved report, with the agreed privacy edits. The two approved photos retain their exact edited bytes. Setup downloads them and checks their SHA-256 hashes; all other reference files are included in approved-output.zip. The separate photos keep the CLI download small. After setup, the reference works offline.
+The complete approved report and its two edited photos are included in the installed example. The first step opens the archive under the run’s artifacts folder. Open approved-output/website/index.html and approved-output/briefing.md there. Read approved-report.md for the complete text before a run. Expand sessions, passages, and citations. Their recorded hashes are retained.
 
 sample/ contains one complete work conversation: 28 messages from the redacted day. It does not contain the entire day behind the approved report. A sample run must describe this limited evidence and must not copy the rest of the approved day's events. Expect a shorter cited briefing and a website with working source links, plus timing calculations when the writer chooses to make supported estimates. Calculations are optional.
 
@@ -32,13 +30,14 @@ Check the input folders before asking the writer to work. Give the writer the co
 - daily-briefing.method: adapted Method with portable run instructions.
 - TASK.md: task recorded in the approved Method.
 - briefing_*.py, briefing_browser.cjs, reader/: required helpers.
-- briefing_config.py, setup.py: local configuration and tools.
+- runtime.json: portable tool declarations.
+- pyproject.toml, uv.lock, package.json, package-lock.json: locked dependencies.
 - sample/, inputs.json: small redacted input sample.
-- approved-output.zip, images.json: complete expected reference output and its photo locations and hashes.
+- approved-output.zip, approved-images/, images.json: complete expected reference output and its photo locations and hashes.
 - approved-output/checks.json: checks recorded for the approved redacted reference.
 - checks.json: checks recorded for this public package. Read their scope and limits.
 - vendor/: Markdown renderer and its license.
 
 Method does not enforce the example's tone, section names, number of steps, or subject matter. For a report, use the user's own approved output as the writing example when one is available. For work that changes a CRM or another saved system, use an example of the intended final state and test changes in a test destination.
 
-The approved artifact stays unchanged. The writer receives its complete text with obsolete hidden display markers removed. Codex uses its normal file tools to read the selected records. Two Method tools remain: source-panel inspection (text and controls, not screenshots) and optional time calculations. Supporting files pass explicitly from the writer to the renderer.
+The approved artifact stays unchanged. The writer receives its complete text with obsolete hidden display markers removed. The coding agent uses its normal file tools to read the selected records. Two Method tools remain: source-panel inspection (text and controls, not screenshots) and optional time calculations. Supporting files pass explicitly from the writer to the renderer.

@@ -27,11 +27,12 @@ it('validates and runs using the Method folder even from a different working fol
 });
 it('reports missing custom runtimes and helper files without running work',async()=>{
  const s=setup(); rmSync(join(s.dir,'runtime.json'));
- await methodMain(['validate',s.file]); expect(s.result()).toMatchObject({valid:false,definition:'valid',executed:false});expect(s.result().error).toContain('Unknown runtime: node');
+ await methodMain(['validate',s.file]); expect(s.result()).toMatchObject({valid:true,definition:'valid',local_setup:'needs_preparation',executed:false});
  writeFileSync(join(s.dir,'runtime.json'),exampleFiles['runtime.json']!);rmSync(join(s.dir,'copy.cjs'));s.stdout.mockClear();
  await methodMain(['validate',s.file]);expect(s.result().error).toContain('copy.cjs');
+ writeFileSync(join(s.dir,'copy.cjs'),exampleFiles['copy.cjs']!);
  writeFileSync(join(s.dir,'runtime.json'),JSON.stringify({...JSON.parse(exampleFiles['runtime.json']!),runtimes:{}}));s.stdout.mockClear();
- await methodMain(['validate',s.file]);expect(s.result().error).toContain('Unknown runtime: node');
+ await methodMain(['validate',s.file]);expect(s.result().local_setup).toBe('needs_preparation');
 });
 it('uses an explicit config and resolves its executable path from that folder',async()=>{
  const s=setup();const configDir=join(s.dir,'config');mkdirSync(configDir);
@@ -52,23 +53,26 @@ it('status does not list Methods, reveal account details, or start login',async(
 it('leaves a pending save for retry when readback fails or differs, then confirms normalized content',async()=>{
  const s=setup();const workflow=JSON.parse(JSON.stringify((await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(exampleWorkflow)));
  workflow.run_prompt='Read the saved result.';writeFileSync(s.file,JSON.stringify({...workflow,run_prompt:'\nRead the saved result.\n'}));
- let bad=true;
- const client:any={server:'https://example.test',token:()=> 'test-token',request:vi.fn(async (path:string,verb:string)=>verb==='POST'?{workflow_id:'wf_test',version_id:'v_test',version_number:1}:{version_id:'v_test',workflow:{...workflow,...(bad?{name:'wrong'}:{})}})};
+ let bad=true;let pack:any;
+ const client:any={server:'https://example.test',token:()=> 'test-token',transfer:vi.fn(),request:vi.fn(async (path:string,verb:string,body:any)=>{if(path==='/api/cli/files/check')return {present:[]};if(verb==='POST'){pack=body.package;return {workflow_id:'wf_test',version_id:'v_test',version_number:1};}return {version_id:'v_test',package:pack,workflow:{...workflow,...(bad?{name:'wrong'}:{})}};})};
  await expect(methodMain(['save',s.file],()=>client)).rejects.toThrow('does not match');
  const pending=JSON.parse(readFileSync(s.file+'.method.json','utf8'));expect(pending.pending.request_id).toBeTruthy();
  bad=false;s.stdout.mockClear();await methodMain(['save',s.file],()=>client);expect(s.result()).toMatchObject({confirmed:true,version_id:'v_test'});expect(s.result().document_sha256).toMatch(/^[a-f0-9]{64}$/);
  expect(JSON.parse(readFileSync(s.file+'.method.json','utf8')).pending).toBeUndefined();
- expect(client.request.mock.calls.filter((c:any[])=>c[1]==='POST')[1][2].request_id).toBe(pending.pending.request_id);
+ expect(client.request.mock.calls.filter((c:any[])=>c[1]==='POST'&&c[0]!=='/api/cli/files/check')[1][2].request_id).toBe(pending.pending.request_id);
 });
 
 it('treats harmless whitespace consistently after checking out an older saved document', async()=>{
  const s=setup();const workflow=(await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(exampleWorkflow);
- const stored={workflow_id:'wf_test',version_id:'v_test',version_number:1,workflow:{...workflow,run_prompt:'\nRead the report.\n'}};
- const client:any={server:'https://example.test',token:()=> 'test-token',request:vi.fn(async()=>stored)};
+ const stored={workflow_id:'wf_test',version_id:'v_test',version_number:1,workflow:{...workflow,run_prompt:'Read the report.'}};
+ const client:any={server:'https://example.test',token:()=> 'test-token',transfer:vi.fn(),request:vi.fn(async()=>stored)};
+ const {collectPackage}=await import('../../packages/sdk/src/method-files.js');
+ Object.assign(stored,{package:await collectPackage(s.file,(await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(stored.workflow),client)});
  const checkout=join(s.dir,'checkout.method');await methodMain(['get','wf_test','--out',checkout],()=>client);
+ writeFileSync(checkout,readFileSync(checkout,'utf8').replace('Read the report.', 'Read the report.'));
  s.stdout.mockClear();await methodMain(['save',checkout],()=>client);
  expect(s.result()).toMatchObject({confirmed:true,unchanged:true,version_id:'v_test'});
- expect(client.request.mock.calls.every((c:any[])=>c[1]===undefined)).toBe(true);
+ expect(client.request.mock.calls.filter((c:any[])=>c[0]!=='/api/cli/files/check').every((c:any[])=>c[1]===undefined)).toBe(true);
 });
 
 it('validates a simple local-agent Method without a configuration file', async()=>{

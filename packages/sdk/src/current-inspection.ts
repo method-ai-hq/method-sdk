@@ -24,10 +24,13 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
   const events = readFileSync(path("events.jsonl"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
   const start = events.find(e => e.event === "run.started");
   const invocations: RunInspection["invocations"] = {};
-  const runEvents: NonNullable<RunInspection["events"]> = [];
+  const setup = existsSync(join(root,'setup.json')) ? read('setup.json') : [];
+  const runEvents: NonNullable<RunInspection["events"]> = setup;
   for (const event of events) {
     // Keep useful trace fields; do not upload tool arguments, environment values, or process stdout.
     const recorded: NonNullable<RunInspection["events"]>[number] = {
+      ...(typeof event.provider === 'string' ? {provider:event.provider} : {}),
+      ...(typeof event.model === 'string' ? {model:event.model} : {}),
       at: event.at, type: event.event === "human.required" ? "human_input_required" : event.event.replaceAll(".", "_"),
       ...(event.check ? { detail: `${event.check.status}: ${event.check.reason}` } : event.message || event.error ? { detail: String(event.message ?? event.error).slice(0, 4000) } : event.code ? { detail: String(event.code) } : {}),
       ...(Number.isInteger(event.sequence) ? { sequence: event.sequence } : {}),

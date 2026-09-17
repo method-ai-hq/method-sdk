@@ -8,7 +8,7 @@ import { dirname,resolve,sep } from "node:path";
 
 import { renameSync,writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { CheckSchema,CurrentCheckSchema,CurrentStepSchema,StepSchema } from "../../workflow-language/src/schema.js";
+import { CurrentCheckSchema,CurrentStepSchema } from "../../workflow-language/src/schema.js";
 import { loadWorkflow,parseDocumentValue,serializeWorkflow } from "../../workflow-language/src/validate.js";
 export function writeDocument(path: string, value: unknown) { const tmp = `${path}.${process.pid}.tmp`; try { writeFileSync(tmp, serializeWorkflow(value), { mode: 0o600, flag: "wx" }); renameSync(tmp, path); } finally { if (existsSync(tmp)) unlinkSync(tmp); } }
 
@@ -114,11 +114,11 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     let definition = "invalid";
     try {
       const workflow = loadWorkflow(readDocument(file)); definition = "valid";
-      if (workflow.format === "method/3" || workflow.format === "method/3.1") {
+      {
         const { config, configFile, sourceRoot } = await localSetup(file, v);
-        const { files } = await preflight(workflow, config, sourceRoot);
-        print({ valid: true, definition, local_setup: "valid", config: configFile, workspace: sourceRoot, files: files.length, steps: Object.keys(workflow.steps).length, executed: false });
-      } else print({ valid: true, definition, local_setup: "not_checked_legacy", steps: Object.keys(workflow.steps).length, executed: false });
+        const { files, missingSetup } = await preflight(workflow, config, sourceRoot, {allowMissingSetup:true});
+        print({ valid: true, definition, local_setup: missingSetup.length ? "needs_preparation" : "valid", ...(missingSetup.length ? {missing_setup:missingSetup} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps: Object.keys(workflow.steps).length, executed: false });
+      }
     } catch (error) { print({ valid: false, definition, local_setup: definition === "valid" ? "invalid" : "not_checked", executed: false, error: error instanceof Error ? error.message : String(error) }); process.exitCode = 1; }
     return true;
   }
@@ -135,21 +135,18 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
       if (action === "add") {
         if (!v.id) throw Error("Supply --id.");
         if (Object.hasOwn(doc.steps, v.id)) throw Error("That step already exists.");
-        if ((doc.format === "method/3" || doc.format === "method/3.1")) {
+        {
           if (v["value-file"] || v.json) doc.steps[v.id] = CurrentStepSchema.parse(value());
           else {
             const kind = v.kind ?? "agent";
             const execution = kind === "run" ? { kind, runtime: v.runtime, entrypoint: v.entrypoint } : { kind, model: v.model ?? "default", prompt: v["instructions-file"] ? readFileSync(authoringPath(v["instructions-file"]), "utf8") : undefined, ...(kind === "agent" ? { tools: [] } : {}) };
             doc.steps[v.id] = CurrentStepSchema.parse({ ...(v.name ? { name: v.name } : {}), ...(v.purpose ? {purpose: v.purpose} : {}), do: execution, limits: { ...(v["timeout-ms"] ? { timeout_ms: Number(v["timeout-ms"])} : {}), ...(v["max-agent-turns"] ? { max_agent_turns: Number(v["max-agent-turns"]) } : {}), ...(v["max-model-requests"] ? { max_model_requests: Number(v["max-model-requests"]) } : {}) } });
           }
-        } else {
-          if (!v["instructions-file"]) throw Error("Supply --instructions-file.");
-          doc.steps[v.id] = StepSchema.parse({ ...(v.name ? { name: v.name } : {}), do: readFileSync(authoringPath(v["instructions-file"]), "utf8") });
         }
       } else {
         if (!id || !Object.hasOwn(doc.steps, id)) throw Error("Step not found.");
         if (action === "remove") delete doc.steps[id];
-        else if (action === "update") { const patch = value(); if (!patch || Array.isArray(patch) || typeof patch !== "object") throw Error("Supply step fields."); doc.steps[id] = ((doc.format === "method/3" || doc.format === "method/3.1") ? CurrentStepSchema : StepSchema).parse({ ...doc.steps[id], ...patch }); }
+        else if (action === "update") { const patch = value(); if (!patch || Array.isArray(patch) || typeof patch !== "object") throw Error("Supply step fields."); doc.steps[id] = CurrentStepSchema.parse({ ...doc.steps[id], ...patch }); }
         else {
           if (!v.before || !Object.hasOwn(doc.steps, v.before)) throw Error("Supply --before with a step ID.");
           if (v.before !== id) { const entries = Object.entries(doc.steps).filter(([key]) => key !== id); const at = entries.findIndex(([key]) => key === v.before); entries.splice(at, 0, [id, doc.steps[id]]); doc.steps = Object.fromEntries(entries); }
@@ -158,7 +155,7 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     } else {
       if (!id || !Object.hasOwn(doc.steps, id)) throw Error("Step not found.");
       if (action === "remove") delete doc.steps[id].check;
-      else if (action === "set") doc.steps[id].check = ((doc.format === "method/3" || doc.format === "method/3.1") ? CurrentCheckSchema : CheckSchema).parse(value());
+      else if (action === "set") doc.steps[id].check = CurrentCheckSchema.parse(value());
       else throw Error("Use check set or check remove.");
     }
     return doc;

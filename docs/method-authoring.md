@@ -1,4 +1,4 @@
-<!-- Generated from packages/sdk/src/method-help.ts. Run npm run docs:method. -->
+<!-- Generated from packages/sdk/src/method-help.ts. -->
 
 # Author with Method
 
@@ -40,10 +40,6 @@ Complete Method (JSON is valid .method syntax):
     "prepared_day": {
       "type": "files",
       "description": "Folder of prepared records for that day. Read-only."
-    },
-    "approved_example": {
-      "type": "files",
-      "description": "Folder containing the complete approved example. Read-only."
     }
   },
   "steps": {
@@ -52,8 +48,7 @@ Complete Method (JSON is valid .method syntax):
       "in": {
         "day": "inputs.day",
         "timezone": "inputs.timezone",
-        "prepared_day": "environment.prepared_day",
-        "example_folder": "environment.approved_example"
+        "prepared_day": "environment.prepared_day"
       },
       "do": {
         "kind": "run",
@@ -220,12 +215,24 @@ Complete Method (JSON is valid .method syntax):
     "briefing_website.py",
     "briefing_markdown.py",
     "reader/reader.css",
-    "reader/reader.js"
+    "reader/reader.js",
+    "runtime.json",
+    "package.json",
+    "package-lock.json",
+    "pyproject.toml",
+    "uv.lock",
+    "vendor/marked.mjs",
+    "approved-output.zip",
+    "images.json",
+    "approved-images/7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0.part0",
+    "approved-images/7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0.part1",
+    "approved-images/85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb.part0",
+    "approved-images/85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb.part1"
   ]
 }
 ```
 
-Read README.md in the installed example folder for setup, helpers, the small redacted input sample, the complete approved output, and recorded checks. Copy that folder before editing it. Run setup.py there to prepare the example; it does not run the Method. The example uses the current Codex sign-in and model.
+Read README.md in the installed example folder for setup, helpers, the small redacted input sample, the complete approved output, and recorded checks. Copy that folder before editing it. Save the copy, then run its saved version. Method prepares its packages and uses the available coding agent. Bind the supplied sample folder as prepared_day when requested.
 
 The writer reads a complete approved report. It does not reconstruct a style from a summary. The scripts check inputs, calculate times, build the website, and save it. Copy useful choices; change the steps and tools to fit the work.
 
@@ -256,8 +263,8 @@ Use reading.output_name to give a returned result a short, honest name. Use read
 # Execution setup
 
 Use method run FILE_OR_ID [--config runtime.json] [--workspace HELPERS_FOLDER] [--inputs inputs.json] [--state state.json] [--run-dir DIR].
-Agent and call steps start Codex CLI by default, using its existing sign-in, user configuration, and default model. No model profile or API key is needed for that path. Install Codex and sign in before running.
-A simple local-agent Method needs no runtime.json. When needed, put runtime.json beside the Method. For a saved Method ID, use runtime.json and helpers in the current folder, or pass --workspace DIR. --config overrides that file. Relative files-environment paths and executable paths in configuration resolve from the config folder. A bare executable name is found on PATH.
+Method selects an explicit provider, the identified calling agent, a remembered choice, or the sole available supported agent. If a choice is needed, use --agent codex or --agent claude. Both use normal sign-in. The selected provider stays fixed on resume.
+A simple local-agent Method needs no runtime.json. When needed, put runtime.json beside the Method. New saved versions carry their helpers and runtime.json. Older versions without saved files still need --workspace DIR. --config overrides that file. Relative files-environment paths and executable paths in configuration resolve from the config folder. A bare executable name is found on PATH.
 Operator config supplies runtimes, tools, environment, and run limits. Optional models.PROFILE: {backend: codex, model: MODEL} selects a model; omit model to use the Codex default. command can select the Codex executable and reasoning_effort can override its setting.
 An explicit models.PROFILE with backend: openai-responses keeps the direct API path. It requires model, api_key_env, and max_output_tokens. Keep key values out of the config; api_key_env names an existing environment variable.
 runtimes.PROFILE uses command, version, optional args and env variable names. Scripts and Codex require allow_local_processes: true. They are trusted local processes.
@@ -265,8 +272,11 @@ Tools declare description, in, out, run, and effects. Agent tools must be listed
 Defaults: one hour per run, ten minutes per step, 100 model requests, 100 step invocations, 200 tool calls, and 16 MiB for input and output. Step defaults allow 32 agent turns/model requests. Override run limits with timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_output_bytes, max_request_bytes. Method enforces the Codex process timeout, prompt/output size, and declared Method tool-call limit. max_model_requests and max_agent_turns govern the direct API loop only; Codex manages its own internal requests and built-in tools. Codex usage and process logs are saved separately.
 Declared tools are exposed to each Codex step through a temporary local MCP connection. It uses the same script execution and checks as the API path. Codex also retains the user's installed tools. Method does not sandbox these processes. No persistent Codex configuration is edited.
 Scripts receive one JSON object on stdin and return one JSON object on stdout. Write artifacts under METHOD_OUTPUT_DIR. State updates are returned under state.
-The CLI snapshots files and script entrypoints from the method folder, or --workspace when supplied. A saved dashboard method keeps helper paths; provide the local helpers folder when running it.
+Save includes declared files, script and tool entrypoints, dependency lockfiles, and the runtime release. Run accepts a Method ID or dashboard URL and restores that version. Standard node and python runtimes are prepared automatically. Custom runtime settings stay explicit.
 Use method inspect RUN_DIRECTORY --out inspection.json for a saved run; online runs sync to the same Method dashboard.
+Use method bind ID NAME --file FOLDER to remember an input on this computer. Add --upload only to save that selected input folder privately in the account. Bundled examples stay in the version; day records stay separate.
+Use method state ID --enable --file state.json to opt into shared account state. Concurrent runs cannot overwrite it. Account state is JSON; an uploaded SQLite input is a snapshot, not a shared database. Use a live service connection for a shared database. A stopped run keeps ownership until continued or explicitly released with method state ID --release RUN_ID after inspecting its actions.
+Saved runs have their own process. Use --background to return immediately, method run-status DIR, method wait DIR, or method cancel DIR. Resume the same version with --resume --run-dir DIR. Use method sync DIR to retry uploads without repeating work.
 
 
 # Recipes
@@ -298,6 +308,131 @@ Success exits 0. Errors exit 1 with text on stderr, unless the command specifies
 
 Common errors:
 File commands require readable YAML or JSON. Editing commands report draft locks and leave the original file unchanged after a failed edit. Online commands require sign-in and network access. Use method authoring recovery for conflicts and interrupted saves.
+
+## bind
+
+Save a named input location or connection.
+
+Usage:
+
+```sh
+method bind ID NAME (--file FOLDER | --connection URL) [--upload]
+```
+
+Arguments and defaults:
+Default: this computer only. --upload saves only the selected input folder or connection URL in the account. It never scans your disk. Keep credentials in the service's normal sign-in store.
+
+Result and changes:
+Saved binding and scope.
+
+Errors:
+Missing input, invalid name, or unsafe path.
+
+Example:
+
+```sh
+method bind METHOD_ID prepared_day --file day-records --upload
+```
+
+## state
+
+Read or explicitly enable shared account state.
+
+Usage:
+
+```sh
+method state ID [--enable --file state.json | --release RUN_ID]
+```
+
+Arguments and defaults:
+Accepted state updates use revision checks. Inspect a stopped run's external actions before releasing its ownership.
+
+Result and changes:
+Current revision, value, and owner run.
+
+Errors:
+Concurrent ownership or stale revision. Existing state is never silently overwritten.
+
+Example:
+
+```sh
+method state METHOD_ID --enable --file initial-state.json
+```
+
+## wait
+
+Reconnect to the same local worker.
+
+Usage:
+
+```sh
+method wait RUN_DIRECTORY
+```
+
+Arguments and defaults:
+Use the directory returned by run. Closing this output connection leaves the worker active.
+
+Result and changes:
+Live output and final worker status.
+
+Errors:
+Stopped process or missing run.
+
+Example:
+
+```sh
+method wait .runs/example
+```
+
+## run-status
+
+Read worker status without waiting.
+
+Usage:
+
+```sh
+method run-status RUN_DIRECTORY
+```
+
+Arguments and defaults:
+Local run directory.
+
+Result and changes:
+Worker status and whether its process is active.
+
+Errors:
+Unreadable run directory.
+
+Example:
+
+```sh
+method run-status .runs/example
+```
+
+## cancel
+
+Stop a local run process.
+
+Usage:
+
+```sh
+method cancel RUN_DIRECTORY
+```
+
+Arguments and defaults:
+Inspect uncertain external actions before any explicit retry.
+
+Result and changes:
+Cancellation request. The checkpoint remains available.
+
+Errors:
+Unreadable run directory.
+
+Example:
+
+```sh
+method cancel .runs/example
+```
 
 ## progress
 
@@ -461,7 +596,7 @@ method step add FILE --id ID --value-file STEP.yaml
 ```
 
 Arguments and defaults:
-Supply do or ask and the bindings and outputs needed by the step in STEP.yaml. purpose, reading, checks, and limit overrides are optional. Alternatively use --kind run --runtime PROFILE --entrypoint FILE. Agents can use --kind agent --instructions-file FILE; the default model is the local Codex agent.
+Supply do or ask and the bindings and outputs needed by the step in STEP.yaml. purpose, reading, checks, and limit overrides are optional. Alternatively use --kind run --runtime PROFILE --entrypoint FILE. Agents can use --kind agent --instructions-file FILE; the default is the calling coding agent.
 
 Result and changes:
 JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
@@ -639,7 +774,7 @@ Arguments and defaults:
 Checks data, names, dependencies, templates, declared files, executables, environment variables, runtime profiles and tool bindings. Defaults to runtime.json beside the Method. --workspace selects the helper folder and default config folder. Relative paths in config resolve from the config folder.
 
 Result and changes:
-JSON reports definition, local_setup, executed:false, and valid. Missing setup or invalid definition exits 1 with an exact error. Legacy Methods get definition checks only.
+JSON reports definition, local_setup, executed:false, and valid. Invalid definitions or missing declared files exit 1. Managed setup is reported separately as needs_preparation; run prepares it.
 
 Errors:
 The error identifies the invalid field or reference.
@@ -1079,26 +1214,15 @@ method run WORKFLOW_ID [--version VERSION_ID] [--server URL] [OPTIONS]
 Arguments and defaults:
 Current methods optionally use runtime.json beside a local file, or in the current folder for a saved ID. --workspace selects a different folder. --config FILE overrides the config. See method authoring execution. Optional --state FILE initializes state for a new run. Resume with --resume --run-dir DIR; authorize unfinished work with --retry STEP:ITERATION.
 
-Older saved methods use these options:
-Default version: latest; pin --version for repeatable runs. Read get first.
---workspace DIR: working folder; default current folder.
---inputs FILE: JSON object matching method.inputs; asks in a terminal if omitted. In noninteractive use, supply it when inputs are defined.
---resources FILE: JSON resource map, e.g. {"data":{"description":"CRM folder","path":"/absolute/data"}}. No secrets. Names match environment declarations. Each description gives the local connection instructions; Method supplies them alongside the method requirement. File connections default to workspace.
---run-dir DIR: new run folder; default .method-runs/<online method ID>/<timestamp>.
---resume: continue a saved Method run; requires --run-dir and its original --version. Uses saved inputs/resources unless supplied.
---retry INVOCATION: allow another attempt for an incomplete invocation on resume; repeat flag for multiple IDs. Inspect changes first.
---recoveries FILE: JSON object mapping invocation IDs to inspected step results; checks still run.
---human FILE: JSON {steps:{invocation:{outputs:{name:value}}}}; default empty. Human work waits for an actual answer.
---state-dir DIR: persistent data folder; default <workspace>/.method/data/<method ID>.
---concurrency N: maximum active operations; default 4, maximum 32.
---timeout-ms N: process time limit; default 300000.
---model MODEL: step model; default Codex user setting.
---verifier-model MODEL: check model; default --model, then Codex user setting.
---verbose: print each runtime event.
+--inputs FILE: JSON input values.
+--run-dir DIR: saved run folder.
+--resume: continue the same saved run.
+--human FILE: saved human answers for the current runtime.
+--verbose: print runtime events.
 Use method doctor to check the installed Node and Codex tools.
 
 Result and changes:
-Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, and 2 when human input is needed. Older saved runs can use exit 2 for a failed run.
+Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, and 2 when human input is needed.
 
 Errors:
 Missing inputs/access, failed check, timeout, unsafe resume/version mismatch, upload failure. See recovery. Never retry a business write without inspecting its saved changes.

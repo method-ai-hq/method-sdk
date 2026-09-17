@@ -15,7 +15,7 @@ def inputs(a):
     date = dt.date.fromisoformat(a['day']).isoformat()
     zone = ZoneInfo(a['timezone'])
     example, prepared = folder('example'), folder('selected_day')
-    if example != Path(a['example_folder']).resolve() or prepared != Path(a['prepared_day']).resolve():
+    if prepared != Path(a['prepared_day']).resolve():
         raise ValueError('Method folders do not match the runtime tool bindings')
     required = {
         'example': ['website/index.html', 'briefing.md'],

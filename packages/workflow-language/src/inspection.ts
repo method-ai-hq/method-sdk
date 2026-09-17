@@ -4,6 +4,7 @@ import { JsonSchema, WorkflowSchema, executionText, type Json, type Step, type W
 import { producers, references, referenceShape } from "./validate.js";
 export const FailureSchema = z.strictObject({ phase: z.enum(["environment", "input", "action", "check", "change"]), expected: z.string(), observed: z.string(), evidence: z.array(z.string()) });
 export const RunEventSchema = z.strictObject({
+  provider: z.string().optional(), model: z.string().optional(),
   at: z.string(), type: z.string(), detail: z.string().optional(),
   sequence: z.number().int().nonnegative().optional(), phase: z.enum(["action", "check"]).optional(),
   tool: z.string().optional(), call_id: z.string().optional(), command: z.string().optional(),

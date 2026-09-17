@@ -16,10 +16,6 @@
     "prepared_day": {
       "type": "files",
       "description": "Folder of prepared records for that day. Read-only."
-    },
-    "approved_example": {
-      "type": "files",
-      "description": "Folder containing the complete approved example. Read-only."
     }
   },
   "steps": {
@@ -28,8 +24,7 @@
       "in": {
         "day": "inputs.day",
         "timezone": "inputs.timezone",
-        "prepared_day": "environment.prepared_day",
-        "example_folder": "environment.approved_example"
+        "prepared_day": "environment.prepared_day"
       },
       "do": {
         "kind": "run",
@@ -196,6 +191,18 @@
     "briefing_website.py",
     "briefing_markdown.py",
     "reader/reader.css",
-    "reader/reader.js"
+    "reader/reader.js",
+    "runtime.json",
+    "package.json",
+    "package-lock.json",
+    "pyproject.toml",
+    "uv.lock",
+    "vendor/marked.mjs",
+    "approved-output.zip",
+    "images.json",
+    "approved-images/7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0.part0",
+    "approved-images/7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0.part1",
+    "approved-images/85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb.part0",
+    "approved-images/85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb.part1"
   ]
 }

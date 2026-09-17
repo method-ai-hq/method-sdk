@@ -26,7 +26,7 @@ def h(value):return html.escape(str(value),quote=True)
 def put(path,text):
     path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text);path.chmod(0o600)
 def stamp(value):return dt.datetime.fromisoformat(value)
-def clock(value):return stamp(value).strftime('%-I:%M %p')
+def clock(value):return stamp(value).strftime('%I:%M %p').lstrip('0')
 def quotes(text):
     result=[];depth=0;start=0
     for i,char in enumerate(text):
@@ -40,7 +40,7 @@ def quotes(text):
 
 def readable_time(e):
     time=e['time']
-    return stamp(time['local']).strftime('%b %-d · %-I:%M %p') if time['local'] else time['day']
+    return stamp(time['local']).strftime('%b %d · %I:%M %p').replace(' 0',' ') if time['local'] else time['day']
 def host(url):return (urlsplit(url or '').hostname or '').removeprefix('www.').removeprefix('mobile.')
 def safe_url(url):return url if urlsplit(url or '').scheme in ['http','https'] else ''
 
@@ -55,6 +55,18 @@ process.stdout.write(JSON.stringify(Object.fromEntries(Object.entries(inputs).ma
     return json.loads(subprocess.run(['node','--input-type=module','-e',code],input=json.dumps({'texts':texts,'sources':source_urls or {}}),text=True,capture_output=True,check=True).stdout)
 
 
+def convert_photo(original,target):
+    from PIL import Image, ImageOps
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    with Image.open(original) as source:
+        preview=ImageOps.exif_transpose(source)
+        preview.thumbnail((1600,1600))
+        if preview.mode in ('RGBA','LA') or 'transparency' in preview.info:
+            rgba=preview.convert('RGBA');background=Image.new('RGB',rgba.size,'white');background.paste(rgba,mask=rgba.getchannel('A'));preview=background
+        preview.convert('RGB').save(target,format='JPEG',quality=85)
+
+
 def build(prepared,briefing_file,out,marked,day=None,proposal=None):
     proposal=proposal or parse(briefing_file.read_text(),day,marked)
     dest=out
@@ -65,7 +77,7 @@ def build(prepared,briefing_file,out,marked,day=None,proposal=None):
     entries={r['entry_id']:r for name in ['timeline.jsonl','untimed.jsonl'] for r in map(json.loads,(prepared/name).read_text().splitlines())}
     day=proposal['day']
     title=proposal['title']
-    day_label=dt.date.fromisoformat(day).strftime('%b %-d, %Y').upper()
+    day_label=dt.date.fromisoformat(day).strftime('%b %d, %Y').replace(' 0',' ').upper()
     source_ids={cid:r['source_record_ids'] for r in entries.values() for cid in r['source_record_ids']}
     documents=load(prepared/'metadata/documents.json')
     doc_by_record={cid:d for d in documents for cid in d['record_ids']}
@@ -86,8 +98,9 @@ def build(prepared,briefing_file,out,marked,day=None,proposal=None):
     media={}
     for asset in optional(prepared/'media.json'):
         original=prepared/asset['path'];name=Path(asset['path']).stem+'.jpg';target=dest/'media'/name;target.parent.mkdir(exist_ok=True)
-        if not target.exists():subprocess.run(['sips','-s','format','jpeg','-s','formatOptions','85','-Z','1600',str(original),'--out',str(target)],capture_output=True,check=True)
-        original_target=dest/asset['path'];shutil.copyfile(original,original_target)
+        if not target.exists():
+            convert_photo(original,target)
+        original_target=dest/asset['path'];original_target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(original,original_target)
         for cid in asset['records']:media[cid]={'png':'media/'+name,'original':asset['path']}
     def photo(cid,caption):
         asset=media[cid]

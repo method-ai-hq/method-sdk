@@ -45,7 +45,7 @@ def render_and_save(args):
         website = temporary/'website'
         with contextlib.redirect_stdout(sys.stderr):
             build(folder('selected_day'), temporary/'briefing.md', website,
-                  Path(os.environ['DAILY_BRIEFING_MARKED']), day, proposal)
+                  Path(__file__).parent/'vendor/marked.mjs', day, proposal)
         for target in proposal['local_files']:
             relative = target['path']
             destination = (website/relative).resolve()

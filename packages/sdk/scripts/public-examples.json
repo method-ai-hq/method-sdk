@@ -6,7 +6,6 @@
   "daily-briefing/briefing_artifacts.py",
   "daily-briefing/briefing_browser.cjs",
   "daily-briefing/briefing_check_inputs.py",
-  "daily-briefing/briefing_config.py",
   "daily-briefing/briefing_files.py",
   "daily-briefing/briefing_manifest.py",
   "daily-briefing/briefing_markdown.py",
@@ -59,7 +58,10 @@
   "daily-briefing/sample/sessions.json",
   "daily-briefing/sample/timeline.jsonl",
   "daily-briefing/sample/untimed.jsonl",
-  "daily-briefing/setup.py",
   "daily-briefing/vendor/marked-LICENSE.md",
-  "daily-briefing/vendor/marked.mjs"
+  "daily-briefing/vendor/marked.mjs",
+  "daily-briefing/runtime.json",
+  "daily-briefing/pyproject.toml",
+  "daily-briefing/uv.lock",
+  "daily-briefing/package-lock.json"
 ]

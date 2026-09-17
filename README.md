@@ -1,72 +1,44 @@
 # Method SDK
 
-The JavaScript and Python SDKs and the full `method` CLI. Write a reusable procedure as YAML, run it locally, check its outputs, and inspect the saved evidence. Use the CLI to author Methods, save versions, and sync runs to the Method dashboard.
+The canonical source for the JavaScript SDK, Python binding, and `method` CLI. Both packages are MIT licensed. Changes and releases are made in this public repository.
 
-[Documentation](https://docs.withmethod.ai/sdk/overview) · [Quickstart](https://docs.withmethod.ai/guides/quickstart) · [CLI reference](docs/method-authoring.md) · [Issues](https://github.com/method-ai-hq/method-sdk/issues)
+`@withmethod/runtime` owns the Method schema, validator, and executor in [method-spec](https://github.com/method-ai-hq/method-spec). This SDK pins one runtime commit and adds authoring, local setup, account access, saved versions, and run uploads. Python calls the same Node runtime.
 
-## Install a release
-
-Node.js 22 or later is required. Downloads are hosted by Method; these commands do not use an npm or PyPI registry release.
+## Install
 
 ```sh
-npm install -g https://app.withmethod.ai/downloads/withmethod-sdk-latest.tgz
+npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.7.0/withmethod-sdk-0.7.0.tgz
 method --version
-method authoring
 ```
 
-Python 3.11 or later uses the same installed Node runtime:
+Node.js 22 or later is required. Python 3.11 or later uses the installed Node package:
 
 ```sh
-pip install https://app.withmethod.ai/downloads/withmethod-0.4.1-py3-none-any.whl
+pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.7.0/withmethod-0.5.0-py3-none-any.whl
 withmethod authoring
 ```
 
-See the [download manifest](https://app.withmethod.ai/downloads/manifest.json) for immutable versioned filenames and SHA-256 hashes. `SOURCE.json` records the source snapshot and package versions in this repo. Downloaded releases can have different package metadata from the current source checkout.
+See [product docs](https://docs.withmethod.ai), the [CLI guide](docs/method-authoring.md), and [release changes](CHANGELOG.md).
 
-## Build from source
+## Build and test
 
 ```sh
-git clone https://github.com/method-ai-hq/method-sdk.git
-cd method-sdk
 npm ci
 npm run build
 npm test
-npm run method -- --version
+npm run pack
 ```
 
-Tests run scripts and mocked model calls locally. They need no Method account or model API key. Use `PYTHON=python3.11 npm test` if `python3` is not Python 3.11 or later. The build and test commands support macOS and Linux.
+Tests use local scripts and mocked providers. They do not need a Method account or paid model calls. Use `PYTHON=python3.11 npm test` when needed.
 
-To install the local build, run `npm run pack`, then `npm install -g ./dist/withmethod-sdk-0.5.7.tgz`. For Python development, run `python3 -m pip install -e ./packages/sdk-python` in a virtual environment after installing the Node SDK.
+## Ownership and release
 
-## Run a checked example
+`packages/sdk` owns the JavaScript API and CLI. `packages/sdk-python` owns the Python binding. Shared public modules live under `packages/workflow-language`, `packages/contracts`, and `packages/compiler`; the SDK publishes explicit package exports for them. The private application consumes released packages and does not keep another SDK source copy.
 
-From the repo root after `npm ci`:
+The Release workflow builds the npm archive, Python wheel, and four self-contained CLI distributions. It publishes them with SHA-256 hashes in `manifest.json`. The private application can mirror those exact artifacts. It does not rebuild them.
 
-```sh
-npm run method -- validate examples/checked-file.method
-npm run method -- run examples/checked-file.method --config examples/runtime.json --inputs examples/inputs.json --run-dir runs/first
-npm run method -- inspect runs/first
-```
+## Breaking changes in 0.7
 
-This example writes a text file and checks its contents. It uses no model credentials. See [the JavaScript guide](packages/sdk/README.md) and [the Python guide](packages/sdk-python/README.md) for API examples. Local validation and execution need no Method account. Saving versions and syncing runs require browser sign-in.
+Only `method/3` and `method/3.1` execute. The old executor, callback execution API, and legacy run reader are removed. Old `method/2` and `workflow/2` documents fail with `UNSUPPORTED_FORMAT`. `method migrate` can explicitly convert a document; it does not run the old format.
 
-## Source layout
-
-| Path | Contents |
-| --- | --- |
-| `packages/sdk/src` | JavaScript API, CLI, account client, authoring, inspection, sync, and compatibility support |
-| `packages/sdk-python/src` | Python API and CLI bridge to the same Node runtime |
-| `packages/workflow-language`, `packages/contracts`, `packages/compiler` | Shared SDK types, validation adapters, and migration support |
-| `examples` | Small runnable script and website examples |
-| `packages/sdk/examples/daily-briefing` | Public authoring example and sample data |
-| `testkit` | SDK, compatibility, and Python tests |
-
-The separate [method-spec](https://github.com/method-ai-hq/method-spec) repo defines the Method format, validator, and executor (`@withmethod/runtime`). This SDK pins that dependency to an exact commit. The standalone `method3` command from that repo is distinct from this SDK's full `method` command. The hosted application and service code are not part of this repo.
-
-## Contribute
-
-Open an issue or pull request here. This repo is a reviewed export from Method's development repo. Maintainers integrate accepted changes there and publish an updated export, so SDK source and hosted releases stay aligned. CI builds the packages and runs the tests on Node 22 and 24 with Python 3.11. No private repository access is needed to build, test, or use this code.
-
-## License and execution
-
-[MIT](LICENSE). The vendored Markdown parser keeps its own license in its example directory. Scripts and agents are trusted local processes. Review a Method and its helper files before running them. The Codex backend uses the existing local sign-in and disables its approval and sandbox prompts. Model checks can be wrong; inspect the run evidence.
+Use `method`. The `workflow`, `sdk`, `method-run`, and `workflow-bridge` aliases are removed. Python keeps `withmethod`; `workflow-corp`, `method-python`, and the `workflow_corp` module are removed. `method-bridge` is the machine interface for Python.

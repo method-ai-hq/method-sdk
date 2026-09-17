@@ -3,15 +3,20 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": {"node": ">=22"},
-  "workspaces": ["packages/sdk"],
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/sdk"
+  ],
   "scripts": {
-    "build": "npm run build --workspace @withmethod/sdk && node scripts/prepare-source.mjs",
+    "build": "npm run build --workspace @withmethod/sdk && node scripts/build-guide.mjs && node scripts/prepare-source.mjs",
     "test": "vitest run && npm run test:runtime && npm run test:python",
     "test:runtime": "cd node_modules/@withmethod/runtime && node --test test/*.test.js",
     "test:python": "${PYTHON:-python3} -m unittest discover -s testkit/python -p '*_test.py'",
     "method": "tsx packages/sdk/src/method.ts",
-    "pack": "npm run build && mkdir -p dist && npm pack --workspace @withmethod/sdk --ignore-scripts --pack-destination dist"
+    "pack": "npm run build && mkdir -p dist && npm pack --workspace @withmethod/sdk --ignore-scripts --pack-destination dist",
+    "release:build": "tsx scripts/build-release.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.10",

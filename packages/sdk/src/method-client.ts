@@ -89,6 +89,25 @@ export class MethodClient {
       );
     return result as T;
   }
+  async transfer(path: string, data?: Uint8Array): Promise<Uint8Array> {
+    if (!path.startsWith('/api/cli/') || path.includes('://')) throw Error('Use a Method file API path.');
+    const token = this.token();
+    if (!token) throw Error('Sign in with method login first.');
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await this.fetcher(this.server + path, {
+          method: data ? 'PUT' : 'GET', redirect: 'error', signal: AbortSignal.timeout(120_000),
+          headers: { authorization: `Bearer ${token}`, ...(data ? {'content-type':'application/octet-stream'} : {}) },
+          ...(data ? { body: data as unknown as BodyInit } : {}),
+        });
+        if (!response.ok) throw Object.assign(new Error(`${response.status}: ${await response.text()}`), { retryable: response.status >= 500 || response.status === 429 });
+        return new Uint8Array(await response.arrayBuffer());
+      } catch (error: any) {
+        if (attempt >= 2 || error.retryable === false) throw error;
+        await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+      }
+    }
+  }
   async login(openBrowser: (url: string) => void = openUrl) {
     if (this.token()) {
       try {
@@ -99,8 +118,10 @@ export class MethodClient {
         if (!String(error).includes("401:")) throw error;
       }
     }
-    const token = `method_${Buffer.from(randomBytes(32)).toString("base64url")}`;
-    const started = await this.request<{
+    const pendingFile = `${this.credentialFile}.pending`;
+    const prior = existsSync(pendingFile) ? JSON.parse(readFileSync(pendingFile, 'utf8')) : null;
+    const token = prior?.expires_at > Date.now() ? prior.token : `method_${Buffer.from(randomBytes(32)).toString("base64url")}`;
+    const started = prior?.expires_at > Date.now() ? prior : await this.request<{
       poll_secret: string;
       code: string;
       expires_at: number;
@@ -111,6 +132,7 @@ export class MethodClient {
       { name: hostname(), token_hash: sha256(token) },
       false,
     );
+    writePrivateJson(pendingFile, { ...started, token });
     const verification = new URL(started.verification_url);
     // The hosted app uses its API origin for WorkOS cookies. No credentials are sent to this URL.
     if (
@@ -132,16 +154,19 @@ export class MethodClient {
       );
       if (result.status === "approved") {
         writePrivateJson(this.credentialFile, { server: this.server, token });
+        rmSync(pendingFile, {force: true});
         process.stderr.write("Method is connected.\n");
         return;
       }
       if (result.status === "expired") break;
     }
+    rmSync(pendingFile, {force: true});
     throw Error("Browser sign-in expired. Run method login again.");
   }
   async logout() {
     if (this.token()) await this.request("/api/cli/logout", "POST", {});
     rmSync(this.credentialFile, { force: true });
+    rmSync(`${this.credentialFile}.pending`, { force: true });
     if (this.legacyCredentialFile) rmSync(this.legacyCredentialFile, { force: true });
   }
 }

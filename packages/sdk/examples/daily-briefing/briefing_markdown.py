@@ -86,6 +86,6 @@ process.stdout.write(JSON.stringify({blocks,citations,photos,local_files}));
             key = 'lines-' + '-'.join(map(str, bounds))
             ranges.setdefault(ids, {})[key] = bounds
             citation['source_range'] = key
-    heading = next((b['text'] for b in document['blocks'] if b['type']=='heading' and b.get('depth')==1), date.strftime('%A, %B %-d'))
+    heading = next((b['text'] for b in document['blocks'] if b['type']=='heading' and b.get('depth')==1), date.strftime('%A, %B %d').replace(' 0',' '))
     return {**document, 'day': date.isoformat(), 'timezone': day['timezone'], 'heading': heading,
             'title': metadata.get('title', heading), 'source_ranges': ranges, 'supplements': supplements}
