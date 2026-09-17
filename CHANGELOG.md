@@ -1,5 +1,9 @@
 # Release changes
 
+## SDK 0.7.1 / runtime 0.5.1
+
+Preserve the actual Claude failure message when its process exits with an error. A live test found that an expired account token was hidden behind an exit code. Use the normal agent sign-in to restore access.
+
 ## SDK 0.7.0 / Python 0.5.0 / runtime 0.5.0
 
 The public SDK repo is now the source of record and owns package releases. The application installs a pinned package.
