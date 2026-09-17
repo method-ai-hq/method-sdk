@@ -39,6 +39,7 @@ export function attachResultFiles(
   invocations: RunInspection["invocations"],
   roots: string[],
   artifactRoot?: string,
+  referencesOnly = false,
 ): AttachedFile[] {
   const files: AttachedFile[] = [],
     seen = new Set<string>();
@@ -94,6 +95,12 @@ export function attachResultFiles(
         throw Error(
           "The file exceeds the remaining 100 MB run attachment limit.",
         );
+      if (referencesOnly) {
+        remaining -= result.bytes.length;
+        file.status = "verified";
+        file.bytes = result.bytes.length;
+        return { file, bytes: result.bytes };
+      }
       const compressed = gzipSync(result.bytes);
       const useGzip = compressed.length < result.bytes.length;
       const payload = useGzip ? compressed : result.bytes;
@@ -140,6 +147,10 @@ export function attachResultFiles(
             entrypoint: join(dirname(ref.data.path), manifest.entrypoint),
             files: members,
           };
+          if (referencesOnly) {
+            for (const member of members) attach({ path: member.path, sha256: member.sha256 }, member.path, member.media_type);
+            return;
+          }
           // Transfer one archive instead of thousands of base64 file objects.
           // Every file is still explicit in the manifest and checked before packing.
           try {

@@ -82,7 +82,13 @@ export class MethodClient {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    const result = (await response.json()) as any;
+    const text = await response.text();
+    let result: any;
+    try { result = JSON.parse(text); }
+    catch {
+      const title = /<title[^>]*>([^<]*)<\/title>/i.exec(text)?.[1]?.split("|")[0]?.trim();
+      throw Error(`${response.status}: ${title || response.statusText || "Method returned a non-JSON response"} (${method} ${path}). Local run files are preserved.`);
+    }
     if (!response.ok)
       throw Error(
         `${response.status}: ${result.message ?? result.error ?? "Method request failed"}`,

@@ -4,7 +4,7 @@ import { join, resolve, sep } from "node:path";
 import { InspectionSchema, type RunInspection } from "../../workflow-language/src/inspection.js";
 
 /** Export known run records. File previews are opt-in and must match saved hashes. */
-export function inspectRun(directory: string, options: { includeFiles?: boolean; /** Internal: only called synchronously by the owning SDK process. */ activeSnapshot?: boolean } = {}): RunInspection {
+export function inspectRun(directory: string, options: { includeFiles?: boolean | "references"; /** Internal: only called synchronously by the owning SDK process. */ activeSnapshot?: boolean } = {}): RunInspection {
   const requested = resolve(directory);
   if (requested.split(sep).includes("sensitive")) throw Error("INSPECT_PATH: choose a run outside sensitive/.");
   const root = realpathSync(requested);

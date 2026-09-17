@@ -1,3 +1,4 @@
+import { transferResults } from "./result-transfer.js";
 import { MAX_RESULT_BYTES, MAX_RESULT_TRANSFER_BYTES } from "../../workflow-language/src/result-files.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -68,6 +69,15 @@ export class MethodSync {
     this.save();
     // Save before upload. Sync can be retried after an interrupted connection without running steps again.
     writePrivateJson(join(this.directory, "method-pending.json"), payload);
+    if (inspection.files?.length) {
+      // Publish completed work even if transferring its result files is interrupted.
+      await this.send({...payload, inspection:{...inspection, files:undefined}});
+      payload.sequence = ++this.state.sequence;
+      this.save();
+      writePrivateJson(join(this.directory, "method-pending.json"), payload);
+      payload.inspection = {...inspection, files:await transferResults(this.client, this.directory, inspection.files)};
+      writePrivateJson(join(this.directory, "method-pending.json"), payload);
+    }
     await this.send(payload);
   }
   private async send(payload: unknown) {
@@ -105,7 +115,7 @@ export class MethodSync {
     };
     // A completed checkpoint remains completed when reconnecting or adding result files.
     try {
-      const saved = inspectRun(this.directory, {includeFiles:true});
+      const saved = inspectRun(this.directory, {includeFiles:"references"});
       if (saved.status === 'succeeded') this.initial = saved;
     } catch { /* Preparation has no checkpoint yet. */ }
     writePrivateJson(join(this.directory,'setup-inspection.json'),this.initial);
@@ -128,7 +138,7 @@ export class MethodSync {
     // Read synchronously on the SDK event loop, before any await. Atomic SDK files cannot change during this read.
     let inspection: RunInspection;
     try {
-      inspection = inspectRun(this.directory, { activeSnapshot: true, includeFiles: true });
+      inspection = inspectRun(this.directory, { activeSnapshot: true, includeFiles: "references" });
     } catch {
       return;
     }
@@ -154,7 +164,7 @@ export class MethodSync {
     try {
       let inspection: RunInspection;
       try {
-        inspection = inspectRun(this.directory, { includeFiles: true });
+        inspection = inspectRun(this.directory, { includeFiles: "references" });
       } catch (error) {
         if (!this.initial) throw error;
         inspection = {
@@ -183,24 +193,15 @@ export class MethodSync {
       state.version_id,
     );
     // Export the final local state. Never rerun business actions during sync.
-    let inspection = inspectRun(directory, { includeFiles: true });
+    let inspection = inspectRun(directory, { includeFiles: "references" });
     if (state.dashboard_id) {
       const saved=await sync.client.request<{run:{status:string;inspection:RunInspection}}>(`/api/workspace/runs/${state.dashboard_id}`);
       if (saved.run.status === "succeeded") {
         // Keep bytes already saved if the local file was removed or changed.
         const files = [...(saved.run.inspection.files ?? [])];
-        let size = files.reduce((sum, file) => sum + (file.data !== undefined ? file.bytes ?? 0 : 0), 0);
-        let transferred = files.reduce((sum, file) => sum + (file.data ? Buffer.from(file.data, "base64").length : 0) + (file.website?.archive ? Buffer.from(file.website.archive, "base64").length : 0), 0);
         for (const file of inspection.files ?? []) {
           const index = files.findIndex(old => old.path === file.path && old.sha256 === file.sha256);
-          if (index >= 0 && files[index]!.data !== undefined && !(file.website?.archive && !files[index]!.website?.archive)) continue;
-          const previous = index >= 0 ? files[index] : undefined;
-          const priorBytes = previous?.data !== undefined ? previous.bytes ?? 0 : 0;
-          const priorTransfer = (previous?.data ? Buffer.from(previous.data, "base64").length : 0) + (previous?.website?.archive ? Buffer.from(previous.website.archive, "base64").length : 0);
-          const payloadSize = (file.data ? Buffer.from(file.data, "base64").length : 0) + (file.website?.archive ? Buffer.from(file.website.archive, "base64").length : 0);
-          if (file.data !== undefined && (size - priorBytes + (file.bytes ?? 0) > MAX_RESULT_BYTES || transferred - priorTransfer + payloadSize > MAX_RESULT_TRANSFER_BYTES)) continue;
-          transferred += payloadSize - priorTransfer;
-          size += (file.data !== undefined ? file.bytes ?? 0 : 0) - priorBytes;
+          if (index >= 0 && files[index]!.stored) continue;
           if (index >= 0) files[index] = file;
           else files.push(file);
         }
@@ -214,7 +215,7 @@ export class MethodSync {
         JSON.stringify(InspectionSchema.parse(pending.inspection)) ===
         JSON.stringify(inspection)
       ) {
-        await sync.send(pending);
+        await sync.upload(inspection);
         return;
       }
     }

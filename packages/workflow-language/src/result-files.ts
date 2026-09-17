@@ -65,6 +65,7 @@ export const AttachedFileSchema = z.strictObject({
   media_type: z.string().optional(),
   data: z.string().max(MAX_RESULT_TRANSFER_BYTES * 4 / 3).optional(),
   encoding: z.literal("gzip").optional(),
+  stored: z.boolean().optional(),
   website: z
     .strictObject({
       archive: z.string().max(MAX_RESULT_TRANSFER_BYTES * 4 / 3).optional(),

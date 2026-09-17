@@ -6,7 +6,7 @@ import { loadWorkflow } from "../../workflow-language/src/validate.js";
 import { InspectionSchema, type RunInspection } from "../../workflow-language/src/inspection.js";
 
 /** Convert the public trace into the dashboard's stable inspection contract. */
-export function inspectCurrentRun(root: string, activeSnapshot = false, includeFiles = false): RunInspection {
+export function inspectCurrentRun(root: string, activeSnapshot = false, includeFiles: boolean | "references" = false): RunInspection {
   const path = (name: string) => {
     const actual = realpathSync(join(root, name));
     if (!actual.startsWith(root + sep) || actual.split(sep).includes("sensitive")) throw Error("Run record escapes the run directory.");
@@ -56,7 +56,7 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
     if (event.event === "human.required") row.status = "needs_attention";
   }
   if (!active && summary.status !== "completed") for (const row of Object.values(invocations)) if (["running", "returned"].includes(row.status)) { row.status = "needs_attention"; row.error = summary.error ?? "Run interrupted"; }
-  const files = includeFiles ? attachResultFiles(workflow, invocations, [join(root, "artifacts")], join(root, "artifacts")) : undefined;
+  const files = includeFiles ? attachResultFiles(workflow, invocations, [join(root, "artifacts")], join(root, "artifacts"), includeFiles === "references") : undefined;
   const lastAccepted = events.filter(e => e.event === "step.accepted").at(-1);
   return InspectionSchema.parse({ schema: "workflow-inspection/2", workflow, run_id: basename(root), local_run_directory: root,
     events: runEvents, ...(includeFiles ? { files } : {}), status: active ? "running" : summary.status === "completed" ? "succeeded" : "needs_attention",
