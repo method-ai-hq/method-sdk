@@ -1,5 +1,7 @@
 # 0.8.0
 
+- Upload result files separately from run records, resume only missing files, and serve website assets from private storage. Remove the 20 MB whole-result upload cutoff. Preserve the HTTP status and server reason when an error response is not JSON.
+
 - Use runtime 0.6.0 for the same browser-safe parser and validator across the SDK and executor. File values require path and sha256; text is preserved and bounded YAML aliases are accepted.
 - Run local files and saved Methods through the same background worker. Check configured agents and scripts without requiring Codex for script-only work.
 - Export typed runtime options and results. Remove obsolete legacy-execution instructions and Codex-only setup helpers.
