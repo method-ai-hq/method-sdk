@@ -43,3 +43,12 @@ it('keeps the chosen agent across an actual pause and resume without changing a 
  expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(saved);
  expect(readFileSync(f.preference,'utf8')).toBe('{"agent":"codex"}');
 });
+
+it('a fresh Codex run replaces a generic Claude default and preserves an explicit agent choice',async()=>{
+ const f=fixture();vi.stubEnv('CLAUDECODE','');
+ writeFileSync(f.file,JSON.stringify({...method,steps:{write:{do:{kind:'agent',model:'default',prompt:'Return text.'},out:{text:{type:'text'}}}}}));
+ writeFileSync(join(f.root,'runtime.json'),JSON.stringify({allow_local_processes:true,models:{default:{backend:'claude'}}}));
+ expect(await runCurrentFile(f.file,{'run-dir':f.runDir})).toMatchObject({status:'completed',result:'codex'});
+ expect(await runCurrentFile(f.file,{'run-dir':join(f.root,'explicit'),agent:'claude'})).toMatchObject({status:'completed',result:'claude'});
+ expect(readFileSync(join(f.root,'calls'),'utf8')).toBe('codex\nclaude\n');
+});

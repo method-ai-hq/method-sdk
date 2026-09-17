@@ -52,7 +52,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     browser = await openBrowser(method,config,flags['run-dir']!,controller.signal);
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
-      inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
+      agent: flags.agent as 'codex' | 'claude' | undefined, inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
       human: json(flags.human), signal: controller.signal,
       ...(browser ? {connections:browser.connections} : {}),
       sourceRoot,
