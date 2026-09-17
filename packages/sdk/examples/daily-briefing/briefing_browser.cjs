@@ -1,5 +1,5 @@
 // Open the actual saved website. Return its exact rendered text and available links.
-// No model calls. Each request gets a fresh local page; the saved files stay unchanged.
+// Each request opens a fresh local page.
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const http = require('node:http');

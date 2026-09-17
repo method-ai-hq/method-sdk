@@ -1,5 +1,4 @@
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import {unzipSync} from 'fflate';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const source = fileURLToPath(new URL('../examples/', import.meta.url));
@@ -12,8 +11,6 @@ export function copyPublicExamples(destination) {
     cpSync(resolve(source, name), target);
   }
 
-  const approved=unzipSync(readFileSync(resolve(source,'daily-briefing/approved-output.zip')),{filter:file=>file.name==='approved-output/briefing.md'});
-  writeFileSync(resolve(destination,'daily-briefing/approved-report.md'),approved['approved-output/briefing.md']);
   for(const asset of JSON.parse(readFileSync(resolve(source,'daily-briefing/images.json'),'utf8'))) {
     const bytes=readFileSync(resolve(source,'../../../assets/authoring/daily-briefing',asset.sha256+'.png'));
     for(const [index,name] of asset.parts.entries()) {

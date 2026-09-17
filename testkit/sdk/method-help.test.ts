@@ -1,9 +1,11 @@
+import { unzipSync, strFromU8 } from "fflate";
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { approvedReport } from "../../packages/sdk/src/authoring-example.js";
 import { authoringGuide, commandHelp, guideTopics } from "../../packages/sdk/src/method-help.js";
 import { methodMain } from "../../packages/sdk/src/method.js";
 import { loadWorkflow } from "../../packages/workflow-language/src/validate.js";
@@ -64,4 +66,26 @@ it("runs the exact shell example printed in the guide and checks its data connec
 it("keeps the repository manual equal to the guide shipped in the CLI", () => {
   const text = readFileSync(resolve("docs/method-authoring.md"), "utf8");
   expect(text.slice(text.indexOf("# Author with Method"))).toBe(authoringGuide("all"));
+});
+
+
+it("shows the complete request, executable YAML, and approved result in that order", () => {
+  const guide = authoringGuide();
+  const method = guide.match(/```yaml\n([\s\S]*?)\n```/)![1]!;
+  const definition = loadWorkflow(method);
+  expect(definition.steps.write_briefing.check).toEqual({kind: "run", runtime: "python", entrypoint: "briefing_validation.py"});
+  expect(guide.indexOf("## Request")).toBeLessThan(guide.indexOf("## Method"));
+  expect(guide.indexOf("## Method")).toBeLessThan(guide.indexOf("## Complete approved report"));
+  const beforeExample = guide.split("# Worked example")[0];
+  expect(beforeExample).not.toContain("approved example");
+  expect(guide).toContain(approvedReport);
+});
+
+
+it("retains every word of the approved report after removing hidden display markers", () => {
+  const archive = unzipSync(readFileSync(resolve("packages/sdk/examples/daily-briefing/approved-output.zip")), {filter: file => file.name === "approved-output/briefing.md"});
+  const original = strFromU8(archive["approved-output/briefing.md"]!);
+  expect(approvedReport).toBe(original.replace(/<!--(?: paragraph:| time:)[\s\S]*?-->/g, "")
+    .replace(/<!-- supplement: ([A-Za-z0-9_-]+) -->/g, "\n## Supporting document: $1\n")
+    .replace(/^(#+ .+?) +$/gm, "$1"));
 });

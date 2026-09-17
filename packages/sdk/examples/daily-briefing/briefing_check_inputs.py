@@ -1,7 +1,6 @@
 """Check the prepared folder, approved example, date, and timezone."""
 import datetime as dt
 import json
-import re
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -39,9 +38,7 @@ def inputs(a):
                 local = saved.astimezone(zone)
                 if local.date().isoformat() != date or local.utcoffset() != saved.utcoffset():
                     raise ValueError('Selected timezone does not match the prepared times')
-    report = (example/'briefing.md').read_text()
-    report = re.sub(r'<!--(?: paragraph:| time:).*?-->', '', report, flags=re.S)
-    report = re.sub(r'<!-- supplement: ([A-Za-z0-9_-]+) -->', r'\n## Supporting document: \1\n', report)
+    report = (Path(__file__).parent/'approved-report.md').read_text()
     return {'selected_day': {'source_digest': source_digest(), 'folder': str(prepared), 'day': date, 'timezone': a['timezone'], 'start': 'README.md'},
             'session_links': '\n'.join('['+g['platform']+' '+g['start']+'–'+g['end']+'](sessions.html#'+g['id']+')' for g in social_sessions(prepared)),
             'example': {'folder': str(example), 'website': 'index.html',

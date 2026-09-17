@@ -1,3 +1,4 @@
+import {parse} from 'yaml';
 import {execFileSync} from 'node:child_process';
 import {rmSync,mkdirSync,readdirSync,readFileSync,writeFileSync,copyFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
@@ -11,7 +12,7 @@ execFileSync('npm',['run','build'],{cwd:root,stdio:'inherit'});
 execFileSync('npm',['pack','--workspace','@withmethod/sdk','--ignore-scripts','--pack-destination',output],{cwd:root,stdio:'pipe'});
 const packedSdk = readdirSync(output).find(name => name.endsWith('.tgz'))!;
 const packedFiles = new Set(execFileSync('tar', ['-tzf', join(output, packedSdk)], {encoding:'utf8'}).trim().split('\n'));
-const example = JSON.parse(readFileSync(join(root,'packages/sdk/examples/daily-briefing/daily-briefing.method'),'utf8'));
+const example = parse(readFileSync(join(root,'packages/sdk/examples/daily-briefing/daily-briefing.method'),'utf8'));
 for (const prefix of ['dist','source']) for (const name of example.files) {
   if (!packedFiles.has(`package/${prefix}/packages/sdk/examples/daily-briefing/${name}`)) throw Error(`Packed example is missing ${name} in ${prefix}`);
 }

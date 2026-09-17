@@ -1,87 +1,45 @@
 {
-  "date": "2026-09-16",
-  "scope": "Public authoring example. The reference report was approved after privacy edits. A sample run is separate evidence and is not a new approval of its writing.",
-  "method": "Three steps: check inputs, write, render and save.",
-  "privacy_scan": {
-    "text_files": 8255,
-    "personal_name_or_home_path_matches": 0,
-    "private_export_path_matches": 0,
-    "private_email_matches": 0,
-    "credential_pattern_matches": 0,
-    "allowed_placeholder_home": "/Users/example"
-  },
-  "reference_checks": "approved-output/checks.json",
-  "reference_archive_sha256": "a0fd7858d4e1fb83b88fdb1b22f5182cced22167f6d5cb6b23af4c95b8441340",
+  "reference_archive_sha256": "fde1efcf8fc2998eeb203dec6d70f151ee85ab9b5a545809ae7b760712ec330b",
   "photo_hashes": [
     "7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0",
     "85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb"
   ],
-  "source_changes": [
-    "Pass the complete approved text directly to the writer, without hidden markers.",
-    "Use normal Codex file tools; retain only source-panel inspection and optional calculations.",
-    "Render and save once, with explicit supporting files.",
-    "Render normal Markdown links and images, or name the missing file.",
-    "Build browsing pages only for available records."
-  ],
-  "historical_checks": {
-    "regression_tests": "6 passed; ordinary Markdown, selected passages, unknown citations, range bounds, optional/incomplete calculations, saved file integrity.",
-    "reference_build": "Complete redacted reference: draft check, build, and save passed without calculation files.",
+  "reference_checks": "approved-output/checks.json",
+  "sample_run": {
+    "date": "2026-09-17",
+    "input": "sample/ (28 messages)",
+    "status": "completed",
+    "elapsed_seconds": 105.7,
+    "steps": 3,
+    "tool_calls": 8,
+    "source_check": {
+      "status": "pass",
+      "reason": "Source links and supporting files are valid.",
+      "evidence": [
+        "35 citations checked.",
+        "2 supporting files checked."
+      ]
+    },
     "browser": {
-      "source_controls": 61,
-      "supporting_sessions": 31,
-      "main_story_auto_sessions": 0,
-      "desktop_mobile": "passed",
-      "browser_errors": []
-    },
-    "full_sample_run": {
-      "status": "completed",
-      "steps_completed": 4,
-      "elapsed_seconds": 117.0,
-      "tool_calls": 56,
-      "inputs": "Bundled redacted sample: 28 messages.",
-      "earlier_failure": "Writer cited its generated calculation file. Added source views for existing calculation files; unchanged writer output then passed draft check, build, save, and browser checks.",
-      "result": {
-        "briefing": {
-          "path": "saved/dde28c9fa80c1788044b894cfb1f0504ffb5d2f25a20f11b2e5808294e474f93/briefing.json",
-          "sha256": "664d8477dc8a9db22042ef95b01f925e231e44705b1e30dd49f14a4e1cef0ed6"
+      "errors": [],
+      "viewports": [
+        {
+          "width": 1440,
+          "source_controls": 35,
+          "overflow": false
         },
-        "website": {
-          "path": "saved/dde28c9fa80c1788044b894cfb1f0504ffb5d2f25a20f11b2e5808294e474f93/website-result.json",
-          "sha256": "542bd1a40e1b291c9fcc9e48603c8028be7bd98c5533611c4323cf3fe565077c"
+        {
+          "width": 390,
+          "source_controls": 35,
+          "overflow": false
         }
-      }
+      ]
     },
-    "unit_and_integration_tests": {
-      "javascript": 325,
-      "python": 61,
-      "original_helper_tests": 25,
-      "original_runtime_cases": 4
-    },
-    "sample_browser": {
-      "source_controls": 21,
-      "desktop_mobile": "passed",
-      "browser_errors": []
-    },
-    "rich_markdown_browser": {
-      "source_controls": 3,
-      "selected_passages": 2,
-      "lists_and_tables": "passed",
-      "desktop_mobile": "passed",
-      "browser_errors": []
-    }
-  },
-  "current_checks": {
-    "mechanical_sample": "Passed: Markdown and source links, passage bounds, explicit supporting files, source preservation, save retry integrity, and optional calculations.",
-    "live_sample_run": {
-      "status": "completed",
-      "steps": 3,
-      "writers": 1,
-      "elapsed_seconds": 105.6,
-      "method_tool_calls": 15,
-      "input": "28 bundled redacted messages",
-      "result": "The report distinguishes planning from completed work and states the sample scope. Calculations were optional and supplied explicitly.",
-      "browser": "36 source controls; opened a source at 1440px and 390px; no page errors or horizontal overflow."
-    },
-    "writing_approval": "The reference is approved; a new generated report still requires review."
+    "report": "sample-report.md",
+    "website": "sample-output.zip",
+    "report_sha256": "8c9d9339961e7cf71f62d46ad13c0bfc69d1ce7f9b6bf2c03032fe9132e60186",
+    "archive_sha256": "b064399c03bd68ac70962472c8c584d3618aaa17d0afc91216626cadde91c195",
+    "writing_status": "draft",
+    "final_helper_replay": "Source check passed; rendering returned the same files and hashes."
   }
 }

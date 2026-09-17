@@ -63,5 +63,8 @@
   "daily-briefing/runtime.json",
   "daily-briefing/pyproject.toml",
   "daily-briefing/uv.lock",
-  "daily-briefing/package-lock.json"
+  "daily-briefing/package-lock.json",
+  "daily-briefing/approved-report.md",
+  "daily-briefing/sample-report.md",
+  "daily-briefing/sample-output.zip"
 ]

@@ -1,4 +1,4 @@
-"""Read the example and selected day's files. No model calls or source rewriting."""
+"""Read the example and selected day's files."""
 import json
 import os
 import sys

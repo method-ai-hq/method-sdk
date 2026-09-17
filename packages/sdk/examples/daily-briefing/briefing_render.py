@@ -2,41 +2,24 @@
 import contextlib
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
 
-from briefing_artifacts import digest, load, local, put, source_digest, tree
+from briefing_artifacts import digest, local, put, source_digest, tree
 from briefing_files import folder
 from briefing_manifest import website_manifest
-from briefing_validation import check_draft, check_website
+from briefing_validation import supporting_files, check_website
+from briefing_markdown import parse
 from briefing_website import build
 from briefing_progress import progress
-from briefing_times import explanation
 
 
 def render_and_save(args):
     day, draft = args['selected_day'], args['draft']
-    supporting, files = [], {}
-    for ref in args.get('supporting_files', []):
-        path = local(ref['path'])
-        if digest(path) != ref['sha256']:
-            raise ValueError('A supporting file changed: ' + path.name)
-        if path.suffix not in ('.json', '.md', '.txt') or path.name in ('briefing.md', 'briefing.json', 'website-result.json') or path.name in files:
-            raise ValueError('Invalid supporting file: ' + path.name)
-        text = path.read_text()
-        if path.name == 'time-estimates.json':
-            estimates = json.loads(text)
-            if (estimates['day'], estimates['timezone']) != (day['day'], day['timezone']):
-                raise ValueError('Calculated times do not match the selected date and timezone')
-            text = explanation(estimates)
-        elif path.suffix == '.json':
-            text = '```json\n'+text+'\n```'
-        files[path.name] = path
-        supporting.append({'id': path.stem, 'title': path.stem.replace('-', ' ').capitalize(), 'text': text})
-    proposal = check_draft(draft, day, supporting)
+    supporting, files = supporting_files(args)
+    proposal = parse(draft, day, supporting=supporting)
     progress('Rendering the briefing and its sources.')
     temporary = Path(tempfile.mkdtemp(prefix='briefing-', dir=local('.')))
     try:
@@ -78,7 +61,7 @@ def render_and_save(args):
         receipt = put(destination/'briefing.json', {'day':day['day'], 'timezone':day['timezone'],
             'website':str((destination/'website/index.html').relative_to(local('.'))),
             'source_digest':day['source_digest'], 'supporting_files':list(files)})
-        progress('Briefing saved. Source references and website links are valid.')
+        progress('Briefing saved. Website links are valid.')
         return {'saved_briefing':receipt, 'published_website':published}
     finally:
         if temporary.exists(): shutil.rmtree(temporary)

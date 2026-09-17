@@ -12,7 +12,7 @@ from unittest.mock import patch
 EXAMPLE = Path(__file__).resolve().parents[2]/'packages/sdk/examples/daily-briefing'
 sys.path.insert(0, str(EXAMPLE))
 from briefing_markdown import parse
-from briefing_validation import check_draft, check_website
+from briefing_validation import check_draft, check_website, check_written_briefing
 from briefing_render import render_and_save
 from briefing_artifacts import source_digest, load, put
 from briefing_times import calculate
@@ -54,6 +54,25 @@ class BriefingExampleTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'outside the saved text'):
                 check_draft(DRAFT.replace('#L1-L3','#L1-L999999'), DAY)
 
+
+    def test_declared_writer_check_reports_failures_before_rendering(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {
+            'METHOD_OUTPUT_DIR': temporary,
+            'METHOD_ENVIRONMENT': json.dumps({'prepared_day': str(EXAMPLE/'sample')}),
+        }):
+            args = {'inputs': {'selected_day': DAY},
+                    'outputs': {'draft': DRAFT, 'supporting_files': []}}
+            self.assertEqual(check_written_briefing(args)['status'], 'pass')
+            args['outputs']['draft'] = DRAFT.replace('chatgpt-0024', 'missing')
+            result = check_written_briefing(args)
+            self.assertEqual(result['status'], 'fail')
+            self.assertEqual(result['reason'], 'Unknown citation')
+            args['outputs']['draft'] = DRAFT
+            ref = put(Path(temporary)/'notes.md', 'Calculation')
+            args['outputs']['supporting_files'] = [ref]
+            (Path(temporary)/'notes.md').write_text('Changed')
+            self.assertEqual(check_written_briefing(args)['status'], 'fail')
+            self.assertFalse((Path(temporary)/'saved').exists())
 
     def test_render_save_links_and_retry(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {

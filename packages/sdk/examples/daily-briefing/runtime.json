@@ -2,7 +2,7 @@
   "allow_local_processes": true,
   "tools": {
     "inspect_briefing_example": {
-      "description": "Open the actual approved website in a local browser. Read its visible text, expand full sessions, or open citations and writing passages. No summary is generated.",
+      "description": "Open the approved website. Read its text, expand sessions, and open citations and passages.",
       "in": {
         "page": {
           "type": "text",
@@ -24,7 +24,7 @@
       "out": {
         "content": {
           "type": "text",
-          "description": "Exact saved text, without a summary."
+          "description": "Complete saved text for the selected page or control."
         },
         "next_offset": {
           "type": "number",
@@ -50,8 +50,7 @@
       "run": {
         "kind": "run",
         "runtime": "node",
-        "entrypoint": "briefing_browser.cjs",
-        "args": []
+        "entrypoint": "briefing_browser.cjs"
       },
       "effects": []
     },
@@ -87,8 +86,7 @@
       "run": {
         "kind": "run",
         "runtime": "python",
-        "entrypoint": "briefing_times.py",
-        "args": []
+        "entrypoint": "briefing_times.py"
       },
       "effects": []
     }

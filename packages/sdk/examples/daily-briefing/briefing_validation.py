@@ -1,9 +1,11 @@
 """Check draft references and website links."""
 import json
-import re
+import sys
 from html.parser import HTMLParser
 from urllib.parse import unquote, urlsplit
 
+from briefing_artifacts import digest, local
+from briefing_times import explanation
 from briefing_files import folder
 from briefing_markdown import parse
 
@@ -60,3 +62,40 @@ def check_website(root):
     browser_ids={row['entry_id'] for row in entries if json.loads((folder('selected_day')/'records'/f"{row['source_record_ids'][0]}.json").read_text())['prepared']['source'] in ['browser','google_takeout']}
     if browser_ids and browser_ids-pages[(root/'browser.html').resolve()].entries:raise ValueError('A browser visit is absent from All browser visits')
     return len(groups)
+
+
+def supporting_files(args):
+    day = args['selected_day']
+    supporting, files = [], {}
+    for ref in args.get('supporting_files', []):
+        path = local(ref['path'])
+        if digest(path) != ref['sha256']:
+            raise ValueError('A supporting file changed: ' + path.name)
+        if path.suffix not in ('.json', '.md', '.txt') or path.name in ('briefing.md', 'briefing.json', 'website-result.json') or path.name in files:
+            raise ValueError('Invalid supporting file: ' + path.name)
+        text = path.read_text()
+        if path.name == 'time-estimates.json':
+            estimates = json.loads(text)
+            if (estimates['day'], estimates['timezone']) != (day['day'], day['timezone']):
+                raise ValueError('Calculated times do not match the selected date and timezone')
+            text = explanation(estimates)
+        elif path.suffix == '.json':
+            text = '```json\n'+text+'\n```'
+        files[path.name] = path
+        supporting.append({'id': path.stem, 'title': path.stem.replace('-', ' ').capitalize(), 'text': text})
+    return supporting, files
+
+
+def check_written_briefing(args):
+    try:
+        values = {**args['inputs'], **args['outputs']}
+        supporting, files = supporting_files(values)
+        doc = check_draft(values['draft'], values['selected_day'], supporting)
+        return {'status': 'pass', 'reason': 'Source links and supporting files are valid.',
+                'evidence': [f"{len(doc['citations'])} citations checked.", f"{len(files)} supporting files checked."]}
+    except (ValueError, KeyError, OSError) as error:
+        return {'status': 'fail', 'reason': str(error), 'evidence': []}
+
+
+if __name__ == '__main__':
+    print(json.dumps(check_written_briefing(json.load(sys.stdin))))

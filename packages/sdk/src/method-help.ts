@@ -1,4 +1,4 @@
-import { approvedMethod, approvedTask } from "./authoring-example.js";
+import { approvedMethod, approvedTask, approvedReport } from "./authoring-example.js";
 import { exampleScript, exampleWorkflow } from "./copy-message-example.js";
 
 type Command = { usage: string; purpose: string; arguments: string; result: string; errors: string; example: string; remote?: boolean };
@@ -65,19 +65,16 @@ export function renderCommand(name: string, includeCommon = true): string {
   return `## ${name}\n\n${entry.purpose}\n\nUsage:\n\n\`\`\`sh\n${entry.usage}\n\`\`\`\n\nArguments and defaults:\n${entry.arguments}\n\nResult and changes:\n${entry.result}${entry.errors ? `\n\nErrors:\n${entry.errors}` : ""}\n\nExample:\n\n\`\`\`sh\n${entry.example}\n\`\`\`\n` + (includeCommon ? `\n${entry.remote ? serverHelp + "\n" : ""}${exitHelp}\n\nCommon errors:\n${commonErrors}\n` : "");
 }
 
-const example = "# Approved example: Write a daily briefing\n\n" + approvedTask + "\nComplete Method (JSON is valid .method syntax):\n\n```json\n" + approvedMethod + "```\n\nRead README.md in the installed example folder for setup, helpers, the small redacted input sample, the complete approved output, and recorded checks. Copy that folder before editing it. Save the copy, then run its saved version. Method prepares its packages and uses the available coding agent. Bind the supplied sample folder as prepared_day when requested.\n\nThe writer reads a complete approved report. It does not reconstruct a style from a summary. The scripts check inputs, calculate times, build the website, and save it. Copy useful choices; change the steps and tools to fit the work.\n";
+const example = "# Worked example: Write a daily briefing\n\n" + approvedTask + "\n## Method\n\n```yaml\n" + approvedMethod + "```\n\n## Complete approved report\n\n````markdown\n" + approvedReport + "\n````\n\nThe installed example folder contains the complete website, helpers, sample records, and run instructions in README.md.\n";
 const start = `# Author with Method
 
-1. Ask what work to repeat and what a good result looks like. Wait for the answers. For a report, ask for a complete approved example if one exists. For a state change, ask what the saved result should be. Use a small sample for the first run.
-2. Read the complete Method below and its supporting files. Use it as an example, not a required structure. Keep the user's sources and output requirements. Choose the fewest steps that make the work clear.
-3. Write a complete .method file and its helper files in one folder. Add runtime.json only for custom tools, scripts, connections, or limit overrides. Write the files directly; init, set, and step add are optional editing tools. Keep prompts short and direct. Give the runtime access to the actual approved example.
-4. Run method validate task.method. Fix missing files, settings, and tool bindings. Validation does not run the work or judge the output.
-5. Run method save task.method. It confirms that the stored version matches the draft and returns its IDs and dashboard link.
-6. Run method run WORKFLOW_ID --version VERSION_ID --inputs inputs.json on the agreed sample, using the IDs returned by save. Inspect the actual result and its source links. For external changes, use a test destination or ask before making a live change. Fix problems, save a new version, and test it. Return the Method and run links with the test result and any remaining limits. If execution is blocked, state what has not been tested.
+Below is a complete worked example, including its request, Method, files, and result. Build a Method for the user's request.
 
-New Methods use format: method/3.1. Read method authoring execution for configuration, method schema for exact fields, or method COMMAND --help for command arguments. You do not need to read the full manual before writing a draft.
+` + example + `
+Validate with method validate task.method, save with method save task.method, then run the returned version with method run WORKFLOW_ID --version VERSION_ID. Inspect the result and its links.
 
-` + example;
+Use method schema for field definitions, method authoring execution for setup, and method COMMAND --help for command arguments.
+`;
 const concepts = `# Method concepts
 
 A method has format, name, goal, steps, result, and optional inputs, state, environment, and files.
