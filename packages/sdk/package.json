@@ -198,6 +198,21 @@
       "import": "./dist/packages/sdk/src/result-files.js",
       "default": "./dist/packages/sdk/src/result-files.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./authoring-prompt": {
+      "types": "./dist/packages/sdk/src/authoring-prompt.d.ts",
+      "import": "./dist/packages/sdk/src/authoring-prompt.js",
+      "default": "./dist/packages/sdk/src/authoring-prompt.js"
+    },
+    "./progress": {
+      "types": "./dist/packages/sdk/src/progress.d.ts",
+      "import": "./dist/packages/sdk/src/progress.js",
+      "default": "./dist/packages/sdk/src/progress.js"
+    },
+    "./run-method": {
+      "types": "./dist/packages/sdk/src/run-method.d.ts",
+      "import": "./dist/packages/sdk/src/run-method.js",
+      "default": "./dist/packages/sdk/src/run-method.js"
+    }
   }
 }
