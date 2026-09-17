@@ -39,7 +39,6 @@ for(const [target,checksum] of Object.entries(targets)){
   writeFileSync(join(output,name),bytes);lines.push(`part ${name} ${hash(bytes)}`);
  }
  const text=lines.join('\n')+'\n';writeFileSync(join(output,`${version}-${target}.txt`),text);writeFileSync(join(output,`latest-${target}.txt`),text);
- mkdirSync(join(output,'runtime',runtime),{recursive:true});writeFileSync(join(output,'runtime',runtime,`${target}.txt`),text);
  console.log(`CLI ${version}: ${target}, ${data.length} bytes.`);
 }
 cpSync(join(root,'scripts/install-method.sh'),join(root,'dist/release/install.sh'));

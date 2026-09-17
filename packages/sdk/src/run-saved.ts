@@ -17,9 +17,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   const requestFile=join(directory,'request.json');
   const prior=existsSync(requestFile)?JSON.parse(readFileSync(requestFile,'utf8')):null;
   if(prior && (prior.workflow_id!==saved.workflow_id||prior.version_id!==saved.version_id))throw Error('This run belongs to another saved version.');
-  const legacySync=join(directory,'method-sync.json');
-  const identity=join(directory,'run-id.json');
-  const request=prior??{run_id:existsSync(legacySync)?JSON.parse(readFileSync(legacySync,'utf8')).id:existsSync(identity)?JSON.parse(readFileSync(identity,'utf8')).id:randomUUID(),workflow_id:saved.workflow_id,version_id:saved.version_id,server:client.server};
+  const request=prior??{run_id:randomUUID(),workflow_id:saved.workflow_id,version_id:saved.version_id,server:client.server};
   if(prior&&!flags.resume)throw Error('This run already exists. Use --resume.');
   writePrivateJson(requestFile,request);
   const sync=new MethodSync(client,directory,saved.workflow_id,saved.version_id,request.run_id);
@@ -43,7 +41,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   let acquired=false, started=false, revision=0;
   const statePath=`/api/cli/methods/${encodeURIComponent(saved.workflow_id)}/state`;
   try {
-    if(saved.package&&saved.package.runtime!==runtimeVersion)throw Object.assign(new Error(`This Method needs runtime ${saved.package.runtime}. Update Method with the installer, then continue this run.`),{code:'needs_update'});
+    if(saved.package&&saved.package.runtime!==runtimeVersion)throw Object.assign(new Error(`This Method needs runtime ${saved.package.runtime}. Save a new version with the installed SDK before starting a new run.`),{code:'needs_update'});
     if(flags.resume&&existsSync(join(directory,'checkpoint.json'))&&!existsSync(join(directory,'runtime.resolved.json'))){
       const file=join(directory,'saved.method');writePrivateJson(file,saved.workflow);
       return await runCurrentFile(file,{...flags,workspace:flags.workspace??process.cwd(),'run-dir':directory},()=>sync);

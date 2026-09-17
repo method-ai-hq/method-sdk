@@ -12,7 +12,7 @@ function fixture(body: string, timeout = 10000) {
   const root = mkdtempSync(join(tmpdir(), 'method-codex-')); roots.push(root);
   const command = join(root, 'codex');
   writeFileSync(command, '#!/usr/bin/env node\n' + body); chmodSync(command, 0o700);
-  const method = { format: 'method/3', name: 'Test', goal: 'Test Codex execution',
+  const method = { format: 'method/3.1', name: 'Test', goal: 'Test Codex execution',
     steps: { write: { purpose: 'Call echo and save its answer.', do: { kind: 'agent', model: 'writer', prompt: 'Call echo.', tools: ['echo'] },
       out: { text: { type: 'text', description: 'Answer' } }, limits: { timeout_ms: timeout, max_agent_turns: 5, max_model_requests: 5 } } }, result: 'text' };
   writeFileSync(join(root, 'method.json'), JSON.stringify(method));

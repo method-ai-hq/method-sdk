@@ -67,11 +67,7 @@ it('sends the same expanded instructions to Codex', async () => {
   expect(f.events().find(e => e.event === 'prompt.rendered').rendered).toBe('Date: 2026-05-11');
   expect(f.events().find(e => e.event === 'codex.started').prompt).toMatch(/^Date: 2026-05-11\n/);
 });
-it('keeps method/3 prompts literal', async () => {
-  const f = fixture('method/3'); f.method.steps.write.do.prompt = '{{not_declared}}';
-  expect((await f.run({ transport: async (body: any) => { expect(body.instructions).toBe('{{not_declared}}'); return response({ answer: 'literal' }); } })).status).toBe('completed');
-  expect(f.events().some(e => e.event === 'prompt.rendered')).toBe(false);
-});
+
 it('enforces request size after substitution before starting the model', async () => {
   const f = fixture(); f.method.steps.write.do.prompt = '{{date}}'.repeat(1000); f.config.limits.max_request_bytes = 5000;
   let called = false;

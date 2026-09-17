@@ -8,34 +8,10 @@ import subprocess
 from zoneinfo import ZoneInfo
 
 
-def parse(text, day=None, marked=None, supporting=()):
-    # Older approved documents have metadata and marker comments. They remain readable.
-    front = re.match(r'\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)', text, re.S)
-    metadata = {}
-    if front:
-        metadata = dict(line.split(':', 1) for line in front[1].splitlines() if ':' in line)
-        metadata = {k.strip(): v.strip() for k, v in metadata.items()}
-        text = text[front.end():]
-    if day is None:
-        day = {'day': metadata['date'], 'timezone': metadata['timezone']}
+def parse(text, day, marked=None, supporting=()):
     date = dt.date.fromisoformat(day['day'])
     ZoneInfo(day['timezone'])
-    # Supplement comments in existing examples delimit separate supporting documents.
-    legacy = bool(re.search(r'<!-- (?:paragraph|supplement):', text))
-    definitions = '\n'.join(re.findall(r'^\[[^\]]+\]: source:.*$', text, re.M)) if legacy else ''
-    pieces = re.split(r'<!-- supplement: ([A-Za-z0-9_-]+) -->', text)
-    supplements = []
-    for i in range(1, len(pieces), 2):
-        body = pieces[i+1].strip()
-        title = re.search(r'^# (.+)$', body, re.M)
-        supplements.append({'id': pieces[i], 'title': title[1] if title else pieces[i], 'text': body+'\n\n'+definitions})
-    supplements.extend(supporting)
-    text = pieces[0]+'\n\n'+definitions
-    # The legacy format allowed reference definitions directly after paragraph text.
-    if legacy:
-        text = re.sub(r'(?m)^(\[[^\]]+\]: source:.*)$', r'\n\1', text)
-    # Marker comments are optional; the Markdown parser generates block IDs.
-    text = re.sub(r'<!--(?: paragraph:| time:).*?-->', '', text, flags=re.S)
+    supplements = list(supporting)
     module = Path(marked or os.environ.get('DAILY_BRIEFING_MARKED') or Path(__file__).parent/'vendor/marked.mjs').resolve()
     code = r'''
 import {marked} from MARKED;
@@ -88,4 +64,4 @@ process.stdout.write(JSON.stringify({blocks,citations,photos,local_files}));
             citation['source_range'] = key
     heading = next((b['text'] for b in document['blocks'] if b['type']=='heading' and b.get('depth')==1), date.strftime('%A, %B %d').replace(' 0',' '))
     return {**document, 'day': date.isoformat(), 'timezone': day['timezone'], 'heading': heading,
-            'title': metadata.get('title', heading), 'source_ranges': ranges, 'supplements': supplements}
+            'title': heading, 'source_ranges': ranges, 'supplements': supplements}

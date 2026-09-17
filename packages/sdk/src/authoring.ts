@@ -1,4 +1,3 @@
-import { migrateMethod2 } from "@withmethod/runtime/migrate.js";
 import { preflight } from "@withmethod/runtime/preflight.js";
 import { configSchema,methodSchema } from "@withmethod/runtime/schema.js";
 import { localSetup } from "./local-setup.js";
@@ -67,7 +66,7 @@ export function differences(a: any, b: any, path = ""): any[] {
 export async function localAuthoring(args: string[]): Promise<boolean> {
   const command = args[0];
   const stepEdit = command === "step" && ["add", "update", "remove", "move"].includes(args[1] ?? "");
-  if (!stepEdit && !["authoring", "init", "show", "set", "remove", "check", "validate", "diff", "schema", "migrate"].includes(command ?? "")) return false;
+  if (!stepEdit && !["authoring", "init", "show", "set", "remove", "check", "validate", "diff", "schema"].includes(command ?? "")) return false;
   if (args.includes("--help")) { process.stdout.write(methodHelp(args)!); return true; }
   if (command === "authoring") {
     if (args.length > 2) throw Error("Use method authoring [TOPIC].");
@@ -75,24 +74,16 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     if (!args[1] || ["start", "example", "all"].includes(args[1])) process.stdout.write(`\nInstalled example folder: ${exampleDirectory}\nRead ${exampleDirectory}README.md for its files and setup.\n`);
     return true;
   }
-  const { values: v, positionals: p } = parseArgs({ args: args.slice(1), allowPositionals: true, options: Object.fromEntries(["name", "goal", "id", "instructions-file", "json", "value-file", "text", "text-file", "path", "before", "model", "purpose", "kind", "runtime", "entrypoint", "timeout-ms", "max-agent-turns", "max-model-requests", "output", "config", "workspace"].map(k => [k, { type: "string" as const }])) });
+  const { values: v, positionals: p } = parseArgs({ args: args.slice(1), allowPositionals: true, options: Object.fromEntries(["name", "goal", "id", "instructions-file", "json", "value-file", "text", "text-file", "path", "before", "model", "purpose", "kind", "runtime", "entrypoint", "config", "workspace"].map(k => [k, { type: "string" as const }])) });
   const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + "\n");
   const value = () => {
     const sources = ["json", "value-file", "text", "text-file"].filter(k => v[k] !== undefined);
     if (sources.length !== 1) throw Error("Supply exactly one of --json, --value-file, --text, or --text-file.");
     return v.json !== undefined ? JSON.parse(v.json) : v["value-file"] ? readDocument(v["value-file"]) : v.text !== undefined ? v.text : readFileSync(authoringPath(v["text-file"]!), "utf8");
   };
-  if (command === "migrate") {
-    if (!p[0]) throw Error("Supply a saved method file.");
-    const result = migrateMethod2(readDocument(p[0]), { model: v.model, timeout_ms: Number(v["timeout-ms"]), max_agent_turns: Number(v["max-agent-turns"]), max_model_requests: Number(v["max-model-requests"]) });
-    result.warnings.forEach((warning: string) => process.stderr.write(warning + "\n"));
-    if (v.output) { const out = authoringPath(v.output); if (existsSync(out)) throw Error("Choose a new output file."); writeDocument(out, result.method); }
-    else print(result.method);
-    return true;
-  }
   if (command === "schema") {
-    if (!p[0] || ["method", "workflow", "config"].includes(p[0])) { print(p[0] === "config" ? configSchema : methodSchema); return true; }
-    const schemas: Record<string, unknown> = {method: methodSchema, workflow: methodSchema, config: configSchema,
+    if (!p[0] || ["method", "config"].includes(p[0])) { print(p[0] === "config" ? configSchema : methodSchema); return true; }
+    const schemas: Record<string, unknown> = {method: methodSchema, config: configSchema,
       ...Object.fromEntries(["step", "check", "data"].map(name => [name, { $schema: methodSchema.$schema, $defs: methodSchema.$defs, $ref: `#/$defs/${name}` }])),
       environment: { ...methodSchema.properties.environment.additionalProperties }};
     const schema = schemas[p[0] ?? "method"];

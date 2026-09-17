@@ -30,4 +30,4 @@ Use `examples/website-result.method`, `examples/build-website-result.mjs`, and `
 
 Existing workflows do not gain a website file list automatically. Update the output-producing script to write this manifest, and declare its format in a new Method version. Old runs with ordinary file outputs can still attach and download those files; Method does not guess the contents of an old, task-specific file list.
 
-Website files are stored separately in private account storage. The server checks the manifest and file receipts before making the website available. Opening a page or photo reads its manifest and that asset; it does not load the entire website. Download website assembles the files into a ZIP in the browser. Existing runs with embedded files or ZIP archives remain readable.
+Website files are stored separately in private account storage. The server checks the manifest and file receipts before making the website available. Opening a page or photo reads its manifest and that asset; it does not load the entire website. Download website assembles the files into a ZIP in the browser.

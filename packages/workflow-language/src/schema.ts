@@ -46,7 +46,7 @@ export type CurrentStep = BaseStep & {
 };
 export type CurrentWorkflow = {
   name: string; goal: string; inputs?: Record<string,z.infer<typeof InputSchema>>; environment?: Record<string,z.infer<typeof EnvironmentSchema>>; result: string | Record<string,string>;
-  format: "method/3" | "method/3.1"; run_prompt?: string; files?: string[];
+  format: "method/3.1"; run_prompt?: string; files?: string[];
   state?: Record<string, z.infer<typeof InputSchema>>; steps: Record<string, CurrentStep>;
 };
 function currentShape<T>(validate: any): z.ZodType<T> {
@@ -59,13 +59,8 @@ function currentShape<T>(validate: any): z.ZodType<T> {
 export const CurrentStepSchema = currentShape<CurrentStep>(stepShape);
 export const CurrentCheckSchema = currentShape<CurrentCheck>(checkShape);
 export const CurrentWorkflowSchema = currentShape<CurrentWorkflow>(methodShape);
-export function documentSchema(format = "method/3.1") {
-  if (!["method/3", "method/3.1"].includes(format)) throw Error("UNSUPPORTED_FORMAT: use method/3.1.");
-  return methodSchema;
-}
 export const WorkflowSchema = CurrentWorkflowSchema;
 export type Workflow = z.infer<typeof WorkflowSchema>;
-export function isCurrentWorkflow(workflow: Workflow): workflow is CurrentWorkflow { return workflow.format === "method/3" || workflow.format === "method/3.1"; }
 export type Step = Workflow["steps"][string];
 export type Check = NonNullable<Step["check"]>;
 export function executionText(step: Step): string {

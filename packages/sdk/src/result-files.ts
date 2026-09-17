@@ -1,4 +1,3 @@
-import { zipSync } from "fflate";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { Buffer } from "node:buffer";
 import { dirname, join, resolve, sep, extname } from "node:path";
@@ -147,31 +146,7 @@ export function attachResultFiles(
             entrypoint: join(dirname(ref.data.path), manifest.entrypoint),
             files: members,
           };
-          if (referencesOnly) {
-            for (const member of members) attach({ path: member.path, sha256: member.sha256 }, member.path, member.media_type);
-            return;
-          }
-          // Transfer one archive instead of thousands of base64 file objects.
-          // Every file is still explicit in the manifest and checked before packing.
-          try {
-            const entries: Record<string, Uint8Array> = {};
-            let decoded = 0;
-            for (const [i, member] of members.entries()) {
-              const path = artifactRoot ? resolve(artifactRoot, member.path) : member.path;
-              const result = checkedFile({ path, sha256: member.sha256 }, roots);
-              decoded += result.bytes.length;
-              if (decoded > remaining) throw Error("Website exceeds the remaining decoded file limit.");
-              entries[manifest.files[i]!.path] = result.bytes;
-            }
-            const archive = zipSync(entries);
-            if (archive.length > transferRemaining) throw Error("Website exceeds the remaining transfer limit.");
-            attached.file.website.archive = Buffer.from(archive).toString("base64");
-            remaining -= decoded;
-            transferRemaining -= archive.length;
-          } catch (error) {
-            attached.file.reason = error instanceof Error ? error.message : String(error);
-            for (const member of members) attach({ path: member.path, sha256: member.sha256 }, member.path, member.media_type);
-          }
+          for (const member of members) attach({ path: member.path, sha256: member.sha256 }, member.path, member.media_type);
         } catch (error) {
           attached.file.reason = "The website file list is invalid: " + (error instanceof Error ? error.message : String(error));
         }

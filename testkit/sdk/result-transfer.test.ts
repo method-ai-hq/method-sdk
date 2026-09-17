@@ -17,7 +17,7 @@ it('keeps every declared file above 20 MB and resumes from server receipts',asyn
   const workflow=loadWorkflow({format:'method/3.1',name:'Result',goal:'Save a site.',steps:{save:{do:{kind:'run',runtime:'node',entrypoint:'save.mjs'},out:{site:{type:'file',format:'method-website'}}}},result:'site'});
   const invocations={'save:0':{step_id:'save',status:'passed' as const,checks:[],changes:{},events:[],outputs:{site:{path:'site.json',sha256:hash(manifest)}}}};
   const refs=attachResultFiles(workflow,invocations,[join(root,'artifacts')],join(root,'artifacts'),true);
-  expect(refs).toHaveLength(4);expect(refs.every(f=>f.status==='verified' && !f.data && !f.website?.archive)).toBe(true);
+  expect(refs).toHaveLength(4);expect(refs.every(f=>f.status==='verified' && !f.data)).toBe(true);
   expect(JSON.stringify(refs).length).toBeLessThan(4000);
   const received=new Set<string>();let fail=true;let puts=0;
   const client={request:async(_p:string,_m:string,b:any)=>({missing:b.files.filter((f:any)=>!received.has(f.sha256)).map((f:any)=>f.sha256)}),transfer:async(p:string,b:Uint8Array)=>{const h=p.split('/').at(-1)!;if(h===files[2]!.sha256 && fail)throw Error('connection lost');expect(hash(b)).toBe(h);received.add(h);puts++;return new Uint8Array();}} as unknown as MethodClient;

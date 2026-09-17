@@ -2,7 +2,6 @@
 import packageInfo from '../package.json' with { type: 'json' };
 import runtimeInfo from '@withmethod/runtime/package.json' with { type: 'json' };
 import { startRunWorker, waitForRun, cancelRun, workerAlive } from './run-worker.js';
-import { useCompatibleRelease } from './compatible-release.js';
 import { methodCache } from './prepare.js';
 import { collectPackage, restorePackage } from './method-files.js';
 import { runSaved } from './run-saved.js';
@@ -62,8 +61,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     }
   }
   const localCommand = ["prompt", "inspect", "doctor"].includes(args[0] ?? "")
-    || args[0] === "check" && /\.(method|workflow)$/i.test(args[1] ?? "")
-    || ["run", "steps"].includes(args[0] ?? "") && /\.(method|workflow)$|^https?:\/\//i.test(args[1] ?? "");
+    || args[0] === "check" && /\.(method)$/i.test(args[1] ?? "")
+    || ["run", "steps"].includes(args[0] ?? "") && /\.(method)$|^https?:\/\//i.test(args[1] ?? "");
   if (localCommand) {
     if (args[0] === 'run' && await dispatchRunWorker(args, parse(args).values)) return;
     return localMain(args);
@@ -79,7 +78,6 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     "file",
     "base-version",
     "reason",
-    "workflow",
     "method",
     "request-id",
     "connection",
@@ -95,7 +93,6 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       values[match[1]!] = value;
     } else rest.push(args[i]!);
   }
-  if (!values.workflow && values.method) values.workflow = values.method;
   const [command, target, step] = rest;
   if (!command || command === "--help" || command === "help") {
     process.stdout.write(help);
@@ -161,7 +158,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (command === "runs") {
     print(
       await client.request(
-        `/api/workspace/runs${values.workflow ? `?workflow_id=${encodeURIComponent(values.workflow)}` : ""}`,
+        `/api/workspace/runs${values.method ? `?workflow_id=${encodeURIComponent(values.method)}` : ""}`,
       ),
     );
     return;
@@ -280,11 +277,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return;
   }
   const flags = parse(rest.slice(2)).values;
-  if(saved.package && await useCompatibleRelease(saved.package.runtime,args))return;
-  if (workflow.format === 'method/3' || workflow.format === 'method/3.1') {
-    if(await dispatchRunWorker(args, flags, values.version ? [] : ['--version', saved.version_id])) return;
-    await runSaved(saved, flags, client); return;
-  }
+  if(await dispatchRunWorker(args, flags, values.version ? [] : ['--version', saved.version_id])) return;
+  await runSaved(saved, flags, client);
 
 }
 if (

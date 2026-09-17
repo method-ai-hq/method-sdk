@@ -54,29 +54,6 @@ class BriefingExampleTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'outside the saved text'):
                 check_draft(DRAFT.replace('#L1-L3','#L1-L999999'), DAY)
 
-    def test_legacy_document_keeps_reference_links_and_scope_notes(self):
-        draft = '''---
-date: 2026-05-11
-timezone: America/Chicago
----
-# Work conversation
-## TL;DR
-Only one conversation is supplied.
-<!-- paragraph: 1; time: 11:16 -->
-The user requested a prompt. [Sources](source:chatgpt-0024) The assistant supplied it. [Read passage][migration]
-## Work <!-- time: 10:45 -->
-This section has a scope note too.
-<!-- paragraph: 2; time: 10:45 -->
-Another passage. [Read passage][second]
-[migration]: source:chatgpt-0025#L1-L3
-[second]: source:chatgpt-0028#L1-L2
-'''
-        doc = parse(draft)
-        self.assertEqual([c.get('source_range') for c in doc['citations']], [None,'lines-1-3','lines-1-2'])
-        html = ''.join(b['html'] for b in doc['blocks'])
-        self.assertEqual(html.count('Only one conversation is supplied.'), 1)
-        self.assertEqual(html.count('This section has a scope note too.'), 1)
-        self.assertLess(html.index('The user requested'), html.index('Another passage'))
 
     def test_render_save_links_and_retry(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {

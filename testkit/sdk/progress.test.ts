@@ -38,7 +38,7 @@ it('reports a script and its child before exit, keeps final JSON intact, and sta
     const deadline=Date.now()+4000;while(!fs.existsSync(${JSON.stringify(ack)})){if(Date.now()>deadline)process.exit(7);await new Promise(r=>setTimeout(r,10));}
     console.log(JSON.stringify({text:'done'}));`;
   writeFileSync(join(root,'work.mjs'),script);
-  const method={format:'method/3',name:'Progress',goal:'Test progress',steps:{work:{purpose:'Run work',do:{kind:'run',runtime:'node',entrypoint:'work.mjs'},out:{text:{type:'text',description:'Result'}},limits:{timeout_ms:8000}}},result:'text'};
+  const method={format:'method/3.1',name:'Progress',goal:'Test progress',steps:{work:{purpose:'Run work',do:{kind:'run',runtime:'node',entrypoint:'work.mjs'},out:{text:{type:'text',description:'Result'}},limits:{timeout_ms:8000}}},result:'text'};
   writeFileSync(join(root,'work.method'),JSON.stringify(method));
   const config={allow_local_processes:true,runtimes:{node:{command:process.execPath,version:'test'}},limits:{timeout_ms:10000,max_invocations:2,max_model_requests:0,max_tool_calls:0,max_request_bytes:100000,max_output_bytes:100000}};
   const seen: any[] = [];

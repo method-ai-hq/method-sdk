@@ -24,7 +24,7 @@
     "Build browsing pages only for available records."
   ],
   "historical_checks": {
-    "regression_tests": "6 passed; ordinary Markdown, selected passages, unknown citations, range bounds, optional/incomplete calculations, saved file integrity, and legacy reference syntax.",
+    "regression_tests": "6 passed; ordinary Markdown, selected passages, unknown citations, range bounds, optional/incomplete calculations, saved file integrity.",
     "reference_build": "Complete redacted reference: draft check, build, and save passed without calculation files.",
     "browser": {
       "source_controls": 61,

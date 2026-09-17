@@ -35,7 +35,6 @@ const Credential = z.object({
 export class MethodClient {
   readonly server: string;
   readonly credentialFile: string;
-  private readonly legacyCredentialFile?: string;
   constructor(
     server = DEFAULT_SERVER,
     readonly fetcher: typeof fetch = fetch,
@@ -46,18 +45,15 @@ export class MethodClient {
       configRoot,
       `${sha256(this.server).slice(0, 24)}.json`,
     );
-    if (this.server === DEFAULT_SERVER) {
-      this.legacyCredentialFile = join(configRoot, `${sha256("https://app.workflowcorp.ai").slice(0, 24)}.json`);
-    }
+
   }
   token() {
-    const file = existsSync(this.credentialFile) ? this.credentialFile : this.legacyCredentialFile;
+    const file = this.credentialFile;
     if (!file || !existsSync(file)) return null;
     const saved = Credential.parse(
       JSON.parse(readFileSync(file, "utf8")),
     );
-    const expectedServer = file === this.legacyCredentialFile ? "https://app.workflowcorp.ai" : this.server;
-    if (saved.server !== expectedServer)
+    if (saved.server !== this.server)
       throw Error("The saved Method sign-in belongs to another server.");
     return saved.token;
   }
@@ -173,7 +169,6 @@ export class MethodClient {
     if (this.token()) await this.request("/api/cli/logout", "POST", {});
     rmSync(this.credentialFile, { force: true });
     rmSync(`${this.credentialFile}.pending`, { force: true });
-    if (this.legacyCredentialFile) rmSync(this.legacyCredentialFile, { force: true });
   }
 }
 function openUrl(url: string) {

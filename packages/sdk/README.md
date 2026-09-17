@@ -3,7 +3,7 @@
 MIT-licensed JavaScript API and the `method` CLI. Source and releases: https://github.com/method-ai-hq/method-sdk
 
 ```sh
-npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.8.0/withmethod-sdk-0.8.0.tgz
+npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.9.0/withmethod-sdk-0.9.0.tgz
 npx method --version
 ```
 
@@ -15,7 +15,7 @@ const result = await runMethod('task.method', {allow_local_processes: true}, {in
 console.log(result.status, inspectRun('runs/first'));
 ```
 
-Only method/3 and method/3.1 are accepted. The executor is the pinned @withmethod/runtime dependency. There is no legacy executor or callback execution API. Python uses method-bridge to call the same runtime.
+Methods use method/3.1. The executor is the pinned @withmethod/runtime dependency. Python uses method-bridge to call the same runtime.
 
 Browser-safe document modules are available at `@withmethod/sdk/schema`, `/validate`, `/execution`, `/inspection`, and `/result-files`. Node tools use `/identity`, `/method-package`, `/method-client`, `/method-sync`, and `/process`. Do not import the Node package root into a browser bundle.
 

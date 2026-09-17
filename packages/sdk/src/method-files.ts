@@ -16,7 +16,6 @@ export function contained(root: string, name: string) {
   return path;
 }
 export async function collectPackage(file: string, workflow: any, client: MethodClient): Promise<MethodPackage | undefined> {
-  if (!['method/3', 'method/3.1'].includes(workflow.format)) return;
   const root = dirname(resolve(file));
   await lockDependencies(root);
   const config = existsSync(resolve(root, 'runtime.json')) ? readDocument(resolve(root, 'runtime.json')) : {};

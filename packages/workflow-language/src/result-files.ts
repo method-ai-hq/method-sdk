@@ -68,7 +68,6 @@ export const AttachedFileSchema = z.strictObject({
   stored: z.boolean().optional(),
   website: z
     .strictObject({
-      archive: z.string().max(MAX_RESULT_TRANSFER_BYTES * 4 / 3).optional(),
       entrypoint: z.string(),
       files: z
         .array(

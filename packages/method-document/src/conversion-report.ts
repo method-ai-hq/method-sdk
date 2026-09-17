@@ -1,7 +1,7 @@
 import { canonicalJson } from "../../contracts/src/identity.js";
 import { loadWorkflow, serializeWorkflow } from "../../workflow-language/src/validate.js";
 import { z } from "zod";
-import { WorkflowSchema, JsonSchema, type Workflow } from "../../workflow-language/src/schema.js";
+import { type Workflow } from "../../workflow-language/src/schema.js";
 
 const ReportItemSchema = z.strictObject({
   source_id: z.string(), result: z.enum(["covered", "missing", "ambiguous"]),
@@ -13,10 +13,9 @@ export const ConversionReportSchema = z.strictObject({
   status: z.enum(["ready", "needs_review"]), attempts: z.number().int().positive(),
   selected_attempt: z.number().int().positive(),
   coverage: z.array(ReportItemSchema), concerns: z.array(z.string()),
-  review_method: z.enum(["independent_model_review", "format_validation"]),
+  review_method: z.literal("format_validation"),
   editor: z.strictObject({ agent: z.literal("Method Editing Agent"), summary: z.string(), elapsed_ms: z.number().nonnegative(), changed_paths: z.array(z.string()) }).optional(),
   requirement_coverage: z.array(ReportItemSchema).optional(),
-  builder: z.strictObject({ definition: JsonSchema, sha256: z.string(), run_id: z.string(), status: z.string(), error: z.string().optional(), inputs: z.record(JsonSchema), steps: z.record(JsonSchema) }).optional()
 });
 export type ConversionReport = z.infer<typeof ConversionReportSchema>;
 export function sourceSegments(source: string): Array<{ id: string; text: string }> {

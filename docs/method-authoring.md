@@ -244,7 +244,7 @@ Each step has either do or ask. purpose, reading, and limits are optional. The d
 run uses runtime and entrypoint; call uses model and prompt; agent also declares tools.
 Optional run_prompt is plain text for the outside agent that starts a saved Method. Write which Method to run, where to find its inputs, and what to show when finished. Save it with the Method version and update it when inputs or outputs change. The copy button appends the exact version link and shared CLI setup; do not repeat them in run_prompt. This field is not a step prompt and does not expand variables. Set it with method set task.method /run_prompt --text-file run-prompt.txt.
 
-In method/3.1, prompts use {{date}} for the step input declared as in.date. Nested fields such as {{customer.name}} are allowed. Only text, numbers, and booleans can be inserted; pass lists and records as structured inputs. Whitespace inside braces is allowed. Escape a literal placeholder with a backslash before its opening braces (use a YAML block scalar). Values are inserted once, never evaluated or expanded again. Unknown variables, invalid paths, and non-scalar values fail validation. Missing runtime values fail before model execution. Defaults belong in input declarations. Human ask text uses the same scope; agent check prompts use {{inputs.date}} and {{outputs.answer}}. Script commands, labels, and tool descriptions are not templates. method/3 keeps literal prompts. To upgrade, set format to method/3.1, escape any literal double braces, and validate. Single braces are ordinary text in both formats.
+In method/3.1, prompts use {{date}} for the step input declared as in.date. Nested fields such as {{customer.name}} are allowed. Only text, numbers, and booleans can be inserted; pass lists and records as structured inputs. Whitespace inside braces is allowed. Escape a literal placeholder with a backslash before its opening braces (use a YAML block scalar). Values are inserted once, never evaluated or expanded again. Unknown variables, invalid paths, and non-scalar values fail validation. Missing runtime values fail before model execution. Defaults belong in input declarations. Human ask text uses the same scope; agent check prompts use {{inputs.date}} and {{outputs.answer}}. Script commands, labels, and tool descriptions are not templates. Single braces are ordinary text.
 Runs record prompt.rendered with the template and expanded instructions for each invocation and phase; the run page shows the recorded expansion, with templates in technical details. Model and agent work uses finite default limits; steps can override them.
 An optional step reading object explains inputs, outputs, condition, and check in plain text for the reading page. These descriptions do not alter execution. Describe the declared data and actual checks; keep them in sync when editing the step. The page always shows the exact do and check instructions as well. Give a separate executable check a short reading.check_name, such as “Compare saved text”, and use reading.check to explain what it checks. These fields change presentation only. Older checks without a name display “Check”. Do not imply that a file or reference check verifies facts, or add a check just to fill the display.
 Inputs and outputs have a type and an optional description. Types: text, number, boolean, record, list, file. Records need fields; lists need items or fields. Files have path and sha256.
@@ -296,7 +296,7 @@ For a stale .lock, first confirm the process has stopped. Never remove an active
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
 For a save conflict, get the latest version and apply the change there. For an uncertain upload, retry the same file and command with its sidecar unchanged.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
-Only method/3 and method/3.1 execute. Convert or rewrite older documents before starting a new run; old executor flags and checkpoints are unsupported.
+Methods use format method/3.1.
 
 
 # Command reference
@@ -574,7 +574,7 @@ Arguments and defaults:
 File must be new. Name and goal are required. The draft starts with an empty steps map and result map.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 Missing name or goal; file or sidecar already exists.
@@ -624,7 +624,7 @@ Arguments and defaults:
 Use exactly one: --json JSON, --value-file FILE (YAML or JSON), --text TEXT, --text-file FILE (UTF-8 text). Prefer files for long text. Parents must exist. An empty pointer replaces the document. Escape / as ~1 and ~ as ~0. Nested values replace in full.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 Invalid pointer, missing parent field, or conflicting value flags.
@@ -649,7 +649,7 @@ Arguments and defaults:
 The field must exist. Repair remaining references before saving.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 The selected field does not exist.
@@ -674,7 +674,7 @@ Arguments and defaults:
 Supply do or ask and the bindings and outputs needed by the step in STEP.yaml. purpose, reading, checks, and limit overrides are optional. Alternatively use --kind run --runtime PROFILE --entrypoint FILE. Agents can use --kind agent --instructions-file FILE; the default is the calling coding agent.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 File commands require readable YAML or JSON. Editing commands report draft locks and leave the original file unchanged after a failed edit. Online commands require sign-in and network access. Use method authoring recovery for conflicts and interrupted saves.
@@ -699,7 +699,7 @@ Arguments and defaults:
 Supply an object of fields. Top-level fields merge; nested values replace in full. Use remove to delete a field.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 Unknown step or invalid step fields.
@@ -724,7 +724,7 @@ Arguments and defaults:
 Repair references to its outputs and after constraints before saving.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 The selected step does not exist.
@@ -749,7 +749,7 @@ Arguments and defaults:
 Both steps must exist. Data references and after still control execution order.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 The selected step or destination does not exist.
@@ -774,7 +774,7 @@ Arguments and defaults:
 Current methods require an equals/count/present/file object, a run check, or an agent check. Put plain-English criteria in an agent check prompt.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 Unknown step, invalid check, or conflicting value flags.
@@ -799,7 +799,7 @@ Arguments and defaults:
 The operation will be unchecked. External changes require a check.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 The selected step does not exist.
@@ -824,7 +824,7 @@ Arguments and defaults:
 Use method check set --help for arguments.
 
 Result and changes:
-JSON {file, workflow}. The workflow field contains the method and is kept for compatibility. Writes the local draft.
+JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
 
 Errors:
 Unknown action. Choose set or remove.
@@ -1306,31 +1306,6 @@ Example:
 
 ```sh
 method run wf_example --version version_example --config runtime.json --workspace . --inputs inputs.json
-```
-
-## migrate
-
-Create a current Method version from an older method.
-
-Usage:
-
-```sh
-method migrate FILE --model PROFILE --timeout-ms N --max-agent-turns N --max-model-requests N [--output FILE]
-```
-
-Arguments and defaults:
-Choose the model profile and finite limits explicitly. The source stays unchanged. Review migration warnings and prepare matching operator configuration before running.
-
-Result and changes:
-Converted method and warnings.
-
-Errors:
-Missing model or limits; output file already exists.
-
-Example:
-
-```sh
-method migrate old.method --model worker --timeout-ms 60000 --max-agent-turns 8 --max-model-requests 12 --output current.method
 ```
 
 ## Copy a message: syntax reference

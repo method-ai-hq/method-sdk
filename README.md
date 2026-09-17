@@ -7,14 +7,14 @@ The canonical source for the JavaScript SDK, Python binding, and `method` CLI. B
 ## Install
 
 ```sh
-npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.8.0/withmethod-sdk-0.8.0.tgz
+npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.9.0/withmethod-sdk-0.9.0.tgz
 method --version
 ```
 
 Node.js 22 or later is required. Python 3.11 or later uses the installed Node package:
 
 ```sh
-pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.8.0/withmethod-0.8.0-py3-none-any.whl
+pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.9.0/withmethod-0.9.0-py3-none-any.whl
 withmethod authoring
 ```
 
@@ -39,7 +39,7 @@ The Release workflow builds the npm archive, Python wheel, and four self-contain
 
 ## Breaking changes in 0.7
 
-Only `method/3` and `method/3.1` execute. The old executor, callback execution API, and legacy run reader are removed. Old `method/2` and `workflow/2` documents fail with `UNSUPPORTED_FORMAT`. `method migrate` can explicitly convert a document; it does not run the old format.
+Methods use `format: method/3.1`. The SDK uses one current runtime.
 
 Use `method`. The `workflow`, `sdk`, `method-run`, and `workflow-bridge` aliases are removed. Python keeps `withmethod`; `workflow-corp`, `method-python`, and the `workflow_corp` module are removed. `method-bridge` is the machine interface for Python.
 
