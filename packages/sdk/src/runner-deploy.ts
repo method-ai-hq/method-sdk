@@ -11,7 +11,10 @@ import {MethodClient} from './method-client.js';
 
 const base='node@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d';
 let packageRoot=fileURLToPath(new URL('../',import.meta.url));
-while(!existsSync(join(packageRoot,'package.json'))||readJson(join(packageRoot,'package.json')).name!=='@withmethod/sdk')packageRoot=dirname(packageRoot);
+while(!existsSync(join(packageRoot,'package.json'))||readJson(join(packageRoot,'package.json')).name!=='@withmethod/sdk'||!existsSync(join(packageRoot,'dist','packages','sdk','src','method.js'))){
+ const parent=dirname(packageRoot);if(parent===packageRoot)throw Error('The installed SDK is missing the Method CLI. Reinstall the SDK before deployment.');packageRoot=parent;
+}
+export const runnerSdkDirectory=()=>packageRoot;
 const home='/home/node';
 export async function docker(plan:any,args:string[]){
  // The configured context uses Docker's local socket or authenticated transport.
@@ -95,6 +98,7 @@ export async function applyRunner(plan:any){
  try{
   if(plan.status==='ready')return {id:plan.id,status:'ready',connections:plan.readiness?.result,run:`method deploy --run ${plan.id} --inputs inputs.json`};
   const name=await ensureContainer(plan),runnerHome=join(root,'runner');
+  try{await docker(plan,['exec',name,'method','--version']);}catch{throw Error('The runner cannot start the Method CLI. Prepare a new deployment with a complete SDK installation.');}
   for(const account of plan.access.filter((a:any)=>['codex','claude'].includes(a.provider))){
    let signedIn=false;
    try{const status=await docker(plan,['exec',name,account.provider,...(account.provider==='codex'?['login','status']:['auth','status'])]);signedIn=account.provider==='codex'||JSON.parse(status.stdout).loggedIn===true;}catch{}
@@ -117,7 +121,11 @@ export async function applyRunner(plan:any){
    if(plan.browser)privateCopy(join(runnerHome,'.cache','method','browser','bindings','setup','session.json'),join(runnerHome,'.cache','method','browser','bindings','default','session.json'));
    plan.status='ready';plan.ready_at=new Date().toISOString();plan.readiness={run:checkRun,result:summary.result};
   }catch{
-   plan.status='needs_input';plan.next=`Open ${plan.viewer} to complete sign-in. Then run method deploy --approve ${plan.id}.`;
+   plan.status='needs_input';
+   const summaryFile=join(runnerHome,'checks',checkId,'summary.json');
+   const summary=existsSync(summaryFile)?readJson(summaryFile):undefined;
+   plan.next=summary?.code==='check_failed'?`Open ${plan.viewer} to complete sign-in. Then run method deploy --approve ${plan.id}.`:`Runner setup or execution failed (${summary?.code??'setup_failed'}). Continue with method deploy --approve ${plan.id}.`;
+   plan.failure={code:summary?.code??'setup_failed',run:join(runnerHome,'checks',checkId)};
   }
   writePrivateJson(join(root,'plan.json'),plan);
   return {id:plan.id,status:plan.status,viewer:plan.viewer,...(plan.status==='ready'?{connections:plan.readiness?.result,run:`method deploy --run ${plan.id} --inputs inputs.json`}:{next:plan.next,check_run:checkRun})};

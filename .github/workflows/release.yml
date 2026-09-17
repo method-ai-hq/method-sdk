@@ -27,4 +27,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(node -p 'require("./packages/sdk/package.json").version')
-          gh release create "v$version" dist/release-assets/* --target "$GITHUB_SHA" --title "SDK $version" --notes-file CHANGELOG.md
+          tag="v$version"
+          if gh release view "$tag" --json isDraft,targetCommitish > /tmp/release.json 2>/dev/null; then
+            node -e 'const r=require("/tmp/release.json"); if(!r.isDraft || r.targetCommitish!==process.env.GITHUB_SHA) process.exit(1)'
+          else
+            gh release create "$tag" --draft --target "$GITHUB_SHA" --title "SDK $version" --notes-file CHANGELOG.md
+          fi
+          for file in dist/release-assets/*; do
+            uploaded=false
+            for attempt in 1 2 3; do
+              if gh release upload "$tag" "$file" --clobber; then uploaded=true; break; fi
+              sleep 5
+            done
+            if [[ "$uploaded" != true ]]; then exit 1; fi
+          done
+          gh release edit "$tag" --draft=false

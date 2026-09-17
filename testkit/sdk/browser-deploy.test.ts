@@ -58,3 +58,10 @@ it('selects the last-used local Chrome profile without reading its sign-ins',()=
  expect(localChromeProfile(r,'linux')).toBeUndefined();
  writeFileSync(join(chrome,'Local State'),JSON.stringify({profile:{last_used:'../../bad'}}));expect(()=>localChromeProfile(r,'darwin')).toThrow('unavailable');
 });
+
+it('packages the installed SDK root, not the compiled metadata directory',async()=>{
+ const compiled=await import('../../packages/sdk/dist/packages/sdk/src/runner-deploy.js');
+ const directory=compiled.runnerSdkDirectory();
+ expect(existsSync(join(directory,'dist','packages','sdk','src','method.js'))).toBe(true);
+ expect(existsSync(join(directory,'dist','packages','sdk','src','browser-service.py'))).toBe(true);
+});
