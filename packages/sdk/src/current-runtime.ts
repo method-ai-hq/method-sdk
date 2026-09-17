@@ -1,5 +1,6 @@
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { resolveModels } from '@withmethod/runtime/agents.js';
 import { checkAgents } from './capabilities.js';
@@ -13,6 +14,8 @@ import type { parse } from "./local-cli.js";
 
 export { executeMethod as runCurrentMethod };
 export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>) {
+  if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
+  flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
   const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
   const setup = await localSetup(file, flags);
   let config = setup.config;
@@ -27,16 +30,24 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     sync = syncFactory?.();
     await sync?.start(method, json(flags.inputs) ?? {}, {});
     const resolvedFile = flags['run-dir'] ? join(authoringPath(flags['run-dir']), 'runtime.resolved.json') : undefined;
-    if (flags.resume && resolvedFile && existsSync(resolvedFile)) config = JSON.parse(readFileSync(resolvedFile,'utf8'));
-    const preferenceFile = join(homedir(),'.config','method','agent.json');
-    const preference = existsSync(preferenceFile) ? JSON.parse(readFileSync(preferenceFile,'utf8')).agent : undefined;
-    config.models = await resolveModels(method, config, {agent:flags.agent,preference});
-    if(flags.agent) writePrivateJson(preferenceFile,{agent:flags.agent});
-    await checkAgents(config.models);
-    const prepared = await prepareRuntime(sourceRoot,config,method);
-    config = prepared.config;
-    if(resolvedFile){mkdirSync(dirname(resolvedFile),{recursive:true,mode:0o700});writePrivateJson(resolvedFile,config);}
-    if(flags['run-dir']){const path=join(authoringPath(flags['run-dir']),'setup.json');const events=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):[];writePrivateJson(path,[...events,{at:new Date().toISOString(),type:'setup_completed'}]);}
+    const priorCheckpoint = !!flags.resume && !!resolvedFile && !existsSync(resolvedFile)
+      && existsSync(join(dirname(resolvedFile), 'checkpoint.json'));
+    let prepared:{config:any;processPath:string;prepareBundle:(path:string)=>Promise<void>};
+    if(priorCheckpoint){
+      // Older checkpoints hash the supplied configuration before defaults are resolved.
+      prepared={config,processPath:process.env.PATH??'',prepareBundle:async()=>{}};
+    } else {
+      if (flags.resume && resolvedFile && existsSync(resolvedFile)) config = JSON.parse(readFileSync(resolvedFile,'utf8'));
+      const preferenceFile = join(homedir(),'.config','method','agent.json');
+      const preference = existsSync(preferenceFile) ? JSON.parse(readFileSync(preferenceFile,'utf8')).agent : undefined;
+      config.models = await resolveModels(method, config, {agent:flags.agent,preference});
+      if(flags.agent) writePrivateJson(preferenceFile,{agent:flags.agent});
+      await checkAgents(config.models);
+      prepared = await prepareRuntime(sourceRoot,config,method);
+      config = prepared.config;
+      if(resolvedFile){mkdirSync(dirname(resolvedFile),{recursive:true,mode:0o700});writePrivateJson(resolvedFile,config);}
+      if(flags['run-dir']){const path=join(authoringPath(flags['run-dir']),'setup.json');const events=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):[];writePrivateJson(path,[...events,{at:new Date().toISOString(),type:'setup_completed'}]);}
+    }
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
       inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,

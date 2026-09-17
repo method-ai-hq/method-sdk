@@ -83,3 +83,25 @@ it('validates a simple local-agent Method without a configuration file', async()
  writeFileSync(s.file,JSON.stringify({format:'method/3.1',name:'Reply',goal:'Return supplied text',inputs:{text:{type:'text'}},steps:{reply:{in:{text:'inputs.text'},do:{kind:'agent',model:'default',prompt:'Return {{text}}.',tools:[]},out:{answer:{type:'text'}}}},result:'answer'}));
  await methodMain(['validate',s.file]);expect(s.result().valid).toBe(true);
 });
+
+it('resumes a checkpoint from the previous SDK without adding setup fields to its configuration',async()=>{
+ const s=setup();
+ const {runCurrentMethod}=await import('../../packages/sdk/src/current-runtime.js');
+ const config=JSON.parse(exampleFiles['runtime.json']!);
+ const directory=join(s.dir,'old-run');
+ expect((await runCurrentMethod(s.file,config,{runDir:directory,inputs:{message:'legacy'}})).status).toBe('completed');
+ s.stdout.mockClear();
+ await methodMain(['run',s.file,'--resume','--run-dir',directory]);
+ expect(s.result()).toMatchObject({status:'completed',result:'legacy'});
+});
+
+
+it('keeps resolved setup for a local run that did not specify a directory',async()=>{
+ const s=setup();
+ await methodMain(['run',s.file,'--inputs',join(s.dir,'inputs.json')]);
+ const directory=s.result().run_dir;dirs.push(directory);
+ expect(JSON.parse(readFileSync(join(directory,'runtime.resolved.json'),'utf8')).runtimes.node).toBeTruthy();
+ s.stdout.mockClear();
+ await methodMain(['run',s.file,'--resume','--run-dir',directory]);
+ expect(s.result()).toMatchObject({status:'completed',result:'Hello'});
+});
