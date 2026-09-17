@@ -19,7 +19,10 @@ const url=`http://127.0.0.1:${(server.address() as any).port}`;
 const method={steps:{read:{do:{kind:'agent',browser:'environment.browser'}}}};
 const config=browserConfig(method,{environment:{browser:`method-browser:${name}`}});
 mkdirSync(browserBinding(name),{recursive:true,mode:0o700});
-writeFileSync(join(browserBinding(name),'session.json'),JSON.stringify({cookies:[{name:'unrelated',value:'synthetic',domain:'unrelated.test',path:'/',expires:-1,httpOnly:false,secure:false,sameSite:'Lax'}],origins:[]}),{mode:0o600});
+const profile={user_data_dir:join(root,'chrome'),profile_directory:'Default'};
+mkdirSync(join(profile.user_data_dir,profile.profile_directory),{recursive:true,mode:0o700});
+writeFileSync(join(browserBinding(name),'connection.json'),JSON.stringify(profile),{mode:0o600});
+writeFileSync(join(browserBinding(name),'session.json'),JSON.stringify({profile_source:JSON.stringify([profile.user_data_dir,profile.profile_directory]),cookies:[{name:'unrelated',value:'synthetic',domain:'unrelated.test',path:'/',expires:-1,httpOnly:false,secure:false,sameSite:'Lax'}],origins:[]}),{mode:0o600});
 let browser:Awaited<ReturnType<typeof openBrowser>>;
 try{
  browser=await openBrowser(method,config,join(root,'first'));

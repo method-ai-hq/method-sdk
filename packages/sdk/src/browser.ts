@@ -37,6 +37,7 @@ export function configureBrowser(name:string,cdp?:string) {
  const root=browserBinding(name);mkdirSync(root,{recursive:true,mode:0o700});
  if(cdp){const url=new URL(cdp);if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Use a browser endpoint without credentials or query parameters.');}
  writePrivateJson(join(root,'connection.json'),{...(cdp?{cdp_url:cdp}:{})});
+ if(existsSync(join(root,'session.json')))unlinkSync(join(root,'session.json'));
  return {connection:`method-browser:${name}`,configured:true};
 }
 export function localChromeProfile(home=homedir(),platform=process.platform) {
@@ -91,7 +92,11 @@ export async function openBrowser(method:any,config:any,run:string,signal?:Abort
  if(!existsSync(selection)&&binding==='method-browser:default'&&!settings.cdp_url&&!settings.user_data_dir){const profile=localChromeProfile();if(profile)settings={...settings,...profile};}
  if(!existsSync(selection))writePrivateJson(selection,settings);
  const state=join(root,'session.json');
- if(!settings.user_data_dir&&!existsSync(state)&&existsSync(join(shared,'session.json')))cpSync(join(shared,'session.json'),state);
+ const profileSource=settings.user_data_dir?JSON.stringify([settings.user_data_dir,settings.profile_directory]):'private';
+ if(!existsSync(state)&&existsSync(join(shared,'session.json'))){
+  const saved=JSON.parse(readFileSync(join(shared,'session.json'),'utf8'));
+  if(profileSource==='private'||saved.profile_source===profileSource)writePrivateJson(state,{cookies:saved.cookies,origins:saved.origins});
+ }
  const metadataFile=join(root,'receipt.json');
  const metadata=existsSync(metadataFile)?JSON.parse(readFileSync(metadataFile,'utf8')):{};
  const prepared=await prepareRuntime(assets,{allow_local_processes:true}, {steps:{}});
@@ -108,6 +113,6 @@ export async function openBrowser(method:any,config:any,run:string,signal?:Abort
  }catch(e){await service.close().catch(()=>{});release();throw Object.assign(Error('Browser could not start. If Chrome is open, close it and retry so Method can copy its sign-ins. Otherwise, install Chrome or select a running browser with method browser connect --cdp URL.'),{code:'needs_input'});}
  writePrivateJson(join(run,'browser-runtime.json'),{provider:'browser-use',version:browserVersion,connection:name,tools:catalog});
  return {connections:{[name]:{call:(tool:string,args:any,signal:AbortSignal)=>service.request('call',{name:tool,arguments:args},signal)}},service,root,
-  async close(){try{const receipt=await service.request('export',{path:state});writePrivateJson(metadataFile,{...receipt,version:browserVersion,binding});const prior=existsSync(join(shared,'session.json'))?JSON.parse(readFileSync(join(shared,'session.json'),'utf8')):{};writePrivateJson(join(shared,'session.json'),mergeSessions(prior,JSON.parse(readFileSync(state,'utf8')),receipt.domains));}finally{try{await service.close();}finally{release();}}}
+  async close(){try{const receipt=await service.request('export',{path:state});writePrivateJson(metadataFile,{...receipt,version:browserVersion,binding});const prior=existsSync(join(shared,'session.json'))?JSON.parse(readFileSync(join(shared,'session.json'),'utf8')):{};writePrivateJson(join(shared,'session.json'),{...mergeSessions(prior.profile_source===profileSource||profileSource==='private'?prior:{},JSON.parse(readFileSync(state,'utf8')),receipt.domains),profile_source:profileSource});}finally{try{await service.close();}finally{release();}}}
  };
 }
