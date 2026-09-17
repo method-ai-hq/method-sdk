@@ -1,3 +1,7 @@
+# 0.10.4
+
+- Accept dependency-free Node packages during run setup.
+
 # 0.10.3
 
 - Remove reference photos and the old website archive from the briefing example. Read the complete approved report directly.

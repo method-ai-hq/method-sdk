@@ -45,6 +45,8 @@ async function prepareOnce(root: string, config: any, method: any) {
   const files = ['package.json','package-lock.json','pyproject.toml','uv.lock'];
   const hasNode = existsSync(join(root,'package.json')), hasPython = existsSync(join(root,'pyproject.toml'));
   if (hasNode && !existsSync(join(root,'package-lock.json')) || hasPython && !existsSync(join(root,'uv.lock'))) throw Error('Save this Method with its dependency lockfiles before running it.');
+  const nodePackage = hasNode ? JSON.parse(readFileSync(join(root,'package.json'),'utf8')) : {};
+  const hasNodeDependencies = ['dependencies','devDependencies','optionalDependencies'].some(key => Object.keys(nodePackage[key] ?? {}).length > 0);
   const runtimes = {...config.runtimes};
   const executions = Object.values(method.steps).flatMap((s:any) => [s.do,s.check]).filter(Boolean) as any[];
   for (const tool of Object.values(config.tools ?? {}) as any[]) executions.push(tool.run);
@@ -77,7 +79,7 @@ async function prepareOnce(root: string, config: any, method: any) {
       if (existsSync(browser)) await command(process.execPath,[browser,'install','chromium'],cache);
       writeFileSync(`${ready}.tmp`,JSON.stringify({key,created_at:new Date().toISOString()}),{mode:0o600}); renameSync(`${ready}.tmp`,ready);
     }
-    if(hasNode&&!existsSync(join(cache,'node_modules','.package-lock.json'))){rmSync(ready,{force:true});throw Object.assign(Error('Rebuild incomplete Node packages.'),{code:'cache_damaged'});}
+    if(hasNodeDependencies&&!existsSync(join(cache,'node_modules','.package-lock.json'))){rmSync(ready,{force:true});throw Object.assign(Error('Rebuild incomplete Node packages.'),{code:'cache_damaged'});}
     const python = join(cache,'.venv','bin','python');
     if (needsPython) {
       try { await command(python,['-c','import sys; print(sys.version)'],cache); } catch(e) { rmSync(ready,{force:true}); throw Object.assign(e as Error,{code:'cache_damaged'}); }
