@@ -13,11 +13,10 @@ from briefing_sessions import social_sessions
 def inputs(a):
     date = dt.date.fromisoformat(a['day']).isoformat()
     zone = ZoneInfo(a['timezone'])
-    example, prepared = folder('example'), folder('selected_day')
+    prepared = folder('selected_day')
     if prepared != Path(a['prepared_day']).resolve():
         raise ValueError('Method folders do not match the runtime tool bindings')
     required = {
-        'example': ['website/index.html', 'briefing.md'],
         'selected_day': ['README.md', 'timeline.jsonl', 'untimed.jsonl', 'records/',
                          'metadata/documents.json'],
     }
@@ -41,8 +40,7 @@ def inputs(a):
     report = (Path(__file__).parent/'approved-report.md').read_text()
     return {'selected_day': {'source_digest': source_digest(), 'folder': str(prepared), 'day': date, 'timezone': a['timezone'], 'start': 'README.md'},
             'session_links': '\n'.join('['+g['platform']+' '+g['start']+'–'+g['end']+'](sessions.html#'+g['id']+')' for g in social_sessions(prepared)),
-            'example': {'folder': str(example), 'website': 'index.html',
-                                 'draft': 'briefing.md', 'report': report}}
+            'example': {'report': report}}
 
 
 if __name__ == '__main__':

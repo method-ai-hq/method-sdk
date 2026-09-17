@@ -63,15 +63,6 @@ steps:
         type: record
         description: The approved example and its complete text.
         fields:
-          folder:
-            type: text
-            description: Absolute path to the read-only approved example.
-          website:
-            type: text
-            description: Page relative to the example website.
-          draft:
-            type: text
-            description: Report path relative to the example folder.
           report:
             type: text
             description: Complete approved report.
@@ -91,11 +82,9 @@ steps:
       prompt: |
         Write the story of {{selected_day.day}} from the records in {{selected_day.folder}}.
         Follow the complete approved report in example.report for writing and detail.
-        Open the example website at {{example.folder}} to read its sessions, passages, and citations.
         Return Markdown with source links: [label](source:record-id) or [label](source:record-id#L10-L20).
         Use calculate_activity_times for supported time estimates.
       tools:
-        - inspect_briefing_example
         - calculate_activity_times
     out:
       draft:
@@ -138,7 +127,6 @@ run_prompt: Run Write a daily briefing for the requested prepared day folder. Re
   timezone from its records. When finished, open the briefing website and give me the run link.
 files:
   - briefing_files.py
-  - briefing_browser.cjs
   - briefing_times.py
   - briefing_sessions.py
   - briefing_check_inputs.py
@@ -157,13 +145,7 @@ files:
   - pyproject.toml
   - uv.lock
   - vendor/marked.mjs
-  - approved-output.zip
   - approved-report.md
-  - images.json
-  - approved-images/7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0.part0
-  - approved-images/7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0.part1
-  - approved-images/85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb.part0
-  - approved-images/85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb.part1
 ```
 
 ## Complete approved report
@@ -529,7 +511,7 @@ Work and browsing periods can include breaks and overlap. They do not measure co
 
 ````
 
-The installed example folder contains the complete website, helpers, sample records, and run instructions in README.md.
+The installed example folder contains the helpers, sample records, recorded sample website, and run instructions in README.md.
 
 Validate with method validate task.method, save with method save task.method, then run the returned version with method run WORKFLOW_ID --version VERSION_ID. Inspect the result and its links.
 
@@ -556,7 +538,7 @@ Run a single step with repeat: {max_iterations: N, until: BOOLEAN_OUTPUT}. The f
 
 
 
-For live progress, native Codex forwards public updates as they arrive. Scripts use METHOD_PROGRESS_FD; run method progress --help for the message and child-agent relay protocol. Keep stdout for the final JSON result. Report real milestones without source passages or secrets. Quiet work still sends a five-second heartbeat; the page polls every three seconds. A heartbeat shows the executor is connected, not that new work has completed. See source/docs/progress.md for complete examples.
+For live progress, native Codex forwards public updates as they arrive. Scripts use METHOD_PROGRESS_FD; run method progress --help for the message and child-agent relay protocol. Keep stdout for the final JSON result. Report real milestones without source passages or secrets. Quiet work still sends a five-second heartbeat; the page polls every three seconds. A heartbeat shows the executor is connected, not that new work has completed. See https://github.com/method-ai-hq/method-sdk/blob/main/docs/progress.md for complete examples.
 
 Use reading.output_name to give a returned result a short, honest name. Use reading.outputs to explain its contents.
 # Execution setup

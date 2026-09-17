@@ -1,59 +1,6 @@
 {
   "allow_local_processes": true,
   "tools": {
-    "inspect_briefing_example": {
-      "description": "Open the approved website. Read its text, expand sessions, and open citations and passages.",
-      "in": {
-        "page": {
-          "type": "text",
-          "description": "Relative website page, such as index.html or a linked document page."
-        },
-        "target": {
-          "type": "text",
-          "description": "Target returned in actions; empty string reads the whole page."
-        },
-        "action": {
-          "type": "text",
-          "description": "read, session, or citation. Read passage buttons use citation."
-        },
-        "offset": {
-          "type": "number",
-          "description": "Character offset; start at 0 and follow next_offset with the same page, target and action."
-        }
-      },
-      "out": {
-        "content": {
-          "type": "text",
-          "description": "Complete saved text for the selected page or control."
-        },
-        "next_offset": {
-          "type": "number",
-          "description": "Next character offset, or -1 when finished."
-        },
-        "total_chars": {
-          "type": "number",
-          "description": "Length of the complete text."
-        },
-        "actions": {
-          "type": "text",
-          "description": "JSON list of visible links, images, and exact targets for controls."
-        },
-        "presentation": {
-          "type": "text",
-          "description": "Path to the actual stylesheet under the example root."
-        },
-        "view": {
-          "type": "text",
-          "description": "What this browser response provides."
-        }
-      },
-      "run": {
-        "kind": "run",
-        "runtime": "node",
-        "entrypoint": "briefing_browser.cjs"
-      },
-      "effects": []
-    },
     "calculate_activity_times": {
       "description": "Calculate activity times and save time-plan.json and time-estimates.json in this run. Each successful call replaces both files; supply the complete plan each time. Calculate only the activities supplied in the plan. Choose records for the activities. Check whether messages are automated prompts before counting them as work. Record selection and exclusion reasons in the calculation plan. Gaps and playback do not measure continuous attention. Leave activities without enough evidence unestimated.",
       "in": {

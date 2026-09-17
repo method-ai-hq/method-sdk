@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/sdk",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Build and run reusable .method files with checked steps and saved results.",
   "license": "MIT",
   "type": "module",
@@ -12,7 +12,6 @@
   },
   "files": [
     "dist",
-    "source",
     "README.md",
     "LICENSE"
   ],

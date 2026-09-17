@@ -1,4 +1,4 @@
-import { unzipSync, strFromU8 } from "fflate";
+import { createHash } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -82,10 +82,7 @@ it("shows the complete request, executable YAML, and approved result in that ord
 });
 
 
-it("retains every word of the approved report after removing hidden display markers", () => {
-  const archive = unzipSync(readFileSync(resolve("packages/sdk/examples/daily-briefing/approved-output.zip")), {filter: file => file.name === "approved-output/briefing.md"});
-  const original = strFromU8(archive["approved-output/briefing.md"]!);
-  expect(approvedReport).toBe(original.replace(/<!--(?: paragraph:| time:)[\s\S]*?-->/g, "")
-    .replace(/<!-- supplement: ([A-Za-z0-9_-]+) -->/g, "\n## Supporting document: $1\n")
-    .replace(/^(#+ .+?) +$/gm, "$1"));
+it("retains the complete approved report unchanged", () => {
+  const checks = JSON.parse(readFileSync(resolve("packages/sdk/examples/daily-briefing/checks.json"), "utf8"));
+  expect(createHash("sha256").update(approvedReport).digest("hex")).toBe(checks.approved_report_sha256);
 });

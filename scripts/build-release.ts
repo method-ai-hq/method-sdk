@@ -13,8 +13,8 @@ execFileSync('npm',['pack','--workspace','@withmethod/sdk','--ignore-scripts','-
 const packedSdk = readdirSync(output).find(name => name.endsWith('.tgz'))!;
 const packedFiles = new Set(execFileSync('tar', ['-tzf', join(output, packedSdk)], {encoding:'utf8'}).trim().split('\n'));
 const example = parse(readFileSync(join(root,'packages/sdk/examples/daily-briefing/daily-briefing.method'),'utf8'));
-for (const prefix of ['dist','source']) for (const name of example.files) {
-  if (!packedFiles.has(`package/${prefix}/packages/sdk/examples/daily-briefing/${name}`)) throw Error(`Packed example is missing ${name} in ${prefix}`);
+for (const name of example.files) {
+  if (!packedFiles.has(`package/dist/packages/sdk/examples/daily-briefing/${name}`)) throw Error(`Packed example is missing ${name}`);
 }
 execFileSync(process.env.PYTHON??'python3',['-m','pip','wheel','./packages/sdk-python','--no-deps','--wheel-dir',output],{cwd:root,stdio:'pipe',env:{...process.env,SOURCE_DATE_EPOCH:'315532800'}});
 execFileSync(process.execPath,['--import','tsx','scripts/build-cli-distributions.ts'],{cwd:root,stdio:'inherit'});

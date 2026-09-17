@@ -1,6 +1,6 @@
 # Write a daily briefing
 
-TASK.md contains the task recorded in the Method's goal. daily-briefing.method implements it. approved-report.md contains the complete approved report; approved-output.zip and approved-images/ contain its website and photos.
+TASK.md contains the task recorded in the Method's goal. daily-briefing.method implements it. approved-report.md contains the complete approved report.
 
 ## Run
 
@@ -23,9 +23,9 @@ Open the website returned by the run. Source links open the saved records and se
 
 - daily-briefing.method: input checks, writing with a source check, and website rendering.
 - runtime.json: website inspection and time calculation tools.
-- briefing_*.py, briefing_browser.cjs, reader/, vendor/: helpers and website assets.
+- briefing_*.py, reader/, vendor/: helpers and website assets.
 - pyproject.toml, uv.lock, package.json, package-lock.json: dependencies.
 - sample/, inputs.json: inputs for a sample run, kept outside the Method's saved files.
-- approved-output.zip, approved-images/, images.json: complete reference website and photos.
+- approved-report.md: complete writing reference.
 - sample-report.md, sample-output.zip: actual draft and website from the recorded sample run.
 - checks.json: recorded checks and reference hashes.

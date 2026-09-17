@@ -68,7 +68,7 @@ export function renderCommand(name: string, includeCommon = true): string {
   return `## ${name}\n\n${entry.purpose}\n\nUsage:\n\n\`\`\`sh\n${entry.usage}\n\`\`\`\n\nArguments and defaults:\n${entry.arguments}\n\nResult and changes:\n${entry.result}${entry.errors ? `\n\nErrors:\n${entry.errors}` : ""}\n\nExample:\n\n\`\`\`sh\n${entry.example}\n\`\`\`\n` + (includeCommon ? `\n${entry.remote ? serverHelp + "\n" : ""}${exitHelp}\n\nCommon errors:\n${commonErrors}\n` : "");
 }
 
-const example = "# Worked example: Write a daily briefing\n\n" + approvedTask + "\n## Method\n\n```yaml\n" + approvedMethod + "```\n\n## Complete approved report\n\n````markdown\n" + approvedReport + "\n````\n\nThe installed example folder contains the complete website, helpers, sample records, and run instructions in README.md.\n";
+const example = "# Worked example: Write a daily briefing\n\n" + approvedTask + "\n## Method\n\n```yaml\n" + approvedMethod + "```\n\n## Complete approved report\n\n````markdown\n" + approvedReport + "\n````\n\nThe installed example folder contains the helpers, sample records, recorded sample website, and run instructions in README.md.\n";
 const start = `# Author with Method
 
 Below is a complete worked example, including its request, Method, files, and result. Build a Method for the user's request.
@@ -97,7 +97,7 @@ Use each for a collection, repeat for bounded iteration, when for a boolean cond
 Run a single step with repeat: {max_iterations: N, until: BOOLEAN_OUTPUT}. The final accepted output is returned; all iterations are recorded.
 `;
 const execution = `
-For live progress, native Codex forwards public updates as they arrive. Scripts use METHOD_PROGRESS_FD; run method progress --help for the message and child-agent relay protocol. Keep stdout for the final JSON result. Report real milestones without source passages or secrets. Quiet work still sends a five-second heartbeat; the page polls every three seconds. A heartbeat shows the executor is connected, not that new work has completed. See source/docs/progress.md for complete examples.
+For live progress, native Codex forwards public updates as they arrive. Scripts use METHOD_PROGRESS_FD; run method progress --help for the message and child-agent relay protocol. Keep stdout for the final JSON result. Report real milestones without source passages or secrets. Quiet work still sends a five-second heartbeat; the page polls every three seconds. A heartbeat shows the executor is connected, not that new work has completed. See https://github.com/method-ai-hq/method-sdk/blob/main/docs/progress.md for complete examples.
 
 Use reading.output_name to give a returned result a short, honest name. Use reading.outputs to explain its contents.
 # Execution setup

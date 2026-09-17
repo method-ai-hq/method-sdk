@@ -1,10 +1,4 @@
 {
-  "reference_archive_sha256": "fde1efcf8fc2998eeb203dec6d70f151ee85ab9b5a545809ae7b760712ec330b",
-  "photo_hashes": [
-    "7a70e042ae0748616e88410a11fec70014b896d6e3f43efde030fd9fdefbddc0",
-    "85d517e96394faceee00fb78f45af1b7c35b0b390efb53c515a33e74337926cb"
-  ],
-  "reference_checks": "approved-output/checks.json",
   "sample_run": {
     "date": "2026-09-17",
     "input": "sample/ (28 messages)",
@@ -41,5 +35,6 @@
     "archive_sha256": "b064399c03bd68ac70962472c8c584d3618aaa17d0afc91216626cadde91c195",
     "writing_status": "draft",
     "final_helper_replay": "Source check passed; rendering returned the same files and hashes."
-  }
+  },
+  "approved_report_sha256": "223c33d22e349c837aabf79fad774ad2435ca7c4c152334a573222d4e62ca145"
 }

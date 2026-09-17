@@ -1,3 +1,9 @@
+# 0.10.3
+
+- Remove reference photos and the old website archive from the briefing example. Read the complete approved report directly.
+- Remove the unused website inspection tool and its Playwright dependency.
+- Ship compiled SDK code and one copy of the example; development source remains in the public repository.
+
 # 0.10.2
 
 - Stop the active step when a browser connection fails. Keep normal action failures available to the agent.

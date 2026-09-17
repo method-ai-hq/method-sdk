@@ -11,13 +11,6 @@ export function copyPublicExamples(destination) {
     cpSync(resolve(source, name), target);
   }
 
-  for(const asset of JSON.parse(readFileSync(resolve(source,'daily-briefing/images.json'),'utf8'))) {
-    const bytes=readFileSync(resolve(source,'../../../assets/authoring/daily-briefing',asset.sha256+'.png'));
-    for(const [index,name] of asset.parts.entries()) {
-      if(!/^approved-images\/[a-f0-9]{64}\.part\d+$/.test(name))throw Error('Invalid approved image part');
-      const target=resolve(destination,'daily-briefing',name);mkdirSync(dirname(target),{recursive:true});writeFileSync(target,bytes.subarray(index*15000000,(index+1)*15000000));
-    }
-  }
 
 }
 const runtimeTarget=fileURLToPath(new URL('../dist/packages/sdk/src/',import.meta.url));

@@ -16,6 +16,7 @@ from briefing_validation import check_draft, check_website, check_written_briefi
 from briefing_render import render_and_save
 from briefing_artifacts import source_digest, load, put
 from briefing_times import calculate
+from briefing_check_inputs import inputs
 
 DAY = {'day':'2026-05-11','timezone':'America/Chicago'}
 DRAFT = '''# A small workday
@@ -35,6 +36,15 @@ This sample contains one conversation.
 '''
 
 class BriefingExampleTest(unittest.TestCase):
+    def test_inputs_read_the_complete_report_without_a_website_archive(self):
+        with tempfile.TemporaryDirectory() as run, patch.dict(os.environ, {
+            'METHOD_OUTPUT_DIR': run,
+            'METHOD_ENVIRONMENT': json.dumps({'prepared_day': str(EXAMPLE/'sample')})
+        }):
+            result = inputs({**DAY, 'prepared_day': str(EXAMPLE/'sample')})
+            self.assertEqual(result['example'], {'report': (EXAMPLE/'approved-report.md').read_text()})
+            self.assertEqual(list(Path(run).iterdir()), [])
+
     def test_ordinary_markdown_accepts_writing_variations(self):
         with patch('briefing_validation.folder', return_value=EXAMPLE/'sample'):
             doc = check_draft(DRAFT, DAY)
