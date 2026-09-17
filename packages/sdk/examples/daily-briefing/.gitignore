@@ -1,6 +1,5 @@
 node_modules/
 approved-output/
-runtime.json
 *-runtime.sh
 .method-runs/
 __pycache__/
