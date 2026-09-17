@@ -49,7 +49,8 @@ export const commandHelp: Record<string, Command> = {
 
 --inputs FILE: JSON input values.
 --run-dir DIR: saved run folder.
---resume: continue the same saved run.
+--agent codex|claude: select an agent for unconfigured profiles in a new run.
+--resume: continue the same saved run with its saved agent.
 --human FILE: saved human answers for the current runtime.
 --verbose: print runtime events.
 Use method doctor to check the installed Node and configured tools.`, result: "Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, and 2 when human input is needed.", errors: "Missing inputs/access, failed check, timeout, unsafe resume/version mismatch, upload failure. See recovery. Never retry a business write without inspecting its saved changes.", example: "method run wf_example --version version_example --config runtime.json --workspace . --inputs inputs.json", remote: true },
@@ -100,7 +101,7 @@ Use reading.output_name to give a returned result a short, honest name. Use read
 # Execution setup
 
 Use method run FILE_OR_ID [--config runtime.json] [--workspace HELPERS_FOLDER] [--inputs inputs.json] [--state state.json] [--run-dir DIR].
-Method selects an explicit provider, the identified calling agent, a remembered choice, or the sole available supported agent. If a choice is needed, use --agent codex or --agent claude. Both use normal sign-in. The selected provider stays fixed on resume.
+Explicit named model profiles keep their settings. For an unconfigured profile, Method uses --agent, the configured default, the identified calling agent, or the sole available supported agent. If a choice is needed, use --agent codex or --agent claude. Both use normal sign-in. The selected provider stays fixed on resume.
 A simple local-agent Method needs no runtime.json. When needed, put runtime.json beside the Method. New saved versions carry their helpers and runtime.json. Older versions without saved files still need --workspace DIR. --config overrides that file. Relative files-environment paths and executable paths in configuration resolve from the config folder. A bare executable name is found on PATH.
 Operator config supplies runtimes, tools, environment, and run limits. Optional models.PROFILE: {backend: codex, model: MODEL} selects a model; omit model to use the Codex default. command can select the Codex executable and reasoning_effort can override its setting.
 An explicit models.PROFILE with backend: openai-responses keeps the direct API path. It requires model, api_key_env, and max_output_tokens. Keep key values out of the config; api_key_env names an existing environment variable.

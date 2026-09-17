@@ -1,6 +1,3 @@
-import {existsSync,readFileSync} from 'node:fs';
-import {join} from 'node:path';
-import {homedir} from 'node:os';
 import {resolveModels} from '@withmethod/runtime/agents.js';
 import {executable} from '@withmethod/runtime/io.js';
 import {command} from './prepare.js';
@@ -18,9 +15,7 @@ export async function checkAgents(profiles:Record<string,any>){
 }
 
 export async function resolveAgentProfiles(method: any, config: any, agent?: string) {
-  const path = join(homedir(), '.config', 'method', 'agent.json');
-  const preference = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')).agent : undefined;
-  return resolveModels(method, config, {agent, preference});
+  return resolveModels(method, config, {agent});
 }
 export async function checkConfiguration(config: any) {
   for (const profile of Object.values(config.runtimes ?? {}) as any[]) await executable(profile.command);

@@ -1,7 +1,6 @@
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { checkAgents, resolveAgentProfiles } from './capabilities.js';
 import { prepareRuntime } from './prepare.js';
 import { writePrivateJson } from './files.js';
@@ -37,9 +36,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       prepared={config,processPath:process.env.PATH??'',prepareBundle:async()=>{}};
     } else {
       if (flags.resume && resolvedFile && existsSync(resolvedFile)) config = JSON.parse(readFileSync(resolvedFile,'utf8'));
-      const preferenceFile = join(homedir(),'.config','method','agent.json');
-      config.models = await resolveAgentProfiles(method, config, flags.agent);
-      if(flags.agent) writePrivateJson(preferenceFile,{agent:flags.agent});
+      else config.models = await resolveAgentProfiles(method, config, flags.agent);
       await checkAgents(config.models);
       prepared = await prepareRuntime(sourceRoot,config,method);
       config = prepared.config;
