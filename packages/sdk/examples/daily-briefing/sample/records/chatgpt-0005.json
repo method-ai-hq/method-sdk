@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0005",
+  "prepared": {
+    "event_id": "event-chatgpt-0005",
+    "source": "chatgpt",
+    "source_order": 4,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Probably **not in the exact “persistent shared volume instantly attachable to arbitrary devboxes” sense**.\n\nWhat Runloop clearly has:\n\n1. **Devbox disk snapshots**  \n   You can save the current disk state of a Devbox and create new Devboxes from that snapshot. Their docs say snapshots are for saving disk state, improving build times, rolling back, and fan-out attempts. They also say “currently only disk snapshots are supported.” citeturn273130search2\n\n2. **Files/build-context mounts for building blueprints**  \n   Their files/mounts docs mention build contexts stored as temporary Storage Objects with TTLs. That sounds more like “upload files into the build context / image build process,” not a reusable permanent dataset volume mounted into arbitrary running devboxes. citeturn273130search1\n\nSo: **Runloop gives you reusable snapshots, not obviously a first-class EFS-style persistent volume service.**\n\nFor your dataset use case, I would not rely on Runloop-native storage as the corpus layer. I’d do:\n\n```txt\nR2/S3/GCS = permanent dataset store\nRunloop snapshot = prebuilt agent environment\nRunloop devbox = ephemeral worker\n/data = read-only mounted/synced dataset shard\n/workspace = writable agent scratch\n```\n\nThe best pattern:\n\n```txt\nBase snapshot:\n  claude/codex/ripgrep/duckdb/python/node installed\n  your corpus CLI installed\n  no giant dataset inside\n\nPer job:\n  launch devbox from snapshot\n  attach short-lived read-only R2/S3 creds\n  mount or sync needed dataset prefix to /data\n  run agent\n  upload outputs\n  destroy devbox\n```\n\nIf you want **true quickly mountable persistent volumes**, I’d look harder at **Modal Volumes / CloudBucketMounts**, **Daytona**, **Deno Sandbox Volumes**, or self-hosted **EFS/NFS/CephFS + Firecracker/K8s**. Runloop seems strongest for “agent devbox lifecycle + snapshots,” less clearly for “giant shared read-only corpus volume.”",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T15:46:08.842223+00:00",
+      "end": null,
+      "local": "2026-05-11T10:46:08.842223-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T15:46:08.842223+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0005"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0005",
+        "local_record_path": "records/chatgpt-0005.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "final",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

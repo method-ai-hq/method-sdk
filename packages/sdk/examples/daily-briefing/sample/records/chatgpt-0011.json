@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0011",
+  "prepared": {
+    "event_id": "event-chatgpt-0011",
+    "source": "chatgpt",
+    "source_order": 10,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "I’m going to separate the storage layer from the worker layer; the right answer is mostly “JuiceFS can do this, but metadata and cache topology decide whether it feels infinite.”",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T15:51:31.884305+00:00",
+      "end": null,
+      "local": "2026-05-11T10:51:31.884305-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T15:51:31.884305+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0011"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0011",
+        "local_record_path": "records/chatgpt-0011.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "commentary",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

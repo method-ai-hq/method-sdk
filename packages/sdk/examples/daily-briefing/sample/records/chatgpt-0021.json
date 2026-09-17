@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0021",
+  "prepared": {
+    "event_id": "event-chatgpt-0021",
+    "source": "chatgpt",
+    "source_order": 20,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Yes. Modal workers are more than powerful enough to run **Codex CLI / Claude Code**. Those tools are mostly **network-bound agent CLIs**, not heavy local inference workloads.\n\n### How powerful are Modal workers?\n\nBy default, a Modal Function/Sandbox starts tiny: **0.125 CPU cores and 128 MiB RAM**, but you can request more CPU, memory, disk, and GPUs. Modal’s resource docs say Functions/Sandboxes can request larger CPU/memory similarly to Kubernetes. citeturn913557search0\n\nFor Claude/Codex workers, I’d use something like:\n\n```python\ncpu=2-8\nmemory=4096-32768\ntimeout=3600+\n```\n\nFor large repo/corpus work:\n\n```python\ncpu=8\nmemory=32768\nephemeral_disk=50_000  # MB-ish depending Modal API version\n```\n\nNo GPU needed unless you are running local models.\n\nModal also explicitly markets Sandboxes for executing untrusted user/agent code and says you can spin up thousands of isolated secure Sandboxes. citeturn913557search4turn913557search7\n\n### Can they run Claude Code?\n\nYes. Claude Code supports Linux, including Ubuntu/Debian/Alpine, with **4 GB+ RAM** and an internet connection. citeturn913557search2\n\nModal even has a JS example that builds a Sandbox image with `bash`, `curl`, `git`, `ripgrep`, installs Claude Code via:\n\n```bash\ncurl -fsSL https://claude.ai/install.sh | bash\n```\n\nand then creates a Modal sandbox from that image. citeturn913557search19\n\nSo yes, this is a first-class-ish use case.\n\n### Can they run Codex CLI?\n\nAlmost certainly yes. Treat it like any Node/Rust/native CLI: bake it into the Modal image, inject `OPENAI_API_KEY`, mount `/data`, run in `/workspace`.\n\nModal Sandboxes can run arbitrary commands via `Sandbox.exec`, with stdout/stderr/stdin available through the returned process object. citeturn913557search1\n\n### Practical architecture\n\n```txt\nModal Sandbox\n  /data        Modal Volume, read-only corpus\n  /workspace   local writable disk\n  /results     output path\n\nEnv:\n  ANTHROPIC_API_KEY\n  OPENAI_API_KEY\n```\n\nThe worker command is basically:\n\n```bash\ncd /workspace\nclaude -p \"$(cat task.md)\"\n```\n\nor:\n\n```bash\ncd /workspace\ncodex exec \"$(cat task.md)\"\n```\n\n### Important gotchas\n\nDo **not** run agents from `/data`.\n\nUse:\n\n```txt\n/data       shared read-only corpus\n/workspace  writable scratch\n```\n\nAlso avoid having many workers write to the same Modal Volume path. Use per-job directories:\n\n```txt\n/results/job_abc123/\n/results/job_def456/\n```\n\n### My call\n\nFor 1 TB read-heavy data and many agent workers:\n\n```txt\nModal Volume for /data\nModal Sandboxes for Claude/Codex\nlocal /workspace for writes\nDB/queue for coordination\n```\n\nThis is strong enough. Start there before inventing JuiceFS/K8s.",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T15:58:36.522064+00:00",
+      "end": null,
+      "local": "2026-05-11T10:58:36.522064-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T15:58:36.522064+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0021"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0021",
+        "local_record_path": "records/chatgpt-0021.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "final",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

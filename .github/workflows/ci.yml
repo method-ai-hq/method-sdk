@@ -1,0 +1,30 @@
+name: SDK checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  sdk:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - run: npm run pack
+      - run: python -m pip wheel ./packages/sdk-python --no-deps --wheel-dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-packages-node-${{ matrix.node }}
+          path: dist/*

@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0007",
+  "prepared": {
+    "event_id": "event-chatgpt-0007",
+    "source": "chatgpt",
+    "source_order": 6,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Yes. You can mount S3/R2 “like a filesystem,” but it’s a **FUSE/object-store filesystem**, not a real POSIX filesystem.\n\nBest options:\n\n### 1. `rclone mount` — best for Cloudflare R2\n\nCloudflare officially documents using `rclone` with R2, and `rclone` supports S3-compatible providers including R2. R2 exposes an S3-compatible API endpoint like `https://worker.example.invalid/example-job-0001`. citeturn700635search1turn700635search4turn700635search9\n\nExample:\n\n```bash\nrclone config\n# choose: s3\n# provider: Cloudflare\n# endpoint: https://worker.example.invalid/example-job-0001\n# access_key_id / secret_access_key\n```\n\nThen:\n\n```bash\nmkdir -p /data/r2\n\nrclone mount r2:my-bucket /data/r2 \\\n  --read-only \\\n  --vfs-cache-mode full \\\n  --dir-cache-time 1h \\\n  --poll-interval 0\n```\n\nFor your agent boxes, this is probably the easiest:\n\n```bash\nrclone mount r2:alpha-corpora /data \\\n  --read-only \\\n  --vfs-cache-mode full \\\n  --cache-dir /workspace/.rclone-cache\n```\n\nThen Claude/Codex sees:\n\n```txt\n/data/gutenberg/...\n/data/irs-990/...\n/data/newspapers/...\n```\n\n### 2. AWS Mountpoint for S3 — best for actual AWS S3\n\nAWS has **Mountpoint for Amazon S3**, a high-throughput open-source client that mounts an S3 bucket locally and translates file operations like `open` and `read` into S3 API calls. It intentionally does **not** implement full POSIX filesystem semantics. citeturn700635search0turn700635search3\n\nExample:\n\n```bash\nmkdir ~/mnt\nmount-s3 my-bucket ~/mnt\n```\n\nWith cache:\n\n```bash\nmount-s3 --cache /tmp/s3-cache my-bucket /data\n```\n\nThis is probably better than `rclone` for high-throughput AWS S3 reads, especially ML/dataset-style workloads. AWS notes caching is useful when repeatedly reading unchanged training-style datasets. citeturn700635search0\n\nFor R2, I’d expect `rclone` to be less annoying.\n\n### Important limitations\n\nObject storage mounted as a filesystem is good for:\n\n```txt\ncat file\nls directory\nread large files\nstream parquet/jsonl/csv\ngrep selected paths\ncopy files out\n```\n\nIt is bad for:\n\n```txt\nmillions of tiny random reads\nsqlite directly over mount\nlots of metadata-heavy directory walking\natomic renames\nfile locking\nappend-heavy writes\nPOSIX correctness\nagent writing into the mounted corpus\n```\n\nSo don’t do:\n\n```bash\ncd /data\nclaude\n```\n\nDo:\n\n```bash\ncd /workspace\nclaude\n# read from /data, write to /workspace\n```\n\n### Best pattern for your use case\n\n```txt\n/data        rclone-mounted R2 bucket, read-only\n/workspace   local writable disk\n/cache       local cache for repeated reads\n/results     uploaded back to R2/S3 when done\n```\n\nAnd mount with per-job read-only credentials. The bucket policy / API token should literally lack write/delete permissions. The `--read-only` flag is nice, but credentials are the real boundary.\n\n### My recommendation\n\nFor Runloop/devboxes:\n\n```bash\napt-get install -y fuse3\ncurl https://rclone.org/install.sh | bash\n\nmkdir -p /data /workspace/.rclone-cache\n\nrclone mount r2:alpha-corpora /data \\\n  --read-only \\\n  --vfs-cache-mode full \\\n  --cache-dir /workspace/.rclone-cache \\\n  --dir-cache-time 6h \\\n  --daemon\n```\n\nThen prompt the agent:\n\n```txt\nDataset is mounted read-only at /data.\nWrite all scripts, notes, indexes, and outputs under /workspace.\nNever modify /data.\n```\n\nFor huge corpora, I’d still add a **corpus search CLI** on top. Let the agent search first, then open specific files from `/data`, rather than recursively crawling the whole mounted bucket.",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T15:47:22.579986+00:00",
+      "end": null,
+      "local": "2026-05-11T10:47:22.579986-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T15:47:22.579986+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0007"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0007",
+        "local_record_path": "records/chatgpt-0007.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "final",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

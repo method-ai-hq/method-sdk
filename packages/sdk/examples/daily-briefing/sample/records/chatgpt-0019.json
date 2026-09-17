@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0019",
+  "prepared": {
+    "event_id": "event-chatgpt-0019",
+    "source": "chatgpt",
+    "source_order": 18,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Nothing is inherently wrong with a **Modal Volume** for 1 TB. For your use case it may be the cleanest move.\n\nThe main caveat is semantic, not size.\n\n### Modal Volume is good if your data is mostly read-only\n\nFor:\n\n```txt\n1 TB corpus\nmany Claude/Codex workers\nread shared files\nwrite per-job outputs elsewhere\n```\n\nModal Volume is probably fine.\n\nModal describes Volumes as writable persistent filesystems shareable between functions/instances, exposed as a filesystem. citeturn354233search4 They are also designed for distributed, on-demand compute, where Modal can scale jobs across many containers. citeturn354233search6\n\nSo your architecture could simply be:\n\n```txt\nModal Volume: /data       # your 1 TB dataset\nLocal disk:    /workspace  # Claude/Codex scratch\nR2/S3/Volume:  /results    # job outputs\n```\n\nRun agents from `/workspace`, read from `/data`.\n\n### What’s worse than your DigitalOcean Volume?\n\nA DO volume is basically a normal block volume attached to a VM. It has simpler, more predictable filesystem semantics.\n\nModal Volume is more “distributed persistent filesystem for Modal containers.” The tradeoffs:\n\n| Thing | DigitalOcean Volume | Modal Volume |\n|---|---:|---:|\n| Normal Linux filesystem feel | Better | Good, but platform-managed |\n| Attach to many workers | Not really | Yes |\n| Burst to hundreds of workers | You manage it | Modal handles it |\n| Long-running always-on cheapness | Usually better | Maybe worse |\n| Zero-idle burst jobs | Worse | Better |\n| Works outside Modal | Yes | No |\n| Weird sync/concurrency edge cases | Fewer | More likely |\n| Infra control | Higher | Lower |\n\nThe biggest issue: **don’t treat Modal Volume like a live multi-writer NFS coordination layer.** Modal’s docs say Volumes can share/persist state, but for Sandboxes, Volume files are synced back when the Sandbox terminates; CloudBucketMounts sync automatically. citeturn354233search0 So if many Claude workers write to the same shared paths and expect immediate visibility, that is risky.\n\nBut for read-only data, this mostly does not matter.\n\n### What’s better than your DO setup?\n\nModal gives you:\n\n```txt\n- Many isolated workers without managing VMs\n- Scale-to-zero\n- Easy fan-out\n- Per-job CPU/RAM/GPU choices\n- Cleaner sandbox model for arbitrary Claude/Codex tasks\n- Persistent shared Volume mounted into every worker\n```\n\nIf your current DO setup is one machine with a mounted 1 TB volume, then the annoying part is: scaling means provisioning more droplets, copying/mounting data, managing queues, cleaning workers, etc.\n\nModal is better when you want:\n\n```txt\nrun 200 Claude Code jobs against the same corpus\nthen scale back to 0\n```\n\n### What I’d do\n\nFor 1 TB, I’d try **Modal Volume directly** before JuiceFS.\n\n```txt\nV0:\n  upload/sync DO volume -> Modal Volume\n  run Modal Sandbox workers\n  mount volume at /data\n  /workspace is local writable scratch\n  output each job to /results/job-id\n```\n\nUse conventions:\n\n```txt\n/data        read-only by policy\n/workspace   writable local scratch\n/results     per-job output only\n```\n\nDo not let agents write into `/data`.\n\n### When I would not use Modal Volume\n\nI’d stay with DO / use JuiceFS / use R2 if:\n\n```txt\n- the 1 TB changes constantly\n- you need access from non-Modal machines\n- you need true immediate multi-writer visibility\n- you want cheapest 24/7 always-on workers\n- you need custom FUSE/kernel/network behavior\n- your workload is just a few steady workers\n```\n\n### My call\n\nFor **1 TB, read-heavy, agent workers**: use **Modal Volume**.\n\nIt is probably simpler than JuiceFS and much more scalable than a single DigitalOcean volume. The only thing I’d be careful about is not using it as a shared mutable live filesystem. Keep shared data read-only, write outputs per job, and use a DB/queue for coordination.",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T15:56:16.660791+00:00",
+      "end": null,
+      "local": "2026-05-11T10:56:16.660791-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T15:56:16.660791+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0019"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0019",
+        "local_record_path": "records/chatgpt-0019.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "final",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

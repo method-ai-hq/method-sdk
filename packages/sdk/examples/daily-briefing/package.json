@@ -1,0 +1,7 @@
+{
+  "name": "method-daily-briefing-example",
+  "private": true,
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

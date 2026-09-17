@@ -1,0 +1,53 @@
+{
+  "name": "@withmethod/sdk",
+  "version": "0.5.7",
+  "description": "Build and run reusable .method files with checked steps and saved results.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/packages/sdk/src/index.js",
+  "types": "dist/packages/sdk/src/index.d.ts",
+  "bin": {
+    "workflow": "dist/packages/sdk/src/cli.js",
+    "sdk": "dist/packages/sdk/src/cli.js",
+    "workflow-bridge": "dist/packages/sdk/src/bridge.js",
+    "method": "dist/packages/sdk/src/method.js",
+    "method-run": "dist/packages/sdk/src/cli.js",
+    "method-bridge": "dist/packages/sdk/src/bridge.js"
+  },
+  "files": [
+    "dist",
+    "source",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/method-ai-hq/method-sdk.git",
+    "directory": "packages/sdk"
+  },
+  "keywords": [
+    "workflow",
+    "agents",
+    "ai-agents",
+    "verification",
+    "mcp"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/packages/sdk/src/cli.js dist/packages/sdk/src/bridge.js dist/packages/sdk/src/method.js && node scripts/copy-examples.mjs",
+    "prepack": "npm run build && node ../../scripts/prepare-source.mjs"
+  },
+  "dependencies": {
+    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/3ebd34dc147e0d893384d7807d7f6b018bef692c",
+    "fflate": "^0.8.3",
+    "yaml": "^2.9.0",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "homepage": "https://docs.withmethod.ai/sdk/overview",
+  "bugs": {
+    "url": "https://github.com/method-ai-hq/method-sdk/issues"
+  }
+}

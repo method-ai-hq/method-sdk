@@ -1,0 +1,17 @@
+{
+  "allow_local_processes": true,
+  "runtimes": {
+    "node": {
+      "command": "node",
+      "version": "22+"
+    }
+  },
+  "limits": {
+    "timeout_ms": 60000,
+    "max_model_requests": 0,
+    "max_invocations": 10,
+    "max_tool_calls": 0,
+    "max_output_bytes": 1000000,
+    "max_request_bytes": 1000000
+  }
+}

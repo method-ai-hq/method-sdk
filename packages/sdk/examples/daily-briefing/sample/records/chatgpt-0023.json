@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0023",
+  "prepared": {
+    "event_id": "event-chatgpt-0023",
+    "source": "chatgpt",
+    "source_order": 22,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Use **Modal Secrets** to inject API keys as environment variables into each worker/sandbox. Then Claude Code/Codex pick them up from env.\n\n### Claude Code\n\nClaude Code can authenticate from:\n\n```bash\nANTHROPIC_API_KEY=...\n```\n\nAnthropic’s docs say `ANTHROPIC_API_KEY` is sent as the `X-Api-Key` header, and in non-interactive mode `claude -p`, the key is used automatically when present. citeturn225146search12\n\nSo in a worker:\n\n```bash\nexport ANTHROPIC_API_KEY=sk-ant-...\nclaude -p \"do the task\"\n```\n\n### Codex CLI\n\nCodex can use env-var auth too. OpenAI’s Codex auth docs say you can set an `env_key` for provider-specific API keys, and for normal OpenAI usage the key is typically:\n\n```bash\nOPENAI_API_KEY=...\n```\n\nciteturn225146search10\n\nSo:\n\n```bash\nexport OPENAI_API_KEY=sk-proj-...\ncodex exec \"do the task\"\n```\n\n### In Modal\n\nCreate a secret:\n\n```bash\nmodal secret create agent-keys \\\n  ANTHROPIC_API_KEY=sk-ant-... \\\n  OPENAI_API_KEY=sk-proj-...\n```\n\nModal Secrets are dictionaries of environment variables injected into containers, and Modal says they can be created in the dashboard, from code, or via CLI. citeturn868683search1turn868683search3\n\nThen attach it to the function/sandbox.\n\nFor a Modal Function:\n\n```python\nimport modal\n\napp = modal.App(\"agent-workers\")\n\nimage = (\n    modal.Image.debian_slim()\n    .apt_install(\"curl\", \"git\", \"ripgrep\", \"nodejs\", \"npm\")\n    .run_commands(\n        \"npm install -g @anthropic-ai/claude-code\",\n        \"npm install -g @openai/codex\"\n    )\n)\n\n@app.function(\n    image=image,\n    secrets=[modal.Secret.from_name(\"agent-keys\")],\n    cpu=4,\n    memory=8192,\n    timeout=3600,\n)\ndef run_agent(prompt: str):\n    import os, subprocess, pathlib\n\n    pathlib.Path(\"/workspace\").mkdir(exist_ok=True)\n\n    result = subprocess.run(\n        [\"claude\", \"-p\", prompt],\n        cwd=\"/workspace\",\n        text=True,\n        capture_output=True,\n        env=os.environ.copy(),\n    )\n\n    return {\n        \"stdout\": result.stdout,\n        \"stderr\": result.stderr,\n        \"code\": result.returncode,\n    }\n```\n\nFor Codex:\n\n```python\nresult = subprocess.run(\n    [\"codex\", \"exec\", prompt],\n    cwd=\"/workspace\",\n    text=True,\n    capture_output=True,\n    env=os.environ.copy(),\n)\n```\n\n### Important security pattern\n\nDo **not** put API keys in:\n\n```txt\n/data\n/workspace\n.env files inside agent-visible repos\ntask prompts\nlogs\n```\n\nUse env injection only.\n\nFor your setup:\n\n```txt\nModal Secret:\n  ANTHROPIC_API_KEY\n  OPENAI_API_KEY\n  R2_READ_ONLY_ACCESS_KEY_ID\n  R2_READ_ONLY_SECRET_ACCESS_KEY\n\n/data:\n  mounted read-only corpus\n\n/workspace:\n  writable scratch, no secrets written\n\n/results:\n  per-job output\n```\n\nOne subtle issue: agents can run shell commands, so they can technically do `env` and see keys. That is unavoidable if the CLI needs the key directly. If you don’t want the agent process to be able to inspect provider keys, put a tiny **LLM proxy** in front of Claude/OpenAI and give the worker only a short-lived per-job token with budget/rate limits.",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T16:15:54.859495+00:00",
+      "end": null,
+      "local": "2026-05-11T11:15:54.859495-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T16:15:54.859495+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0023"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0023",
+        "local_record_path": "records/chatgpt-0023.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "final",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

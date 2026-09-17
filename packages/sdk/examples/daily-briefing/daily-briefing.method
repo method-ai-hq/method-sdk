@@ -1,0 +1,201 @@
+{
+  "format": "method/3.1",
+  "name": "Write a daily briefing",
+  "goal": "Turn one prepared day folder into a complete, cited daily briefing. Follow the approved example for writing and layout, and save the briefing with its website.",
+  "inputs": {
+    "day": {
+      "type": "text",
+      "description": "Date of the prepared records, in YYYY-MM-DD form."
+    },
+    "timezone": {
+      "type": "text",
+      "description": "Timezone for those records, such as America/Chicago."
+    }
+  },
+  "environment": {
+    "prepared_day": {
+      "type": "files",
+      "description": "Folder of prepared records for that day. Read-only."
+    },
+    "approved_example": {
+      "type": "files",
+      "description": "Folder containing the complete approved example. Read-only."
+    }
+  },
+  "steps": {
+    "open_inputs": {
+      "name": "Check the input folders",
+      "in": {
+        "day": "inputs.day",
+        "timezone": "inputs.timezone",
+        "prepared_day": "environment.prepared_day",
+        "example_folder": "environment.approved_example"
+      },
+      "do": {
+        "kind": "run",
+        "runtime": "python",
+        "entrypoint": "briefing_check_inputs.py"
+      },
+      "out": {
+        "selected_day": {
+          "type": "record",
+          "description": "The prepared folder, its README, date, timezone, and source hashes.",
+          "fields": {
+            "folder": {
+              "type": "text",
+              "description": "Absolute path to the selected prepared folder. Use the selected_day root with the file tools."
+            },
+            "day": {
+              "type": "text",
+              "description": "Selected date in YYYY-MM-DD form."
+            },
+            "timezone": {
+              "type": "text",
+              "description": "Named timezone used to interpret this day."
+            },
+            "start": {
+              "type": "text",
+              "description": "README.md relative to the selected_day file-tool root."
+            },
+            "source_digest": {
+              "type": "text",
+              "description": "Hash of the prepared files at the start of this run."
+            }
+          }
+        },
+        "example": {
+          "type": "record",
+          "description": "The approved example and its complete text.",
+          "fields": {
+            "folder": {
+              "type": "text",
+              "description": "Absolute path to the read-only approved example."
+            },
+            "website": {
+              "type": "text",
+              "description": "index.html relative to the example browser tool\u2019s website root. File tools use website/index.html under example."
+            },
+            "draft": {
+              "type": "text",
+              "description": "briefing.md relative to the example file-tool root."
+            },
+            "report": {
+              "type": "text",
+              "description": "Complete approved text, with old hidden display markers removed."
+            }
+          }
+        },
+        "session_links": {
+          "type": "text",
+          "description": "Links to saved social sessions for this day. A link on its own line displays that session in the story."
+        }
+      },
+      "purpose": "Check that the required files exist and that the prepared records match the selected date and timezone.",
+      "reading": {
+        "inputs": "The date and timezone to use, the folder of prepared records, and the folder containing the approved example.",
+        "outputs": "Paths to the prepared records and their README, the date and timezone, and links to the approved example.",
+        "output_name": "Input records and approved example"
+      },
+      "limits": {
+        "timeout_ms": 30000
+      }
+    },
+    "write_briefing": {
+      "name": "Write the briefing",
+      "in": {
+        "selected_day": "selected_day",
+        "date": "selected_day.day",
+        "folder": "selected_day.folder",
+        "example": "example.folder",
+        "approved_report": "example.report",
+        "session_links": "session_links"
+      },
+      "do": {
+        "kind": "agent",
+        "model": "writer",
+        "prompt": "Write the complete story of {{date}} from the prepared records in {{folder}}. Use the approved example briefing at {{example}} as the standard for writing, detail, and presentation. Open its expanded sessions, passages, and citations. Use the selected day\u2019s records as evidence. Return the briefing as Markdown. Link sources with [label](source:record-id) or [label](source:record-id#L10-L20).\n\nUse calculate_activity_times for supported time estimates.",
+        "tools": [
+          "inspect_briefing_example",
+          "calculate_activity_times"
+        ]
+      },
+      "out": {
+        "draft": {
+          "type": "text",
+          "description": "The complete Markdown briefing."
+        },
+        "supporting_files": {
+          "type": "list",
+          "items": {
+            "type": "file"
+          },
+          "description": "File references returned by the calculator, or an empty list when none were made."
+        }
+      },
+      "purpose": "Read the records and approved example, write the briefing, and calculate supported activity times when needed.",
+      "reading": {
+        "inputs": "The prepared records, their date and timezone, and the approved example.",
+        "outputs": "The complete Markdown briefing, with source links and any selected passages.",
+        "output_name": "Briefing draft"
+      },
+      "limits": {
+        "timeout_ms": 3600000,
+        "max_agent_turns": 64,
+        "max_model_requests": 64
+      }
+    },
+    "render_and_save": {
+      "name": "Render and save the briefing",
+      "in": {
+        "selected_day": "selected_day",
+        "draft": "draft",
+        "supporting_files": "supporting_files"
+      },
+      "do": {
+        "kind": "run",
+        "runtime": "python",
+        "entrypoint": "briefing_render.py"
+      },
+      "out": {
+        "saved_briefing": {
+          "type": "file",
+          "description": "Links to the saved briefing, website, and calculation files, if produced, with the date and timezone."
+        },
+        "published_website": {
+          "type": "file",
+          "description": "The saved website, its draft, and calculation files, if produced.",
+          "format": "method-website"
+        }
+      },
+      "purpose": "Render and save the briefing with source links and supporting files. If a social-session link is unknown, show a notice and link to all saved sessions.",
+      "reading": {
+        "inputs": "The draft, prepared records, and supporting files, if any.",
+        "outputs": "The saved briefing and website."
+      },
+      "limits": {
+        "timeout_ms": 600000
+      }
+    }
+  },
+  "result": {
+    "briefing": "saved_briefing",
+    "website": "published_website"
+  },
+  "run_prompt": "Run Write a daily briefing for the requested day. Ask which day if it is missing. Use the prepared records and runtime.json in the Method folder. Read the date and timezone from the prepared records. When finished, open the briefing website and give me the run link.",
+  "files": [
+    "briefing_files.py",
+    "briefing_browser.cjs",
+    "briefing_times.py",
+    "briefing_sessions.py",
+    "briefing_check_inputs.py",
+    "briefing_artifacts.py",
+    "briefing_manifest.py",
+    "briefing_progress.py",
+    "briefing_validation.py",
+    "briefing_render.py",
+    "briefing_website.py",
+    "briefing_markdown.py",
+    "reader/reader.css",
+    "reader/reader.js"
+  ]
+}

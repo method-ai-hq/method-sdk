@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0010",
+  "prepared": {
+    "event_id": "event-chatgpt-0010",
+    "source": "chatgpt",
+    "source_order": 9,
+    "event_kind": "conversation",
+    "actor_role": "user_written",
+    "title": "Hosting Datasets with Runloop",
+    "text": "ok if i used juiceFS two questions:\n1. Can i have simultaneous workers on it? Scale it up forever (read only , there would be write locks)\n2. What would you use for the claude code workers ? Modal ? Runloop ? Something different ? ",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "user_message",
+    "time": {
+      "instant": "2026-05-11T15:51:31.368000+00:00",
+      "end": null,
+      "local": "2026-05-11T10:51:31.368000-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T15:51:31.368000+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0010"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0010",
+        "local_record_path": "records/chatgpt-0010.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": null,
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

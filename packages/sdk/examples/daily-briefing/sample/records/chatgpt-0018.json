@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0018",
+  "prepared": {
+    "event_id": "event-chatgpt-0018",
+    "source": "chatgpt",
+    "source_order": 17,
+    "event_kind": "conversation",
+    "actor_role": "user_written",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Right now my data lives in a digital ocean volume. What's wrong with a modal volume ? it's not that big (1 TB)",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "user_message",
+    "time": {
+      "instant": "2026-05-11T15:56:12.807000+00:00",
+      "end": null,
+      "local": "2026-05-11T10:56:12.807000-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T15:56:12.807000+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0018"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0018",
+        "local_record_path": "records/chatgpt-0018.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": null,
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

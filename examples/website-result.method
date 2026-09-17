@@ -1,0 +1,31 @@
+format: method/3.1
+name: Publish a project update as a website
+goal: Turn the supplied project update into a website that can be read and downloaded from the run page.
+inputs:
+  title:
+    type: text
+    description: The heading for the project update.
+  update:
+    type: text
+    description: The complete update to put on the page.
+steps:
+  build:
+    name: Build the update page
+    purpose: Save the update as a website, with a file list that identifies each asset.
+    in:
+      title: inputs.title
+      update: inputs.update
+    do:
+      kind: run
+      runtime: node
+      entrypoint: build-website-result.mjs
+    out:
+      website:
+        type: file
+        format: method-website
+        description: The website file list, its start page, and the hashes of its assets.
+    check:
+      file: website
+    limits:
+      timeout_ms: 10000
+result: website

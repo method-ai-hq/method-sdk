@@ -1,0 +1,32 @@
+format: method/3.1
+name: Save and check a text file
+goal: Preserve the exact supplied text in a saved file.
+inputs:
+  text:
+    type: text
+    description: Exact text to save, including whitespace and the final newline.
+steps:
+  save:
+    name: Save the file
+    purpose: Save the supplied text and verify its full contents.
+    reading:
+      check_name: Check the saved text
+      check: Read the saved file and compare its contents with the supplied text.
+    in:
+      text: inputs.text
+    do:
+      kind: run
+      runtime: node
+      entrypoint: save-text.mjs
+    limits:
+      timeout_ms: 10000
+    out:
+      file:
+        type: file
+        description: The file containing the complete supplied text.
+        format: text
+    check:
+      kind: run
+      runtime: node
+      entrypoint: check-text.mjs
+result: file

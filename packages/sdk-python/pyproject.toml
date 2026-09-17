@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "withmethod"
+version = "0.4.1"
+description = "Run agentic methods in discrete verifiable steps."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Method" }]
+keywords = ["workflow", "agent", "verification", "sdk"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.scripts]
+withmethod = "withmethod.cli:main"
+method-python = "withmethod.cli:main"
+workflow-corp = "workflow_corp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

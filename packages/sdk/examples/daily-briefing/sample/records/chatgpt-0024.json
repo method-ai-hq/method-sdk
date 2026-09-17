@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0024",
+  "prepared": {
+    "event_id": "event-chatgpt-0024",
+    "source": "chatgpt",
+    "source_order": 23,
+    "event_kind": "conversation",
+    "actor_role": "user_written",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Great can you write up a prompt for my coding agent to make the change from digital ocean to modal ? Codex CLI not claude code ,but otherwise mimick laude that coding agent example you said. ",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "user_message",
+    "time": {
+      "instant": "2026-05-11T16:16:43.753000+00:00",
+      "end": null,
+      "local": "2026-05-11T11:16:43.753000-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T16:16:43.753000+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0024"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0024",
+        "local_record_path": "records/chatgpt-0024.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": null,
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

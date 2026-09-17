@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0025",
+  "prepared": {
+    "event_id": "event-chatgpt-0025",
+    "source": "chatgpt",
+    "source_order": 24,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Use this as the Codex prompt:\n\n```text\nWe need to migrate our current “agent worker over a 1TB dataset” setup from a DigitalOcean volume to Modal.\n\nCurrent setup:\n- Data currently lives on a DigitalOcean volume.\n- We want to run many ephemeral Codex CLI workers against that shared dataset.\n- The dataset should be treated as read-only by agent workers.\n- Each worker should have its own writable scratch directory.\n- Outputs should be written to per-job result directories, not back into the shared dataset.\n- We are using Codex CLI, not Claude Code.\n\nGoal:\nBuild a Modal-based worker system that can:\n1. Store/mount the dataset using a Modal Volume.\n2. Spin up Modal workers/sandboxes/functions that run Codex CLI.\n3. Mount the shared dataset at `/data`.\n4. Use `/workspace` as local writable scratch.\n5. Write final outputs to `/results/<job_id>/`.\n6. Inject secrets via Modal Secrets, especially `OPENAI_API_KEY`.\n7. Avoid putting secrets in files, prompts, logs, or mounted volumes.\n8. Make it easy to submit jobs programmatically.\n\nPlease inspect the current repo first and adapt to the existing structure. Do not rewrite everything unnecessarily. Prefer a small, clean integration.\n\nImplementation requirements:\n\n- Add Modal as a dependency if not already present.\n- Create a Modal app, probably in something like `modal_workers/agent_worker.py` or an equivalent location that fits this repo.\n- Define a Modal image that installs:\n  - Node.js / npm if needed\n  - Codex CLI\n  - git\n  - ripgrep\n  - fd/findutils if useful\n  - jq\n  - Python utilities already needed by the repo\n- Define or reference a Modal Volume for the dataset, e.g. `agent-dataset`.\n- Define or reference a Modal Volume for results if useful, e.g. `agent-results`.\n- Mount dataset Volume at `/data`.\n- Mount results Volume at `/results`.\n- Ensure workers run from `/workspace`, not `/data`.\n- Ensure the prompt tells Codex that `/data` is read-only and `/workspace` is writable.\n- Use `OPENAI_API_KEY` from a Modal Secret, e.g. `agent-keys`.\n\nThe core worker should look conceptually like:\n\n```python\n@app.function(\n    image=image,\n    volumes={\n        \"/data\": dataset_volume,\n        \"/results\": results_volume,\n    },\n    secrets=[modal.Secret.from_name(\"agent-keys\")],\n    cpu=4,\n    memory=8192,\n    timeout=3600,\n)\ndef run_codex_job(job_id: str, prompt: str, extra_context: dict | None = None):\n    ...\n```\n\nInside the worker:\n- Create `/workspace/<job_id>` or similar.\n- Write the task prompt to `/workspace/<job_id>/task.md`.\n- Run Codex CLI from the workspace directory.\n- Use non-interactive Codex mode, likely `codex exec`.\n- Include clear instructions in the Codex prompt:\n\n```text\nThe dataset is mounted at /data and must be treated as read-only.\nDo not modify files in /data.\nUse /workspace for scratch files, scripts, intermediate notes, and temporary indexes.\nWrite final outputs to /results/<job_id>/.\nDo not print environment variables or secrets.\n```\n\n- Capture stdout, stderr, return code, and runtime.\n- Save stdout/stderr to `/results/<job_id>/logs/`.\n- Save a final response or summary to `/results/<job_id>/answer.md` if Codex produces one.\n- Return a structured Python dict with:\n  - job_id\n  - status\n  - return_code\n  - stdout_tail\n  - stderr_tail\n  - result_path\n\nAlso add a local submit/test script, for example:\n\n```bash\npython -m modal_workers.submit_job --job-id test-001 --prompt \"Inspect /data and summarize what datasets are available.\"\n```\n\nor a simple Python function that calls the Modal function remotely.\n\nAdd a data migration script or documented command path for copying data from the current DigitalOcean volume into the Modal Volume. Use Modal’s documented volume upload approach if available. If direct upload of 1TB is awkward, write a clear staged migration plan:\n1. Package/sync dataset from DO.\n2. Upload into Modal Volume.\n3. Verify file count / byte size / sample reads.\n4. Run a smoke-test Codex job.\n5. Freeze DO volume as backup until Modal results are verified.\n\nImportant constraints:\n- Do not use the Modal Volume as a live multi-writer coordination layer.\n- Do not let workers write into `/data`.\n- Per-job results must go under unique paths like `/results/<job_id>/`.\n- Use an external DB/queue if the repo already has one; otherwise keep this PR focused on Modal worker execution, not a full queue system.\n- Keep current DigitalOcean path working until the Modal path is proven. Ideally add a config flag like `WORKER_BACKEND=modal|digitalocean` or similar.\n- Make the migration incremental.\n\nPlease produce:\n1. The Modal worker implementation.\n2. The submit/test script.\n3. Any required dependency/config changes.\n4. A README section explaining:\n   - how to create the Modal secrets\n   - how to create/upload the Modal Volume\n   - how to run a smoke test\n   - how to submit a real job\n   - known limitations around Volume concurrency and write visibility\n5. A minimal smoke test that verifies:\n   - `/data` is mounted\n   - `/workspace` is writable\n   - `OPENAI_API_KEY` is present but never printed\n   - Codex CLI can run\n   - results are written to `/results/<job_id>/`\n\nBefore coding, inspect the repo and tell me the smallest clean set of files you plan to touch. Then implement it.\n```\n\nOptional stricter add-on:\n\n```text\nStyle preferences:\n- Keep code minimal and boring.\n- Prefer typed Python.\n- Avoid clever abstractions.\n- Do not introduce a huge framework.\n- Do not log secrets.\n- Do not let Codex run from the mounted dataset directory.\n- Use per-job directories everywhere.\n```",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T16:16:44.491747+00:00",
+      "end": null,
+      "local": "2026-05-11T11:16:44.491747-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T16:16:44.491747+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0025"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0025",
+        "local_record_path": "records/chatgpt-0025.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "final",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}

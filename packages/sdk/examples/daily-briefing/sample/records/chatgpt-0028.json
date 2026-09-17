@@ -1,0 +1,49 @@
+{
+  "citation_id": "chatgpt-0028",
+  "prepared": {
+    "event_id": "event-chatgpt-0028",
+    "source": "chatgpt",
+    "source_order": 27,
+    "event_kind": "conversation",
+    "actor_role": "assistant",
+    "title": "Hosting Datasets with Runloop",
+    "text": "Yes. Modal is a good fit for this.\n\nYou have two different products/patterns:\n\n### 1. Batch-generated notebook report\n\nThis is what I’d do first.\n\n```txt\nModal worker\n  reads /data\n  runs Codex / scripts\n  creates report.ipynb\n  executes notebook\n  exports report.html\n  uploads/publishes HTML\n```\n\nModal supports Sandboxes for executing agent/user code, and Volumes/CloudBucketMounts can be attached so data is available inside the sandbox. citeturn501121search7turn501121search4\n\nThe worker can use:\n\n```bash\njupyter nbconvert --execute --to notebook report.ipynb\njupyter nbconvert --to html report.ipynb\n```\n\n`nbconvert` supports executing notebooks and saving outputs back into `.ipynb`, and also converting notebooks to formats like HTML from the command line. citeturn501121search6turn501121search1\n\nThen publish to one of:\n\n```txt\nR2 public bucket\nCloudflare Pages\nS3 static hosting\nyour own app route\nModal web endpoint\n```\n\nThis gives you a polished artifact:\n\n```txt\n/reports/job-123/report.ipynb\n/reports/job-123/report.html\n/reports/job-123/artifacts/*.png\n/reports/job-123/logs.txt\n```\n\n### 2. Live Jupyter notebook while research happens\n\nAlso possible, but different.\n\nModal has hosted notebooks and also an example of running a Jupyter notebook server inside a Modal Sandbox, then exposing it via a URL. citeturn501121search0turn501121search2 Modal also supports tunnels to expose live TCP ports from a container/Sandbox. citeturn501121search12\n\nThat would let you open a running Jupyter server and watch/edit interactively.\n\nBut for agent research, live Jupyter is often the wrong primitive. Better:\n\n```txt\nLive:\n  stream logs/events/tool calls to your UI\n\nFinal:\n  publish notebook + HTML report\n```\n\nThe agent can still write the notebook incrementally, but you probably don’t want to watch cells appear live unless you’re debugging.\n\n### The architecture I’d use\n\n```txt\nsubmit_research_job(prompt, dataset_refs)\n  ↓\nModal Sandbox / Function\n  ↓\n/data      mounted read-only corpus\n/workspace writable scratch\n/results   report output\n  ↓\nCodex CLI does research\n  ↓\nPython script builds report.ipynb\n  ↓\nnbconvert executes + exports HTML\n  ↓\nUpload report.html to R2/Pages\n  ↓\nReturn public URL\n```\n\nThe notebook is the **audit artifact**, not necessarily the live UI.\n\n### Codex flow\n\nPrompt Codex like:\n\n```text\nYou are running inside a Modal worker.\n\nDataset:\n- /data is read-only.\n- Use it only for reading corpus files.\n\nWorkspace:\n- /workspace is writable.\n- Write scripts, notes, charts, and intermediate files here.\n\nFinal report:\n- Create /results/{job_id}/report.ipynb.\n- The notebook should include:\n  1. Research question\n  2. Dataset/files inspected\n  3. Methods\n  4. Code cells for reproducibility\n  5. Findings\n  6. Charts/tables if useful\n  7. Limitations\n- Also create /results/{job_id}/summary.md.\n- Do not print secrets or environment variables.\n```\n\nThen after Codex exits, your wrapper runs:\n\n```bash\njupyter nbconvert \\\n  --execute \\\n  --to notebook \\\n  --inplace /results/$JOB_ID/report.ipynb\n\njupyter nbconvert \\\n  --to html \\\n  --output /results/$JOB_ID/report.html \\\n  /results/$JOB_ID/report.ipynb\n```\n\n### The live-research problem\n\nYou’re right: you would not automatically “see the research as it happens” if it’s just a background Modal job.\n\nFix that with one of these:\n\n**Simple V0**\n```txt\nstream stdout/stderr from Codex\nsave logs to /results/job-id/logs.txt\npoll job status from your app\n```\n\n**Better**\n```txt\nCodex wrapper emits events:\n- started\n- command_run\n- file_read\n- note_written\n- chart_created\n- notebook_cell_added\n- final_report_ready\n```\n\n**Best**\n```txt\nUse your own web UI:\nleft: live event stream\nright: generated notebook/report preview\nbottom: artifacts/files\n```\n\nI would not start by trying to make Jupyter itself the live UI. Use logs/events for live visibility, notebook for final proof.\n\n### Bottom line\n\nYes:\n\n```txt\nModal worker creates notebook: good\nModal worker publishes HTML: good\nModal hosted/running Jupyter: possible\nLive research visibility: build log/event streaming, not just notebook publishing\n```\n\nFor your product, the killer output is probably **“research report with reproducible notebook attached”**: HTML for normal users, `.ipynb` for technical users, logs/artifacts for auditability.",
+    "url": null,
+    "stream": "chatgpt",
+    "browser": null,
+    "platform": null,
+    "post_text": "",
+    "post_author": null,
+    "evidence_status": "assistant_message",
+    "time": {
+      "instant": "2026-05-11T16:30:45.764346+00:00",
+      "end": null,
+      "local": "2026-05-11T11:30:45.764346-05:00",
+      "day": "2026-05-11",
+      "basis": "original_message_create_time",
+      "precision": "microsecond",
+      "original": "2026-05-11T16:30:45.764346+00:00"
+    },
+    "text_basis": "saved_source_text",
+    "profile": null,
+    "source_refs": [
+      "chatgpt-0028"
+    ],
+    "source_records": [
+      {
+        "record_id": "chatgpt-0028",
+        "local_record_path": "records/chatgpt-0028.json"
+      }
+    ],
+    "url_key": null,
+    "media": [],
+    "attributes": {
+      "topic": "Hosting Datasets with Runloop",
+      "turn_started_at": null,
+      "channel": "final",
+      "thread_id": "example-thread-id-0001",
+      "turn_id": null
+    },
+    "document": "documents/document-001.md"
+  }
+}
