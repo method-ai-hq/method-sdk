@@ -6,7 +6,7 @@ import { methodMain } from '../../packages/sdk/src/method.js';
 import { exampleWorkflow, exampleFiles } from '../../packages/sdk/src/copy-message-example.js';
 
 const dirs: string[] = [];
-afterEach(() => { dirs.splice(0).forEach(p => rmSync(p, {recursive:true,force:true})); vi.restoreAllMocks(); process.exitCode = 0; });
+afterEach(() => { dirs.splice(0).forEach(p => rmSync(p, {recursive:true,force:true})); vi.restoreAllMocks(); vi.unstubAllEnvs(); process.exitCode = 0; });
 function setup() {
  const dir=mkdtempSync(join(tmpdir(),'method-setup-')); dirs.push(dir);
  for(const [name,data] of Object.entries(exampleFiles)) writeFileSync(join(dir,name),data);
@@ -73,6 +73,9 @@ it('treats harmless whitespace consistently after checking out an older saved do
 
 it('validates a simple local-agent Method without a configuration file', async()=>{
  const s=setup(); rmSync(join(s.dir,'runtime.json'));
+ // Validation checks the executable exists; it must not need a developer's Codex install.
+ writeFileSync(join(s.dir,'codex'), '#!/bin/sh\nexit 91\n', {mode:0o700});
+ vi.stubEnv('PATH', s.dir);
  writeFileSync(s.file,JSON.stringify({format:'method/3.1',name:'Reply',goal:'Return supplied text',inputs:{text:{type:'text'}},steps:{reply:{in:{text:'inputs.text'},do:{kind:'agent',model:'default',prompt:'Return {{text}}.',tools:[]},out:{answer:{type:'text'}}}},result:'answer'}));
  await methodMain(['validate',s.file]);expect(s.result().valid).toBe(true);
 });
