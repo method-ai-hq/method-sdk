@@ -65,3 +65,25 @@ it('packages the installed SDK root, not the compiled metadata directory',async(
  expect(existsSync(join(directory,'dist','packages','sdk','src','method.js'))).toBe(true);
  expect(existsSync(join(directory,'dist','packages','sdk','src','browser-service.py'))).toBe(true);
 });
+
+it('deploys post-run working files once and preserves them through setup retries',async()=>{
+ const r=root(),crm=join(r,'crm');mkdirSync(crm);writeFileSync(join(crm,'count.json'),'0');
+ writeFileSync(join(r,'update.cjs'),`const fs=require('node:fs'),path=require('node:path');let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const file=path.join(JSON.parse(s).crm,'count.json');const count=JSON.parse(fs.readFileSync(file))+1;fs.writeFileSync(file,JSON.stringify(count));console.log(JSON.stringify({count,saved:JSON.parse(fs.readFileSync(file))===count}));});`);
+ const method={format:'method/3.1',name:'Update working files',goal:'Increment the saved count.',inputs:{expected:{type:'boolean',default:true}},environment:{crm:{type:'files',description:'Persistent count'}},steps:{update:{changes:['environment.crm'],in:{crm:'environment.crm',expected:'inputs.expected'},do:{kind:'run',runtime:'node',entrypoint:'update.cjs'},out:{count:{type:'number'},saved:{type:'boolean'}},check:{equals:{actual:'saved',expected:'expected'}}}},result:'count'};
+ writeFileSync(join(r,'task.method'),JSON.stringify(method));writeFileSync(join(r,'runtime.json'),JSON.stringify({allow_local_processes:true,environment:{crm}}));
+ vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
+ await runCurrentFile(join(r,'task.method'),{'run-dir':join(r,'run')});
+ expect(readJson(join(crm,'count.json'))).toBe(1);
+ const review=await prepareDeployment(join(r,'run'));
+ expect(review.folders[0].writable).toBe(true);
+ const plan=readJson(join(planDirectory(review.id),'plan.json'));
+ expect(readJson(join(planDirectory(plan.id),'payload','files','crm','count.json'))).toBe(1);
+ const {initializeHome}=await import('../../packages/sdk/src/runner-deploy.js');
+ const home=await initializeHome(plan),target=join(home,'deployment','data','crm','count.json');
+ expect(readJson(target)).toBe(1);
+ writeFileSync(target,'2');await initializeHome(plan);expect(readJson(target)).toBe(2);
+ // Even interrupted setup before the final marker must keep an already seeded folder.
+ rmSync(join(home,'.prepared'));await initializeHome(plan);expect(readJson(target)).toBe(2);
+ expect(readJson(join(crm,'count.json'))).toBe(1);
+ writeFileSync(join(crm,'added.json'),'3');await expect(verifyPlan(plan)).rejects.toThrow('changed');
+});

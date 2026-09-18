@@ -70,13 +70,14 @@ export async function prepareDeployment(directory:string){
   for(const [name,def] of Object.entries(method.environment??{}) as [string,any][]){
    if(def.type==='browser'){if(!browserName(method))throw missing('This browser has no supported session export. Run it with the Method browser connection first.');config.environment[name]='method-browser:default';continue;}
    if(def.type==='files'){
-    if(Object.values(method.steps).some((s:any)=>s.changes?.includes(`environment.${name}`)))throw missing(`The writable folder ${name} needs a shared service connection or an explicit move before deployment.`);
+    const writable=Object.values(method.steps).some((s:any)=>s.changes?.includes(`environment.${name}`));
     const folder=source.folders[name];if(!folder||folder.error)throw missing(`Record the declared folder ${name} in a successful run before deployment.`);
+    if(writable&&!folder.completed)throw missing(`Complete a new run to record the updated folder ${name} before deployment.`);
     mkdirSync(join(payload,'files',name),{recursive:true,mode:0o700});
     const files=inventory(folder.path);if(digest(files)!==digest(folder.files))throw missing(`Folder ${name} changed after the successful run. Run the Method with these files first.`);
     for(const [path,entry] of Object.entries(files) as [string,any][])select(join(folder.path,path),join('files',name,path),entry.sha256);
-    folders.push({name,files:Object.keys(files).length,bytes:Object.values(files).reduce((n:number,v:any)=>n+v.bytes,0),sha256:digest(files)});
-    config.environment[name]=`/home/node/deployment/files/${name}`;
+    folders.push({name,writable,transfer:writable?'Copy once. Deployed runs update the runner copy; the original folder stays unchanged.':'Copy approved input files.',files:Object.keys(files).length,bytes:Object.values(files).reduce((n:number,v:any)=>n+v.bytes,0),sha256:digest(files)});
+    config.environment[name]=`/home/node/deployment/${writable?'data':'files'}/${name}`;
    }else{
     const value=config.environment?.[name];let url:URL;try{url=new URL(value);}catch{throw missing(`Connection ${name} needs a runner binding.`);}
     if(['localhost','[::1]','0.0.0.0'].includes(url.hostname)||url.hostname.endsWith('.localhost')||url.hostname.startsWith('127.'))throw missing(`Local service ${name} needs a runner connection before deployment.`);

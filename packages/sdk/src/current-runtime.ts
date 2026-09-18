@@ -1,4 +1,4 @@
-import {recordDeploymentSource} from './deployment-source.js';
+import {recordDeploymentSource,finishDeploymentSource} from './deployment-source.js';
 import {openBrowser} from './browser.js';
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from 'node:path';
@@ -65,6 +65,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       onEvent: async (event: any) => { await onEvent?.(event); sync?.snapshot(); if (flags.verbose) process.stderr.write(JSON.stringify(event) + "\n"); },
     });
     runFailed = result.status !== 'completed';
+    if(!runFailed)finishDeploymentSource(authoringPath(flags['run-dir']!),method,config);
     await sync?.finish();
     const display=sync&&flags['run-dir']?{...result,dashboard_sync:existsSync(join(authoringPath(flags['run-dir']),'method-pending.json'))?'pending':'saved'}:result;
     process.stdout.write(JSON.stringify(display, null, 2) + "\n");

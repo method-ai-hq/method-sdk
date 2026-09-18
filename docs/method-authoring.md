@@ -630,13 +630,13 @@ method deploy --login DEPLOYMENT_ID [--agent codex|claude]
 ```
 
 Arguments and defaults:
-Preparation uses the selected Method runner and shows its files, inputs, state, and account scope. Approval applies that exact plan and checks access. --run starts a separate business run. --resume continues an existing runner run with the same inputs.
+Preparation uses the selected Method runner and shows its files, inputs, state, and account scope. Approval applies that exact plan and checks access. Writable folders are copied once into persistent runner storage; local originals remain unchanged. --run starts a separate business run. --resume continues an existing runner run with the same inputs.
 
 Result and changes:
 Prepared review and approval command, or readiness and run command. Missing website sign-ins return a local viewer. Missing agent access returns a runner login command. Both continue the same deployment. Preparation transfers no user data. Session state stays outside the Method package and image.
 
 Errors:
-Changed files, missing runner access, unsupported local dependencies, or a writable folder without a shared connection. Missing setup exits 2.
+Changed files, missing runner access, unsupported local dependencies, or missing completed-run file records. Missing setup exits 2.
 
 Example:
 

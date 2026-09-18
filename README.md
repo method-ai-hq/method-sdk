@@ -7,14 +7,14 @@ The canonical source for the JavaScript SDK, Python binding, and `method` CLI. B
 ## Install
 
 ```sh
-npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.10.6/withmethod-sdk-0.10.6.tgz
+npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.10.7/withmethod-sdk-0.10.7.tgz
 method --version
 ```
 
 Node.js 22 or later is required. Python 3.11 or later uses the installed Node package:
 
 ```sh
-pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.10.6/withmethod-0.10.6-py3-none-any.whl
+pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.10.7/withmethod-0.10.7-py3-none-any.whl
 withmethod authoring
 ```
 

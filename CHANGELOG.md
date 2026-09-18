@@ -1,3 +1,8 @@
+# 0.10.7
+
+- Deploy writable folders from their completed-run contents into persistent runner storage.
+- Keep runner changes on repeated setup, later runs, and container recreation. Local originals remain unchanged.
+
 # 0.10.6
 
 - Clarify that visible browser tasks return to headless mode.

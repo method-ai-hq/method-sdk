@@ -1,4 +1,4 @@
-import {existsSync,mkdirSync,readFileSync,writeFileSync,cpSync,chmodSync,openSync,closeSync,unlinkSync} from 'node:fs';
+import {existsSync,mkdirSync,readFileSync,writeFileSync,cpSync,chmodSync,openSync,closeSync,unlinkSync,renameSync,rmSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
@@ -47,12 +47,23 @@ async function image(plan:any){
  // This build context contains only released code. Private files are mounted later.
  await docker(plan,['build','--tag',tag,context]);plan.image=JSON.parse((await docker(plan,['image','inspect',tag])).stdout)[0].Id;writePrivateJson(join(root,'plan.json'),plan);return plan.image;
 }
-async function initializeHome(plan:any){
+export async function initializeHome(plan:any){
  const root=planDirectory(plan.id),runnerHome=join(root,'runner'),payload=join(root,'payload');
  mkdirSync(runnerHome,{recursive:true,mode:0o700});
  if(existsSync(join(runnerHome,'.prepared')))return runnerHome;
  cpSync(join(payload,'package'),join(runnerHome,'deployment','package'),{recursive:true});
- if(existsSync(join(payload,'files')))cpSync(join(payload,'files'),join(runnerHome,'deployment','files'),{recursive:true});
+ for(const folder of plan.folders??[]){
+  const parent=join(runnerHome,'deployment',folder.writable?'data':'files');
+  const target=join(parent,folder.name);
+  if(folder.writable&&existsSync(target))continue;
+  mkdirSync(parent,{recursive:true,mode:0o700});
+  // Publish a complete initial copy. Retrying setup never replaces working data.
+  const staging=join(parent,`.${folder.name}.initial`);
+  rmSync(staging,{recursive:true,force:true});
+  cpSync(join(payload,'files',folder.name),staging,{recursive:true});
+  if(folder.writable)renameSync(staging,target);
+  else {rmSync(target,{recursive:true,force:true});renameSync(staging,target);}
+ }
  for(const file of ['inputs.json','runtime.json','runtime-environment.json','saved-request.json'])if(existsSync(join(payload,file)))privateCopy(join(payload,file),join(runnerHome,'deployment',file));
  const privateRoot=join(payload,'private');
  if(existsSync(join(privateRoot,'codex-auth.json')))privateCopy(join(privateRoot,'codex-auth.json'),join(runnerHome,'.codex','auth.json'));

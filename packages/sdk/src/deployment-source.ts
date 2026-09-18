@@ -30,6 +30,8 @@ export function inventory(root:string):Record<string,{sha256:string;bytes:number
  }
  walk(root);return result;
 }
+export const writableFolder=(method:any,name:string)=>Object.values(method.steps??{}).some((step:any)=>step.changes?.includes(`environment.${name}`));
+
 export function recordDeploymentSource(run:string,root:string,file:string,method:any,config:any){
  const destination=join(run,'deployment-source');mkdirSync(destination,{recursive:true,mode:0o700});
  const dependencies:Record<string,string>={};
@@ -38,7 +40,19 @@ export function recordDeploymentSource(run:string,root:string,file:string,method
  }
  const folders:Record<string,any>={};
  for(const [name,def] of Object.entries(method.environment??{}) as [string,any][])
-  if(def.type==='files'&&config.environment?.[name]){try{folders[name]={path:config.environment[name],files:inventory(config.environment[name])};}catch{folders[name]={error:'Folder requires preparation before deployment.'};}}
+  if(def.type==='files'&&config.environment?.[name]){try{folders[name]={path:config.environment[name],writable:writableFolder(method,name),files:inventory(config.environment[name])};}catch{folders[name]={error:'Folder requires preparation before deployment.'};}}
  const sidecar=existsSync(`${file}.method.json`)?readJson(`${file}.method.json`):undefined;
  writePrivateJson(join(run,'deployment-source.json'),{sdk:packageInfo.version,executor:runtimeInfo.version,dependencies,folders,...(sidecar?{saved:sidecar}:{})});
+}
+
+/** Record the final working files only after business execution succeeds. */
+export function finishDeploymentSource(run:string,method:any,config:any){
+ const file=join(run,'deployment-source.json');if(!existsSync(file))return;
+ const source=readJson(file);
+ for(const [name,def] of Object.entries(method.environment??{}) as [string,any][]){
+  if(def.type!=='files'||!writableFolder(method,name))continue;
+  try{source.folders[name]={path:config.environment[name],writable:true,completed:true,files:inventory(config.environment[name])};}
+  catch{source.folders[name]={error:'The updated folder could not be recorded. Complete a new run before deployment.'};}
+ }
+ writePrivateJson(file,source);
 }
