@@ -39,7 +39,18 @@ export async function startRunWorker(args:string[], directory:string, background
 export function workerAlive(directory:string) {
   const path=join(resolve(directory),'worker.json');if(!existsSync(path))return false;
   const state=JSON.parse(readFileSync(path,'utf8'));if(state.status!=='running')return false;
-  try {const args=execFileSync('ps',['-p',String(state.pid),'-o','args='],{encoding:'utf8'});return args.includes(join(resolve(directory),'worker-request.json'));}catch{return false;}
+  if(!Number.isSafeInteger(state.pid)||state.pid<=0)throw Error('The worker record has an invalid process ID.');
+  const request=join(resolve(directory),'worker-request.json');
+  try {
+    if(process.platform==='linux')return readFileSync(`/proc/${state.pid}/cmdline`,'utf8').split('\0').includes(request);
+    const args=execFileSync('/bin/ps',['-p',String(state.pid),'-o','args='],{encoding:'utf8'});
+    return args.includes(request);
+  } catch {
+    // Only a missing process means stopped. An inspection error must not allow
+    // another worker to start or make cancellation claim there is nothing to stop.
+    try {process.kill(state.pid,0);}catch(error:any){if(error.code==='ESRCH')return false;}
+    throw Error('Could not check the run worker. Its status is unknown; do not start another run.');
+  }
 }
 export async function waitForRun(directory:string) {
   directory=resolve(directory);let offsets={out:0,err:0}; const deadline=Date.now()+30_000;

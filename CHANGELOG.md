@@ -1,3 +1,8 @@
+# 0.10.8
+
+- Preserve complete Claude result events within the existing process output limit.
+- Check Linux worker processes without requiring ps; retain macOS process checks. Report inspection errors instead of claiming a worker stopped.
+
 # 0.10.7
 
 - Deploy writable folders from their completed-run contents into persistent runner storage.

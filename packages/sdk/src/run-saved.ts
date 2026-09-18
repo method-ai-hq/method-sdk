@@ -13,7 +13,7 @@ import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
 
 // Older versions are listed only after their saved-package tests pass.
-const supportedPackageRuntimes = new Set([runtimeVersion, '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1']);
+const supportedPackageRuntimes = new Set([runtimeVersion, '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2']);
 
 export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values'], client:MethodClient) {
   const directory=resolve(flags['run-dir']??join(methodCache(),'runs',randomUUID()));
