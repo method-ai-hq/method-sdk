@@ -1,3 +1,7 @@
+# 0.10.9
+
+- Remove the sample briefing README from the source folder and start reading at the timeline.
+
 # 0.10.8
 
 - Preserve complete Claude result events within the existing process output limit.

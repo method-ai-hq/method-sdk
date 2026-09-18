@@ -17,7 +17,7 @@ def inputs(a):
     if prepared != Path(a['prepared_day']).resolve():
         raise ValueError('Method folders do not match the runtime tool bindings')
     required = {
-        'selected_day': ['README.md', 'timeline.jsonl', 'untimed.jsonl', 'records/',
+        'selected_day': ['timeline.jsonl', 'untimed.jsonl', 'records/',
                          'metadata/documents.json'],
     }
     for which, names in required.items():
@@ -38,7 +38,7 @@ def inputs(a):
                 if local.date().isoformat() != date or local.utcoffset() != saved.utcoffset():
                     raise ValueError('Selected timezone does not match the prepared times')
     report = (Path(__file__).parent/'approved-report.md').read_text()
-    return {'selected_day': {'source_digest': source_digest(), 'folder': str(prepared), 'day': date, 'timezone': a['timezone'], 'start': 'README.md'},
+    return {'selected_day': {'source_digest': source_digest(), 'folder': str(prepared), 'day': date, 'timezone': a['timezone'], 'start': 'timeline.jsonl'},
             'session_links': '\n'.join('['+g['platform']+' '+g['start']+'–'+g['end']+'](sessions.html#'+g['id']+')' for g in social_sessions(prepared)),
             'example': {'report': report}}
 

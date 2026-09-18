@@ -19,7 +19,6 @@
   "daily-briefing/package.json",
   "daily-briefing/reader/reader.css",
   "daily-briefing/reader/reader.js",
-  "daily-briefing/sample/README.md",
   "daily-briefing/sample/context.json",
   "daily-briefing/sample/documents/document-001.md",
   "daily-briefing/sample/media.json",
