@@ -1,3 +1,7 @@
+# 0.10.6
+
+- Clarify that visible browser tasks return to headless mode.
+
 # 0.10.5
 
 - Omit Node development headers and documentation from standalone CLI downloads. Keep Node, npm, and licenses.
