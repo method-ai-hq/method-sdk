@@ -36,7 +36,7 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
       ...(typeof event.operation_id === 'string' ? {operation_id: event.operation_id} : {}),
       ...(typeof event.confidence === 'number' ? {confidence: event.confidence} : {}),
       ...(event.kind === 'classify' && event.usage !== undefined ? {usage: event.usage} : {}),
-      ...(typeof event.duration_ms === 'number' ? {duration_ms: event.duration_ms} : {}),
+      ...(typeof event.duration_ms === 'number' ? {duration_ms: event.duration_ms} : event.event.startsWith('run.') && typeof event.elapsed_ms === 'number' ? {duration_ms: event.elapsed_ms} : {}),
       at: event.at, type: event.event === "human.required" ? "human_input_required" : event.event.replaceAll(".", "_"),
       ...(event.check ? { detail: `${event.check.status}: ${event.check.reason}` } : event.message || event.error ? { detail: String(event.message ?? event.error).slice(0, 4000) } : event.code ? { detail: String(event.code) } : {}),
       ...(Number.isInteger(event.sequence) ? { sequence: event.sequence } : {}),

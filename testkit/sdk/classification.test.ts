@@ -51,6 +51,8 @@ it('runs without an installed agent, saves the model once, and reuses accepted c
   expect(f.fetcher).toHaveBeenCalledTimes(2);
   expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(config);
   const completed = inspectCurrentRun(f.runDir); expect(completed.started_at).toBe(inspection.started_at);
+  const trace = readFileSync(join(f.runDir,'events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+  expect(completed.events?.find(e=>e.type==='run_completed')?.duration_ms).toBe(trace.find(e=>e.event==='run.completed').elapsed_ms);
   const sync = new MethodSync(f.client,f.runDir,'method-one','version-one');
   await sync.start(completed.workflow,completed.inputs,{}); await sync.finish();
   const inference = f.fetcher.mock.calls.filter(([url])=>String(url).endsWith('/classifications'));
