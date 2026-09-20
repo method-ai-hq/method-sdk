@@ -96,7 +96,7 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     if (!v.name || !v.goal) throw Error("Supply --name and --goal.");
     const path = authoringPath(file);
     if (existsSync(path) || existsSync(`${path}.method.json`)) throw Error("Choose a new draft file.");
-    const draft = { format: "method/3.1", name: v.name, goal: v.goal, steps: {}, result: {} };
+    const draft = { format: "method/3.2", name: v.name, goal: v.goal, steps: {}, result: {} };
     // Exclusive creation prevents simultaneous init from replacing a draft.
     mkdirSync(dirname(path), {recursive:true,mode:0o700});
     const fd = openSync(path, "wx", 0o600); closeSync(fd); writeDocument(path, draft); print({ file: path, workflow: draft }); return true;

@@ -2,7 +2,7 @@ import { stringify } from "yaml";
 import { validateMethod } from '@withmethod/runtime/document.js';
 export { parseDocumentValue, shapeErrors, MethodValidationError } from '@withmethod/runtime/document.js';
 export { outputSchema } from '@withmethod/runtime/semantics.js';
-import { type Workflow, type Step, type Shape } from "./schema.js";
+import { effectiveOutputs, type Workflow, type Step, type Shape } from "./schema.js";
 
 export function serializeWorkflow(value: unknown): string { return stringify(value, { lineWidth: 0 }); }
 export function shapeObject(shape: Shape): Exclude<Shape, string> { return typeof shape === "string" ? { type: shape } : shape; }
@@ -19,7 +19,7 @@ export function validateShape(shape: Shape, label: string): void {
 export function references(step: Step): string[] { return [...Object.values(step.in ?? {}), ...Object.values(step.each ?? {}), ...(step.when ? [step.when] : [])]; }
 export function producers(workflow: Workflow): Map<string, string> {
   const result = new Map<string, string>();
-  for (const [id, step] of Object.entries(workflow.steps)) for (const name of Object.keys(step.out ?? {})) {
+  for (const [id, step] of Object.entries(workflow.steps)) for (const name of Object.keys(effectiveOutputs(step))) {
     if (["inputs", "state", "environment", "run"].includes(name) || result.has(name)) throw Error(`Output ${name} must have one unique name.`);
     result.set(name, id);
   }
@@ -33,7 +33,7 @@ export function referenceShape(workflow: Workflow, reference: string): Shape | u
   if (root === "inputs" || root === "state") shape = workflow[root]?.[parts.shift()!];
   else {
     const producer = producers(workflow).get(root), step = producer ? workflow.steps[producer] : undefined;
-    shape = step?.out?.[root];
+    shape = step ? effectiveOutputs(step)[root] : undefined;
     if (shape && step?.each) shape = { type: "list", items: shape };
   }
   if (!shape) throw Error(`Unknown data ${reference}.`);

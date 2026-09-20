@@ -48,7 +48,7 @@ it("provides offline command-specific help and rejects unknown topics before cre
 it("runs the exact shell example printed in the guide and checks its data connections with the executor", async () => {
   const dir = temp();
   const source = authoringGuide("commands").match(/```yaml\n([\s\S]*?)\n```/)![1]!;
-  expect(loadWorkflow(source).format).toBe("method/3.1");
+  expect(loadWorkflow(source).format).toBe("method/3.2");
   const script = authoringGuide("commands").split("## Example: build with editing commands")[1]!.match(/```sh\n([\s\S]*?)\n```/)![1]!;
   const out = shell(dir, script);
   expect(out).toContain('"valid": true');

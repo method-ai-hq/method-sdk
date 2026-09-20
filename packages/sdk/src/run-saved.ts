@@ -13,7 +13,7 @@ import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
 
 // Older versions are listed only after their saved-package tests pass.
-const supportedPackageRuntimes = new Set([runtimeVersion, '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2']);
+const supportedPackageRuntimes = new Set([runtimeVersion, '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
 
 export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values'], client:MethodClient) {
   const directory=resolve(flags['run-dir']??join(methodCache(),'runs',randomUUID()));
@@ -50,7 +50,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     else if(saved.package&&!supportedPackageRuntimes.has(saved.package.runtime))throw Object.assign(new Error(`This package records runtime ${saved.package.runtime}; installed executor: ${runtimeVersion}. Use an SDK release that supports this package runtime.`),{code:'needs_update'});
     if(flags.resume&&existsSync(join(directory,'checkpoint.json'))&&!existsSync(join(directory,'runtime.resolved.json'))){
       const file=join(directory,'saved.method');writePrivateJson(file,saved.workflow);
-      return await runCurrentFile(file,{...flags,workspace:flags.workspace??process.cwd(),'run-dir':directory},()=>sync);
+      return await runCurrentFile(file,{...flags,workspace:flags.workspace??process.cwd(),'run-dir':directory},()=>sync,undefined,client);
     }
     const root=saved.package?join(directory,'source'):resolve(flags.workspace??process.cwd());
     await restorePackage(saved,root,client);
@@ -78,7 +78,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
         writePrivateJson(join(directory,'state-pending.json'),commit);
         const result=await client.request<any>(statePath,'POST',commit);revision=result.revision;
       }
-    });
+    },client);
     if(acquired&&result.status==='completed'){await client.request(statePath,'POST',{action:'release',run_id:request.run_id});acquired=false;}
     return {run_id:request.run_id,directory,...result};
   } catch(error:any) {

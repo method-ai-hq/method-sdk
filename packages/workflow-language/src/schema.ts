@@ -13,7 +13,7 @@ export const DataSchema = z.strictObject({ type: TypeSchema, description: Text.o
 export const InputSchema = DataSchema.extend({ default: JsonSchema.optional() });
 export const EnvironmentSchema = z.strictObject({ type: z.enum(["browser", "service", "desktop", "files", "tool"]), description: Text });
 export type ExactCheck = {equals:{actual:string;expected:string}} | {count:{value:string;min?:number;max?:number}} | {present:string} | {file:string};
-export type BaseStep = {name?:string; in?:Record<string,string>; ask?:string; out?:Record<string,z.infer<typeof DataSchema>>; each?:Record<string,string>; when?:string; after?:string|string[]; changes?:string[]};
+export type BaseStep = {name?:string; in?:Record<string,string>; ask?:string; out?:string|Record<string,z.infer<typeof DataSchema>>; each?:Record<string,string>; when?:string; after?:string|string[]; changes?:string[]};
 export type DataDefinition = z.infer<typeof DataSchema>;
 export const FileArtifactSchema = z.strictObject({ path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/) });
 
@@ -36,7 +36,8 @@ import { methodShape, stepShape, checkShape } from "@withmethod/runtime/document
 import { methodSchema } from "@withmethod/runtime/schema.js";
 export type RunExecution = { kind: "run"; runtime: string; entrypoint: string; args?: string[] };
 export type AgentExecution = { kind: "agent"; model: string; prompt: string; tools?: string[]; browser?: string };
-export type Execution = RunExecution | AgentExecution | { kind: "call"; model: string; prompt: string };
+export type ClassifyExecution = { kind: "classify"; question: string; options: Record<string, string> };
+export type Execution = ClassifyExecution | RunExecution | AgentExecution | { kind: "call"; model: string; prompt: string };
 export type CurrentCheck = ExactCheck | RunExecution | AgentExecution;
 export type CurrentStep = BaseStep & {
   purpose?: string; do?: Execution; check?: CurrentCheck;
@@ -46,7 +47,7 @@ export type CurrentStep = BaseStep & {
 };
 export type CurrentWorkflow = {
   name: string; goal: string; inputs?: Record<string,z.infer<typeof InputSchema>>; environment?: Record<string,z.infer<typeof EnvironmentSchema>>; result: string | Record<string,string>;
-  format: "method/3.1"; run_prompt?: string; files?: string[];
+  format: "method/3.1" | "method/3.2"; run_prompt?: string; files?: string[];
   state?: Record<string, z.infer<typeof InputSchema>>; steps: Record<string, CurrentStep>;
 };
 function currentShape<T>(validate: any): z.ZodType<T> {
@@ -65,8 +66,15 @@ export type Step = Workflow["steps"][string];
 export type Check = NonNullable<Step["check"]>;
 export function executionText(step: Step): string {
   if (!step.do) return step.ask ?? "";
-  return step.do.kind === "run" ? [step.do.runtime, step.do.entrypoint, ...(step.do.args ?? [])].join(" ") : step.do.prompt;
+  return step.do.kind === "run" ? (step.purpose ?? "No script description was recorded.") : step.do.kind === "classify" ? step.do.question : step.do.prompt;
 }
 export function executionLabel(step: Step): string {
-  return step.ask ? "Human input" : typeof step.do === "object" ? ({ run: "Script", call: "Model call", agent: "Agent" }[step.do.kind]) : "Agent";
+  return step.ask ? "Human input" : typeof step.do === "object" ? ({ run: "Script", call: "Model call", agent: "Agent", classify: "Classification" }[step.do.kind]) : "Agent";
+}
+
+import { effectiveOutputs as runtimeOutputs } from '@withmethod/runtime/semantics.js';
+export function effectiveOutputs(step: Step): Record<string, DataDefinition> { return runtimeOutputs(step); }
+
+export function executionCommand(execution: RunExecution): string {
+  return [execution.runtime, execution.entrypoint, ...(execution.args ?? [])].join(' ');
 }

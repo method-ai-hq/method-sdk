@@ -1647,7 +1647,7 @@ method run wf_example --version version_example --config runtime.json --workspac
 ## Copy a message: syntax reference
 
 ```yaml
-format: method/3.1
+format: method/3.2
 name: Copy a message
 goal: Preserve every character of a supplied message.
 inputs:
@@ -1656,6 +1656,7 @@ inputs:
     description: The complete message to preserve.
 steps:
   copy:
+    name: Copy message
     purpose: Preserve the exact message.
     in:
       message: inputs.message
@@ -1693,6 +1694,7 @@ message:
 METHOD_EXAMPLE
 
 cat > 'copy.yaml' <<'METHOD_EXAMPLE'
+name: Copy message
 purpose: Preserve the exact message.
 in:
   message: inputs.message

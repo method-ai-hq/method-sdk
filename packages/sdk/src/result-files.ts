@@ -1,3 +1,4 @@
+import { effectiveOutputs } from '../../workflow-language/src/schema.js';
 import { gzipSync, gunzipSync } from "node:zlib";
 import { Buffer } from "node:buffer";
 import { dirname, join, resolve, sep, extname } from "node:path";
@@ -172,7 +173,7 @@ export function attachResultFiles(
   };
   for (const row of Object.values(invocations))
     for (const [name, shape] of Object.entries(
-      workflow.steps[row.step_id]?.out ?? {},
+      effectiveOutputs(workflow.steps[row.step_id] ?? {}),
     ))
       visit(shape, row.outputs?.[name], name.replaceAll("_", " "));
   return files;

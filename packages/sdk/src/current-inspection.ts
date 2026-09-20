@@ -31,6 +31,12 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
     const recorded: NonNullable<RunInspection["events"]>[number] = {
       ...(typeof event.provider === 'string' ? {provider:event.provider} : {}),
       ...(typeof event.model === 'string' ? {model:event.model} : {}),
+      ...(event.kind === 'classify' ? {kind: 'classify' as const} : {}),
+      ...(typeof event.request_id === 'string' ? {request_id: event.request_id} : {}),
+      ...(typeof event.operation_id === 'string' ? {operation_id: event.operation_id} : {}),
+      ...(typeof event.confidence === 'number' ? {confidence: event.confidence} : {}),
+      ...(event.kind === 'classify' && event.usage !== undefined ? {usage: event.usage} : {}),
+      ...(typeof event.duration_ms === 'number' ? {duration_ms: event.duration_ms} : {}),
       at: event.at, type: event.event === "human.required" ? "human_input_required" : event.event.replaceAll(".", "_"),
       ...(event.check ? { detail: `${event.check.status}: ${event.check.reason}` } : event.message || event.error ? { detail: String(event.message ?? event.error).slice(0, 4000) } : event.code ? { detail: String(event.code) } : {}),
       ...(Number.isInteger(event.sequence) ? { sequence: event.sequence } : {}),
@@ -46,6 +52,9 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
     if (!event.step) { runEvents.push(recorded); continue; }
     const id = `${event.step}:${event.iteration ?? 0}`;
     const row = invocations[id] ??= { step_id: event.step, status: "running", checks: [], changes: {}, events: [] };
+    if (event.event === "step.started") {
+      row.events = []; row.changes = {}; delete row.prompts; delete row.verification; delete row.failure;
+    }
     row.events.push(recorded);
     if (event.event === "prompt.rendered") (row.prompts ??= []).push({ sequence: event.sequence, phase: event.phase, template: event.template, rendered: event.rendered });
     if (event.event === "step.started") { row.status = "running"; row.inputs = event.inputs; row.checks = []; delete row.outputs; delete row.error; }
@@ -59,6 +68,8 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
   const files = includeFiles ? attachResultFiles(workflow, invocations, [join(root, "artifacts")], join(root, "artifacts"), includeFiles === "references") : undefined;
   const lastAccepted = events.filter(e => e.event === "step.accepted").at(-1);
   return InspectionSchema.parse({ schema: "workflow-inspection/2", workflow, run_id: basename(root), local_run_directory: root,
+    ...(typeof (summary.started_at ?? start?.at) === 'string' ? {started_at: summary.started_at ?? start.at} : {}),
+    ...(typeof (summary.device_name ?? start?.device_name) === 'string' ? {device_name: summary.device_name ?? start.device_name} : {}),
     events: runEvents, ...(includeFiles ? { files } : {}), status: active ? "running" : summary.status === "completed" ? "succeeded" : "needs_attention",
     ...(summary.error ? { error: summary.error } : {}), inputs: start?.inputs ?? {}, state: lastAccepted?.state ?? start?.initial_state ?? {},
     resources: Object.fromEntries(Object.entries(start?.config?.environment ?? {}).map(([key, value]) => [key, { description: workflow.environment?.[key]?.description ?? key, path: value }])), invocations });

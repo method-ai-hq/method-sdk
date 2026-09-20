@@ -62,7 +62,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     const result=args[0]==='wait'?await waitForRun(directory):args[0]==='cancel'?cancelRun(directory):{running:workerAlive(directory),...(existsSync(join(directory,'worker.json'))?readDocument(join(directory,'worker.json')):{})};
     process.stdout.write(JSON.stringify(result)+'\n');return;
   }
-  if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.1\n`); return; }
+  if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.2\n`); return; }
   if (args[0] === 'run' && /^https?:/.test(args[1] ?? '')) {
     const url = new URL(args[1]!);
     const match = url.pathname.match(/^\/methods\/([^/]+)$/);

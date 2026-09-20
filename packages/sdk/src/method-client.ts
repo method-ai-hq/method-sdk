@@ -62,6 +62,7 @@ export class MethodClient {
     method = "GET",
     body?: unknown,
     authenticated = true,
+    options: {signal?: AbortSignal; timeoutMs?: number; maxResponseBytes?: number} = {},
   ): Promise<T> {
     if (!path.startsWith("/") || path.startsWith("//"))
       throw Error("Use a Method API path.");
@@ -71,14 +72,24 @@ export class MethodClient {
     const response = await this.fetcher(this.server + path, {
       method,
       redirect: "error",
-      signal: AbortSignal.timeout(15_000),
+      signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs ?? 15_000)]) : AbortSignal.timeout(options.timeoutMs ?? 15_000),
       headers: {
         ...(body === undefined ? {} : { "content-type": "application/json" }),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    const text = await response.text();
+    let text: string;
+    if (options.maxResponseBytes !== undefined) {
+      const reader = response.body?.getReader(), chunks: Uint8Array[] = []; let length = 0;
+      if (reader) for (;;) {
+        const {done, value} = await reader.read(); if (done) break;
+        length += value.byteLength;
+        if (length > options.maxResponseBytes) { await reader.cancel(); throw Error('Method response exceeds the size limit.'); }
+        chunks.push(value);
+      }
+      text = Buffer.concat(chunks).toString('utf8');
+    } else text = await response.text();
     let result: any;
     try { result = JSON.parse(text); }
     catch {
@@ -86,9 +97,9 @@ export class MethodClient {
       throw Error(`${response.status}: ${title || response.statusText || "Method returned a non-JSON response"} (${method} ${path}). Local run files are preserved.`);
     }
     if (!response.ok)
-      throw Error(
-        `${response.status}: ${result.message ?? result.error ?? "Method request failed"}`,
-      );
+      throw Object.assign(Error(
+        `${response.status}: ${String(result.message ?? result.error ?? "Method request failed").slice(0, 1000)}`,
+      ), {status: response.status, code: typeof result.code === 'string' ? result.code.slice(0,100) : 'method_request_failed'});
     return result as T;
   }
   async transfer(path: string, data?: Uint8Array): Promise<Uint8Array> {
