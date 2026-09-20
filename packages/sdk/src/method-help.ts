@@ -1,3 +1,5 @@
+import { exampleSelection } from "./authoring-instructions.js";
+export { exampleSelection } from "./authoring-instructions.js";
 import { exampleCatalog, renderExample } from "./authoring-example.js";
 
 type Command = { usage: string; purpose: string; arguments: string; result: string; errors: string; example: string; remote?: boolean };
@@ -67,7 +69,6 @@ export function renderCommand(name: string, includeCommon = true): string {
   return `## ${name}\n\n${entry.purpose}\n\nUsage:\n\n\`\`\`sh\n${entry.usage}\n\`\`\`\n\nArguments and defaults:\n${entry.arguments}\n\nResult and changes:\n${entry.result}${entry.errors ? `\n\nErrors:\n${entry.errors}` : ""}\n\nExample:\n\n\`\`\`sh\n${entry.example}\n\`\`\`\n` + (includeCommon ? `\n${entry.remote ? serverHelp + "\n" : ""}${exitHelp}\n\nCommon errors:\n${commonErrors}\n` : "");
 }
 
-export const exampleSelection = "Once you understand the requested work, choose one example from the catalog whose execution structure best fits it. Read that complete example with method authoring example EXAMPLE_ID and use it as your one-shot reference. Choose by the work's structure: classification, persistent state, browser research, or report production.";
 const start = `# Author with Method
 
 Build a Method for the user's repeated work. Understand the request and what a good result looks like before choosing an example.

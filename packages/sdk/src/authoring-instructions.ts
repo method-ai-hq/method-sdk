@@ -1,0 +1,2 @@
+/** Shared authoring text; safe to import in the dashboard and public site. */
+export const exampleSelection = "Once you understand the requested work, choose one example from the catalog whose execution structure best fits it. Read that complete example with method authoring example EXAMPLE_ID and use it as your one-shot reference. Choose by the work's structure: classification, persistent state, browser research, or report production.";

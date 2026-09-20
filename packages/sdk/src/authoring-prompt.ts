@@ -1,4 +1,4 @@
-import { exampleSelection } from "./method-help.js";
+import { exampleSelection } from "./authoring-instructions.js";
 
 export const authoringPrompt = `I want to turn some repeated work into a method using the Method CLI. Can you help me do that?
 
