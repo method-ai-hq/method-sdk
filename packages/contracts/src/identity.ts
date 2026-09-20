@@ -21,9 +21,14 @@ export function semanticDigest(value: unknown): string {
   return sha256(canonicalJson(value));
 }
 
-/** Document identity includes authored step order; execution identity remains semanticDigest. */
+/** Document identity preserves authored step and classifier option order. */
 export function workflowDocumentDigest(value: { steps: Record<string, unknown> }): string {
-  return semanticDigest({ ...value, steps: Object.entries(value.steps) });
+  return semanticDigest({ ...value, steps: Object.entries(value.steps).map(([id, raw]) => {
+    const step = raw as {do?: {kind?: string; options?: Record<string, unknown>}} | null;
+    return [id, step?.do?.kind === 'classify'
+      ? {...step, do: {...step.do, options: Object.entries(step.do.options ?? {})}}
+      : raw];
+  }) });
 }
 
 function canonicalize(value: unknown): unknown {

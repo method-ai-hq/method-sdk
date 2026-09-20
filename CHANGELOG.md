@@ -1,3 +1,7 @@
+# 0.11.2
+
+- Preserve authored classifier option order in saved document and package identities, so an order-only change creates a version.
+
 # 0.11.1
 
 - Preserve total run duration in inspection and sync.
