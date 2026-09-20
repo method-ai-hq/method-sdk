@@ -1,3 +1,11 @@
+# 0.11.0
+
+- Add Method 3.2 classification through the Method account, with a saved model version and one request per invocation.
+- Require script descriptions and record stable operation IDs for retry. Preserve run start time, device, classifier usage, and attempt-specific evidence in inspection.
+- Ship four complete authoring examples. Select one by structure with `method authoring example EXAMPLE_ID`; the general guide shows the catalog.
+- Include an offline ticket recovery test that proves retry creates no duplicate and reuses accepted classification.
+- Use runtime 0.9.0. Existing Method 3.1 definitions remain supported.
+
 # 0.10.9
 
 - Remove the sample briefing README from the source folder and start reading at the timeline.

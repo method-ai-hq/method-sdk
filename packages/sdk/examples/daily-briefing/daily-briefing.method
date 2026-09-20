@@ -1,7 +1,6 @@
-format: method/3.1
+format: method/3.2
 name: Write a daily briefing
-goal: Turn one prepared day folder into a complete, cited daily briefing. Follow the approved
-  example for writing and layout, and save the briefing with its website.
+goal: Turn one prepared day folder into a complete, cited daily briefing. Follow the approved example for writing and layout, and save the briefing with its website.
 inputs:
   day:
     type: text
@@ -53,8 +52,8 @@ steps:
             description: Complete approved report.
       session_links:
         type: text
-        description: Links to saved social sessions for this day. A link on its own line displays that
-          session in the story.
+        description: Links to saved social sessions for this day. A link on its own line displays that session in the story.
+    purpose: Checks the required record files, date, and timezone. Returns the prepared folder and its source hash, the complete approved report, and saved session links.
   write_briefing:
     name: Write the briefing
     in:
@@ -86,7 +85,7 @@ steps:
       entrypoint: briefing_validation.py
     reading:
       check_name: Check source links
-      check: Check source IDs, passage line numbers, and supporting files.
+      check: Checks source IDs, citation line ranges, and supporting file hashes, names, dates, and timezones. Returns pass when those references are valid.
   render_and_save:
     name: Render and save the briefing
     in:
@@ -105,11 +104,11 @@ steps:
         type: file
         description: Briefing website with source pages and supporting files.
         format: method-website
+    purpose: Builds the briefing website and checks its local links and source hash. Saves the website and supporting files under their content hash, reuses an identical saved output, and returns the receipt and website manifest.
 result:
   briefing: saved_briefing
   website: published_website
-run_prompt: Run Write a daily briefing for the requested prepared day folder. Read the date and
-  timezone from its records. When finished, open the briefing website and give me the run link.
+run_prompt: Run Write a daily briefing for the requested prepared day folder. Read the date and timezone from its records. When finished, open the briefing website and give me the run link.
 files:
   - briefing_files.py
   - briefing_times.py

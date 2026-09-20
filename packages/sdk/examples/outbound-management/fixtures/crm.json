@@ -1,0 +1,54 @@
+{
+  "target": {
+    "customer": "Operations leaders at small US logistics companies who still process customer requests manually.",
+    "offer": "A service that turns repeated work into reusable automated workflows.",
+    "new_prospects_per_day": 3,
+    "mailbox_url": "https://mail.google.com/mail/u/0/"
+  },
+  "contacts": [
+    {
+      "id": "c1",
+      "name": "Alex Kim",
+      "email": "alex@north.example",
+      "company": "North",
+      "role": "Operations lead",
+      "fit": "Manages a small logistics team",
+      "sources": [],
+      "status": "contacted",
+      "next_action": "Review follow-up",
+      "next_action_date": "2026-09-17",
+      "manual_notes": "Keep this owner note.",
+      "introduction_path": ""
+    },
+    {
+      "id": "c2",
+      "name": "Morgan Bell",
+      "email": "morgan@south.example",
+      "company": "South",
+      "role": "Operations lead",
+      "fit": "Manages a small logistics team",
+      "sources": [],
+      "status": "customer",
+      "next_action": "",
+      "next_action_date": "",
+      "manual_notes": "Keep this owner note.",
+      "introduction_path": ""
+    },
+    {
+      "id": "c3",
+      "name": "Sam Lee",
+      "email": "sam@east.example",
+      "company": "East",
+      "role": "Operations lead",
+      "fit": "Manages a small logistics team",
+      "sources": [],
+      "status": "contacted",
+      "next_action": "",
+      "next_action_date": "",
+      "manual_notes": "Keep this owner note.",
+      "introduction_path": ""
+    }
+  ],
+  "messages": [],
+  "days": {}
+}

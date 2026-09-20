@@ -1,0 +1,4 @@
+{
+  "allow_local_processes": true,
+  "runtimes": { "python": { "command": "python3", "version": "3.11+" } }
+}

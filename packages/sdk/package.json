@@ -1,6 +1,6 @@
 {
   "name": "@withmethod/sdk",
-  "version": "0.10.9",
+  "version": "0.11.0",
   "description": "Build and run reusable .method files with checked steps and saved results.",
   "license": "MIT",
   "type": "module",
@@ -147,11 +147,6 @@
       "import": "./dist/packages/sdk/src/current-inspection.js",
       "default": "./dist/packages/sdk/src/current-inspection.js"
     },
-    "./copy-message-example": {
-      "types": "./dist/packages/sdk/src/copy-message-example.d.ts",
-      "import": "./dist/packages/sdk/src/copy-message-example.js",
-      "default": "./dist/packages/sdk/src/copy-message-example.js"
-    },
     "./method-files": {
       "types": "./dist/packages/sdk/src/method-files.d.ts",
       "import": "./dist/packages/sdk/src/method-files.js",
@@ -212,6 +207,11 @@
       "types": "./dist/packages/sdk/src/run-method.d.ts",
       "import": "./dist/packages/sdk/src/run-method.js",
       "default": "./dist/packages/sdk/src/run-method.js"
+    },
+    "./authoring-example": {
+      "types": "./dist/packages/sdk/src/authoring-example.d.ts",
+      "import": "./dist/packages/sdk/src/authoring-example.js",
+      "default": "./dist/packages/sdk/src/authoring-example.js"
     }
   }
 }

@@ -1,0 +1,98 @@
+{
+  "target": {
+    "customer": "Operations leaders at small US logistics companies who still process customer requests manually.",
+    "offer": "A service that turns repeated work into reusable automated workflows.",
+    "new_prospects_per_day": 3,
+    "mailbox_url": "https://mail.google.com/mail/u/0/"
+  },
+  "contacts": [
+    {
+      "id": "c1",
+      "name": "Alex Kim",
+      "email": "alex@north.example",
+      "company": "North",
+      "role": "Operations lead",
+      "fit": "Manages a small logistics team",
+      "sources": [],
+      "status": "replied",
+      "next_action": "Send pricing",
+      "next_action_date": "2026-09-17",
+      "manual_notes": "Keep this owner note.",
+      "introduction_path": ""
+    },
+    {
+      "id": "c2",
+      "name": "Morgan Bell",
+      "email": "morgan@south.example",
+      "company": "South",
+      "role": "Operations lead",
+      "fit": "Manages a small logistics team",
+      "sources": [],
+      "status": "customer",
+      "next_action": "",
+      "next_action_date": "",
+      "manual_notes": "Keep this owner note.",
+      "introduction_path": ""
+    },
+    {
+      "id": "c3",
+      "name": "Sam Lee",
+      "email": "sam@east.example",
+      "company": "East",
+      "role": "Operations lead",
+      "fit": "Manages a small logistics team",
+      "sources": [],
+      "status": "opted_out",
+      "next_action": "",
+      "next_action_date": "",
+      "manual_notes": "Keep this owner note.",
+      "introduction_path": ""
+    }
+  ],
+  "messages": [
+    {
+      "id": "m1",
+      "contact_id": "c1",
+      "email": "alex@north.example",
+      "at": "2026-09-17T09:00:00-04:00",
+      "direction": "received",
+      "text": "Can you send pricing today?",
+      "url": "https://mail.google.com/mail/u/0/#inbox/m1",
+      "resolution": "Recorded reply"
+    },
+    {
+      "id": "m2",
+      "contact_id": "c3",
+      "email": "sam@east.example",
+      "at": "2026-09-17T10:00:00-04:00",
+      "direction": "received",
+      "text": "Please stop contacting me.",
+      "url": "https://mail.google.com/mail/u/0/#inbox/m2",
+      "resolution": "Recorded reply"
+    },
+    {
+      "id": "m3",
+      "at": "2026-09-17T11:00:00-04:00",
+      "direction": "received",
+      "text": "Alex: send the contract. Sender address was not captured.",
+      "url": "https://mail.google.com/mail/u/0/#inbox/m3",
+      "contact_id": "",
+      "resolution": "Review sender"
+    }
+  ],
+  "days": {
+    "2026-09-17": {
+      "tasks": [
+        {
+          "contact_id": "c1",
+          "action": "Send pricing",
+          "due_date": "2026-09-17",
+          "reason": "Requested by Alex",
+          "draft": "Hello Alex, let us review your needs."
+        }
+      ],
+      "research_notes": "No new prospects in this state test."
+    }
+  },
+  "last_plan": "08a1cbcb3f30c7c867d61b314cec9be1ef1dc186b125c3417bbb63e5b30f69da"
+}

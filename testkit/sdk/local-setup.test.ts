@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync, readFileSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { methodMain } from '../../packages/sdk/src/method.js';
-import { exampleWorkflow, exampleFiles } from '../../packages/sdk/src/copy-message-example.js';
+import { exampleWorkflow, exampleFiles } from '../fixtures/copy-message-example.js';
 
 const dirs: string[] = [];
 afterEach(() => { dirs.splice(0).forEach(p => rmSync(p, {recursive:true,force:true})); vi.restoreAllMocks(); vi.unstubAllEnvs(); process.exitCode = 0; });

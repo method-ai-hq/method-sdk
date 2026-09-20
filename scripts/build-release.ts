@@ -1,4 +1,4 @@
-import {parse} from 'yaml';
+import {authoringExamples} from '../packages/sdk/src/authoring-example.js';
 import {execFileSync} from 'node:child_process';
 import {rmSync,mkdirSync,readdirSync,readFileSync,writeFileSync,copyFileSync} from 'node:fs';
 import {join,resolve} from 'node:path';
@@ -12,9 +12,12 @@ execFileSync('npm',['run','build'],{cwd:root,stdio:'inherit'});
 execFileSync('npm',['pack','--workspace','@withmethod/sdk','--ignore-scripts','--pack-destination',output],{cwd:root,stdio:'pipe'});
 const packedSdk = readdirSync(output).find(name => name.endsWith('.tgz'))!;
 const packedFiles = new Set(execFileSync('tar', ['-tzf', join(output, packedSdk)], {encoding:'utf8'}).trim().split('\n'));
-const example = parse(readFileSync(join(root,'packages/sdk/examples/daily-briefing/daily-briefing.method'),'utf8'));
-for (const name of example.files) {
-  if (!packedFiles.has(`package/dist/packages/sdk/examples/daily-briefing/${name}`)) throw Error(`Packed example is missing ${name}`);
+const exampleFiles = JSON.parse(readFileSync(join(root,'packages/sdk/examples/files.json'),'utf8')) as string[];
+for (const example of authoringExamples) {
+  const files = exampleFiles.filter(name => name.startsWith(example.directory+'/'));
+  if (!files.includes(`${example.directory}/${example.entrypoint}`)) throw Error(`Missing example entrypoint: ${example.id}`);
+  for(const name of example.lessonFiles) if(!files.includes(`${example.directory}/${name}`)) throw Error(`Missing lesson file: ${example.id}/${name}`);
+  for(const name of files) if(!packedFiles.has(`package/dist/packages/sdk/examples/${name}`)) throw Error(`Packed example is missing ${name}`);
 }
 execFileSync(process.env.PYTHON??'python3',['-m','pip','wheel','./packages/sdk-python','--no-deps','--wheel-dir',output],{cwd:root,stdio:'pipe',env:{...process.env,SOURCE_DATE_EPOCH:'315532800'}});
 execFileSync(process.execPath,['--import','tsx','scripts/build-cli-distributions.ts'],{cwd:root,stdio:'inherit'});

@@ -1,0 +1,105 @@
+format: method/3.2
+name: Research social posts and papers
+goal: Read recent posts and papers in the browser, then write a briefing with quotes and links.
+inputs:
+  topic:
+    type: text
+  from_date:
+    type: text
+    description: First publication date, YYYY-MM-DD.
+  to_date:
+    type: text
+    description: Last publication date, YYYY-MM-DD.
+environment:
+  browser:
+    type: browser
+    description: Browser with access to Grok, LinkedIn, and alphaXiv.
+steps:
+  gather_sources:
+    name: Find and read sources
+    changes:
+      - environment.browser
+    in:
+      topic: inputs.topic
+      from_date: inputs.from_date
+      to_date: inputs.to_date
+    do:
+      kind: agent
+      model: default
+      browser: environment.browser
+      prompt: |
+        Use the browser to research {{topic}} from {{from_date}} through {{to_date}}.
+        Open tabs for https://x.com/i/grok, https://www.alphaxiv.org, and https://www.linkedin.com.
+
+        Ask Grok: "What are people saying on Twitter about {{topic}} from {{from_date}}
+        through {{to_date}}? Find useful original posts and disagreements. Give names,
+        dates, direct post links, and short exact quotes. Link both sides of each argument."
+
+        Ask alphaXiv: "Find papers about {{topic}} published from {{from_date}} through
+        {{to_date}}. What is new, and what do the papers say? Give titles, authors,
+        dates, paper links, and short exact quotes."
+
+        Search LinkedIn for posts about the same topic and dates. Open and read the
+        useful posts and papers. Collect who said what, publication dates, direct
+        links, and short exact quotes. In research_notes, record what you searched
+        on each site and any pages you could not read.
+    out:
+      sources:
+        type: list
+        items:
+          type: record
+          fields:
+            platform:
+              type: text
+            author:
+              type: text
+            published:
+              type: text
+            url:
+              type: text
+            quote:
+              type: text
+              description: Short exact quote from the page read; empty when unavailable.
+            summary:
+              type: text
+      research_notes:
+        type: text
+    check:
+      count:
+        value: sources
+        min: 1
+  write_briefing:
+    name: Write the briefing
+    in:
+      topic: inputs.topic
+      sources: sources
+      research_notes: research_notes
+    do:
+      kind: agent
+      model: default
+      prompt: |
+        Write a briefing from the collected sources. Start with:
+        "Here is the latest on what people are saying on {{topic}}."
+
+        Give a short topline paragraph with highlights from the posts and papers.
+        Then use short paragraphs like these:
+
+        <Name> on Twitter says "<quote>" [link]. <Useful context.>
+
+        <Name> and <name> are arguing over <issue>: one says "<quote>",
+        while the other says "<quote>" [links to both posts].
+
+        There is a new paper about <finding>. <Authors> say "<quote>" [paper link].
+
+        Include useful LinkedIn posts in the same style. Describe disagreements
+        when the sources show them. Use the collected quotes and put links beside
+        each claim. Keep quotes to at most 25 words per source in total.
+    out:
+      briefing:
+        type: text
+        description: Briefing draft with source links.
+result:
+  briefing: briefing
+  sources: sources
+  research_notes: research_notes
+run_prompt: Run this Method for the requested topic and dates. Show the briefing draft and its source links.

@@ -1,0 +1,14 @@
+{
+  "briefing": "Here is the latest on what people are saying on coding agent reliability.\n\nThis fictional fixture shows the result format. Alex says \u201cChecks need to cover the changed behavior.\u201d [Source](https://example.com/research).",
+  "sources": [
+    {
+      "platform": "LinkedIn",
+      "author": "Alex (fictional)",
+      "published": "2026-09-15",
+      "url": "https://example.com/research",
+      "quote": "Checks need to cover the changed behavior.",
+      "summary": "A fictional source about testing agent changes."
+    }
+  ],
+  "research_notes": "Illustrative fixture only. No browser research was run to produce this file."
+}

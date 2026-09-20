@@ -5,7 +5,9 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { approvedReport } from "../../packages/sdk/src/authoring-example.js";
+import {authoringExamples,renderExample} from "../../packages/sdk/src/authoring-example.js";
+import {exampleScript,exampleWorkflow} from '../fixtures/copy-message-example.js';
+const approvedReport = readFileSync(resolve('packages/sdk/examples/daily-briefing/approved-report.md'),'utf8');
 import { authoringGuide, commandHelp, guideTopics } from "../../packages/sdk/src/method-help.js";
 import { methodMain } from "../../packages/sdk/src/method.js";
 import { loadWorkflow } from "../../packages/workflow-language/src/validate.js";
@@ -45,23 +47,14 @@ it("provides offline command-specific help and rejects unknown topics before cre
   expect(client).not.toHaveBeenCalled();
 });
 
-it("runs the exact shell example printed in the guide and checks its data connections with the executor", async () => {
+it("executes the copy-message editing fixture without adding it to the authoring guide", async () => {
   const dir = temp();
-  const source = authoringGuide("commands").match(/```yaml\n([\s\S]*?)\n```/)![1]!;
-  expect(loadWorkflow(source).format).toBe("method/3.2");
-  const script = authoringGuide("commands").split("## Example: build with editing commands")[1]!.match(/```sh\n([\s\S]*?)\n```/)![1]!;
-  const out = shell(dir, script);
-  expect(out).toContain('"valid": true');
-  const workflow = loadWorkflow(readFileSync(join(dir, "message.method"), "utf8"));
-  const commandDir = temp();
-  const commands = authoringGuide("commands").split("## Example: build with editing commands")[1]!.match(/```sh\n([\s\S]*?)\n```/)![1]!;
-  shell(commandDir, commands);
-  expect(loadWorkflow(readFileSync(join(commandDir, "message.method"), "utf8"))).toEqual(workflow);
-  const result = await runMethod(join(dir, "message.method"), JSON.parse(readFileSync(join(dir, "runtime.json"), "utf8")), { inputs: { message: "Hello\n  " }, runDir: join(dir, "run") });
-  expect(result.status).toBe("completed");
-  expect("result" in result && result.result).toBe("Hello\n  ");
-  expect(authoringGuide("recipes")).toContain("evidence hashes");
-}, 30_000);
+  expect(loadWorkflow(exampleWorkflow).format).toBe('method/3.2');
+  expect(shell(dir,exampleScript())).toContain('"valid": true');
+  const result = await runMethod(join(dir, 'message.method'), JSON.parse(readFileSync(join(dir, 'runtime.json'), 'utf8')), {inputs: {message:'Hello\n  '}, runDir:join(dir,'run')});
+  expect(result).toMatchObject({status:'completed',result:'Hello\n  '});
+  expect(authoringGuide('commands')).not.toContain(exampleWorkflow);
+},30_000);
 
 it("keeps the repository manual equal to the guide shipped in the CLI", () => {
   const text = readFileSync(resolve("docs/method-authoring.md"), "utf8");
@@ -69,16 +62,25 @@ it("keeps the repository manual equal to the guide shipped in the CLI", () => {
 });
 
 
-it("shows the complete request, executable YAML, and approved result in that order", () => {
-  const guide = authoringGuide();
-  const method = guide.match(/```yaml\n([\s\S]*?)\n```/)![1]!;
-  const definition = loadWorkflow(method);
-  expect(definition.steps.write_briefing.check).toEqual({kind: "run", runtime: "python", entrypoint: "briefing_validation.py"});
-  expect(guide.indexOf("## Request")).toBeLessThan(guide.indexOf("## Method"));
-  expect(guide.indexOf("## Method")).toBeLessThan(guide.indexOf("## Complete approved report"));
-  const beforeExample = guide.split("# Worked example")[0];
-  expect(beforeExample).not.toContain("approved example");
-  expect(guide).toContain(approvedReport);
+it('leaves the one-shot choice to the author and renders one selected complete lesson', async () => {
+  const fetch=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('Offline'));
+  for(const topic of ['start','all','examples','example']) {
+    const guide=authoringGuide(topic);
+    for(const example of authoringExamples)expect(guide).toContain(example.description);
+    expect(guide).not.toContain('# Worked example:');
+  }
+  for(const example of authoringExamples) {
+    const guide=authoringGuide('example',example.id);
+    expect(guide.match(/# Worked example:/g)).toHaveLength(1);
+    for(const name of example.lessonFiles)expect(guide).toContain(readFileSync(resolve('packages/sdk/examples',example.directory,name),'utf8').trimEnd());
+    expect(guide).toContain(example.entrypoint);
+  }
+  expect(authoringGuide('example','daily-briefing')).toContain(approvedReport);
+  expect(()=>authoringGuide('example','missing')).toThrow('daily-briefing, social-briefing, outbound-management, message-routing');
+  const stdout=vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
+  await methodMain(['authoring','example','message-routing'],()=>{throw Error('No client needed');});
+  expect(stdout).toHaveBeenCalledWith(renderExample('message-routing'));
+  expect(fetch).not.toHaveBeenCalled();
 });
 
 

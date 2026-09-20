@@ -1,0 +1,167 @@
+format: method/3.2
+name: Manage daily outbound
+goal: Search Happenstance, read email, enrich prospects from company and LinkedIn pages, and prepare today's outreach tasks.
+inputs:
+  day:
+    type: text
+    description: Date to plan, YYYY-MM-DD.
+  from_date:
+    type: text
+    description: First email date to read, YYYY-MM-DD. Use an overlap with the last run.
+state:
+  crm:
+    type: text
+    description: CRM as JSON text in shared Method account state. Updated only after the save check passes.
+environment:
+  browser:
+    type: browser
+    description: Browser signed in to email, Happenstance, and LinkedIn.
+steps:
+  read_crm:
+    name: Read the CRM
+    in:
+      day: inputs.day
+      crm: state.crm
+      from_date: inputs.from_date
+    do:
+      kind: run
+      runtime: python
+      entrypoint: read_crm.py
+    out:
+      context:
+        type: text
+        description: Current CRM, target customer, email dates, and state hash as JSON.
+    purpose: Checks the two dates and rejects an email start date after the planned day. Returns the CRM, date range, and hash of the supplied state.
+  gather_sources:
+    name: Read email and find prospects
+    changes:
+      - environment.browser
+    in:
+      context: context
+    do:
+      kind: agent
+      model: default
+      browser: environment.browser
+      prompt: |
+        Open target.mailbox_url from the CRM in context. Read received and sent
+        email from from_date through day for the outbound campaign. Search by
+        existing contact addresses, companies, and target.offer. Open the threads
+        and read the messages, including opt-outs and requests. Keep each email's
+        stable message ID, thread URL, sender address, date, direction, and text.
+        Collect relevant replies from people not yet in the CRM too.
+
+        Open https://happenstance.ai and ask:
+        "Find people in my network who fit this customer description: <target.customer>.
+        I offer <target.offer>. Show their current roles, companies, profile links,
+        and how I can reach them or get an introduction."
+        Replace the angle-bracket values with the CRM's target values.
+        Select up to target.new_prospects_per_day suitable new prospects.
+
+        Open each prospect's company website and LinkedIn profile. Check their
+        current role, what the company does, and the reason our offer fits.
+        Record source URLs and the facts read on each page. Use contact details
+        shown by the sources; leave unknown details empty.
+
+        Return observations as JSON with messages, prospects, and searches.
+        Each message has id, url, email, at, direction, text, and contact_id
+        when known. Each prospect has name, email, company, role, fit, sources,
+        profile_url, and introduction_path. Each source has url and facts.
+        searches contains email, happenstance, and enrichment; each has status
+        complete or blocked, and notes describing the search and any limits.
+        A completed search can have no results. Report blocked access as blocked.
+        Read email and prepare evidence; leave messages unsent.
+    out:
+      observations:
+        type: text
+        description: Email records, Happenstance prospects, enrichment facts, and search results as JSON.
+    check:
+      kind: run
+      runtime: python
+      entrypoint: check_sources.py
+    reading:
+      check: Requires completed searches, unique email IDs, valid message dates and links, and linked enrichment facts. A completed search may contain no results.
+  plan_day:
+    name: Update contact status and plan the day
+    in:
+      context: context
+      observations: observations
+    do:
+      kind: agent
+      model: default
+      prompt: |
+        Read the CRM in context and the email and prospect records in observations.
+        Use email:<address> as a new contact ID when an email is known,
+        otherwise use the person's full profile URL. Keep existing IDs.
+        Add the prospect's role, fit, source URLs, and introduction path to
+        the CRM. sources is a list of URLs from the enrichment records.
+        Skip email IDs already resolved in the CRM; revisit unresolved senders.
+
+        Read each new message. Match it by contact ID or exact email. When its
+        sender is unclear, record it as unresolved for review. Record replies,
+        requests, meetings, opt-outs, and sent messages in the contact's status
+        and next action. Keep customers and opt-outs out of outreach tasks.
+        An outreach draft is a task to review; it is not a sent message.
+
+        Prepare today's due tasks and drafts using target.offer and the facts
+        you found. Each task needs a contact ID, action, due date, reason, and
+        draft. For tasks such as meetings, draft can be empty. Record gaps in
+        research_notes, including pages you could not read.
+
+        Return plan as JSON with contacts, messages, tasks, and research_notes.
+        contacts is a list of new or changed contacts with id, name, email,
+        company, role, fit, sources, status, next_action, and next_action_date.
+        Use status new, contacted, replied, qualified, meeting, customer,
+        closed, or opted_out. Use an empty next_action_date when none is due.
+        sources is a list of full page URLs. Include introduction_path as text. Leave unknown email empty.
+        messages contains one entry per email not yet resolved in the CRM: id, contact_id, and
+        resolution. Leave contact_id empty for an unresolved sender.
+        tasks contains contact_id, action, due_date, reason, and draft.
+        research_notes must be one JSON string. Combine multiple notes into
+        paragraphs within that string. Use an empty string when there are no
+        notes. Do not return a list or an object for research_notes.
+        In draft and research_notes strings, encode paragraph breaks as JSON
+        newline escapes that decode to line breaks, not literal backslash-n text.
+    out:
+      plan:
+        type: text
+        description: JSON object with contacts, messages, and tasks lists, and research_notes as one string.
+    check:
+      kind: run
+      runtime: python
+      entrypoint: check_plan.py
+    reading:
+      check: Checks contact identities and sources, resolves each new message once, preserves customers and opt-outs, and requires unique due tasks for active contacts and text research notes.
+  save_day:
+    name: Update the CRM and save today's tasks
+    changes:
+      - state.crm
+    in:
+      crm: state.crm
+      context: context
+      plan: plan
+      observations: observations
+    do:
+      kind: run
+      runtime: python
+      entrypoint: save_day.py
+    out:
+      tasks:
+        type: file
+        description: Daily task list and outreach drafts for review.
+      receipt:
+        type: file
+        description: Saved CRM hash, contact count, and message count.
+    check:
+      file: tasks
+    purpose: Validates the plan and rejects a changed CRM unless this plan is already saved. Returns updated CRM state, daily tasks, and a receipt. Repeating the same plan reuses its state update and rewrites the same local result files.
+result:
+  tasks: tasks
+  receipt: receipt
+run_prompt: Run Manage daily outbound for today using my CRM and new messages. Show me the tasks and outreach drafts for review.
+files:
+  - crm.py
+  - read_crm.py
+  - check_sources.py
+  - check_plan.py
+  - save_day.py
+  - runtime.json

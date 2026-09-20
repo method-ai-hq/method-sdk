@@ -1,0 +1,80 @@
+format: method/3.2
+name: Route a message and create one ticket
+goal: Create a ticket and recover an interrupted response without a duplicate write.
+inputs:
+  message:
+    type: text
+    description: The complete customer message to classify.
+steps:
+  classify_message:
+    name: Classify the customer message
+    in:
+      message: inputs.message
+    do:
+      kind: classify
+      question: Which team should handle the main request in this message?
+      options:
+        billing: Billing — invoices, charges, refunds, and payments.
+        technical: Technical support — errors and problems using the product.
+        other: Other — no listed team fits, or more information is needed.
+    out: message_category
+  choose_destination:
+    name: Choose the destination
+    purpose: |
+      Chooses Billing or Technical support when that category is selected
+      and its probability is at least 90%. Otherwise chooses Manual review.
+      Returns the destination, the rule used, and the probability and threshold.
+    in:
+      category: message_category
+    do:
+      kind: run
+      runtime: node
+      entrypoint: choose-destination.mjs
+    out:
+      routing:
+        type: record
+        description: The selected destination and the values used to choose it.
+        fields:
+          destination: text
+          rule_applied: text
+          selected_probability: number
+          required_probability: number
+  create_ticket:
+    name: Create the support ticket
+    purpose: Creates a ticket for the selected destination and returns its receipt.
+      Retrying this invocation reuses its operation ID, so the test service
+      returns the same ticket. Inspect the service record for that ID if
+      completion is uncertain.
+    in:
+      message: inputs.message
+      routing: routing
+      service: environment.ticket_service
+    do:
+      kind: run
+      runtime: node
+      entrypoint: retry/create-ticket.mjs
+    changes:
+      - environment.ticket_service
+    out:
+      ticket:
+        type: record
+        description: The service receipt for this operation.
+        fields:
+          ticket_id: text
+          operation_id: text
+    check:
+      kind: run
+      runtime: node
+      entrypoint: retry/check-ticket.mjs
+    reading:
+      check: Reads the saved ticket and compares its message, destination, and
+        operation ID with the submitted values.
+result: ticket
+files:
+  - routing.mjs
+run_prompt: Run this Method with the customer message, then show the destination
+  and the rule used.
+environment:
+  ticket_service:
+    type: service
+    description: Ticket service with idempotent writes and operation lookup.

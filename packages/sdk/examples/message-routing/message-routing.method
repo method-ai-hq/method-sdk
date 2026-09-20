@@ -1,0 +1,45 @@
+format: method/3.2
+name: Classify and route a customer message
+goal: Choose a support destination and show the rule used.
+inputs:
+  message:
+    type: text
+    description: The complete customer message to classify.
+steps:
+  classify_message:
+    name: Classify the customer message
+    in:
+      message: inputs.message
+    do:
+      kind: classify
+      question: Which team should handle the main request in this message?
+      options:
+        billing: Billing — invoices, charges, refunds, and payments.
+        technical: Technical support — errors and problems using the product.
+        other: Other — no listed team fits, or more information is needed.
+    out: message_category
+  choose_destination:
+    name: Choose the destination
+    purpose: |
+      Chooses Billing or Technical support when that category is selected
+      and its probability is at least 90%. Otherwise chooses Manual review.
+      Returns the destination, the rule used, and the probability and threshold.
+    in:
+      category: message_category
+    do:
+      kind: run
+      runtime: node
+      entrypoint: choose-destination.mjs
+    out:
+      routing:
+        type: record
+        description: The selected destination and the values used to choose it.
+        fields:
+          destination: text
+          rule_applied: text
+          selected_probability: number
+          required_probability: number
+result: routing
+files:
+  - routing.mjs
+run_prompt: Run this Method with the customer message, then show the destination and the rule used.

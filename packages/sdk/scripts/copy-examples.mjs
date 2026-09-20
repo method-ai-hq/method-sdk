@@ -2,8 +2,11 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const source = fileURLToPath(new URL('../examples/', import.meta.url));
-const files = JSON.parse(readFileSync(new URL('./public-examples.json', import.meta.url), 'utf8'));
+const files = JSON.parse(readFileSync(new URL('../examples/files.json', import.meta.url), 'utf8'));
 export function copyPublicExamples(destination) {
+  mkdirSync(destination, {recursive:true});
+  cpSync(resolve(source, 'files.json'), resolve(destination, 'files.json'));
+
   for (const name of files) {
     if (name.split('/').some(part => ['..', 'sensitive', '.git', 'node_modules', '__pycache__', 'approved-output', '.method-runs'].includes(part)) || /(?:runtime\.sh|\.method\.json|\.env(?:\..*)?)$/.test(name)) throw Error('Not a public example file: ' + name);
     const target = resolve(destination, name);

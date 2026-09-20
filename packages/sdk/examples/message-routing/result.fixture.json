@@ -1,0 +1,6 @@
+{
+  "destination": "billing",
+  "rule_applied": "selected_category_meets_threshold",
+  "selected_probability": 0.94,
+  "required_probability": 0.9
+}

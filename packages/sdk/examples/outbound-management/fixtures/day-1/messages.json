@@ -1,0 +1,27 @@
+[
+  {
+    "id": "m1",
+    "contact_id": "c1",
+    "email": "alex@north.example",
+    "at": "2026-09-17T09:00:00-04:00",
+    "direction": "received",
+    "text": "Can you send pricing today?",
+    "url": "https://mail.google.com/mail/u/0/#inbox/m1"
+  },
+  {
+    "id": "m2",
+    "contact_id": "c3",
+    "email": "sam@east.example",
+    "at": "2026-09-17T10:00:00-04:00",
+    "direction": "received",
+    "text": "Please stop contacting me.",
+    "url": "https://mail.google.com/mail/u/0/#inbox/m2"
+  },
+  {
+    "id": "m3",
+    "at": "2026-09-17T11:00:00-04:00",
+    "direction": "received",
+    "text": "Alex: send the contract. Sender address was not captured.",
+    "url": "https://mail.google.com/mail/u/0/#inbox/m3"
+  }
+]

@@ -11,13 +11,14 @@
   ],
   "scripts": {
     "build": "node scripts/update-release-docs.mjs && npm run build --workspace @withmethod/sdk && node scripts/build-guide.mjs",
-    "test": "node scripts/update-release-docs.mjs --check && vitest run && npm run test:runtime && npm run test:python",
+    "test": "node scripts/update-release-docs.mjs --check && vitest run && npm run test:runtime && npm run test:python && npm run test:examples",
     "test:runtime": "cd node_modules/@withmethod/runtime && node --test test/*.test.js",
     "test:python": "${PYTHON:-python3} -m unittest discover -s testkit/python -p '*_test.py'",
     "method": "tsx packages/sdk/src/method.ts",
     "pack": "npm run build && mkdir -p dist && npm pack --workspace @withmethod/sdk --ignore-scripts --pack-destination dist",
     "release:build": "tsx scripts/build-release.ts",
-    "test:browser": "tsx testkit/slow/browser.ts"
+    "test:browser": "tsx testkit/slow/browser.ts",
+    "test:examples": "node --test packages/sdk/examples/message-routing/routing.test.mjs packages/sdk/examples/message-routing/retry/retry.test.mjs && python3 -m unittest discover -s packages/sdk/examples/outbound-management -p \"*_test.py\""
   },
   "devDependencies": {
     "@types/node": "^22.10.10",

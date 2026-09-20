@@ -11,7 +11,6 @@ import { CurrentCheckSchema,CurrentStepSchema } from "../../workflow-language/sr
 import { loadWorkflow,parseDocumentValue,serializeWorkflow } from "../../workflow-language/src/validate.js";
 export function writeDocument(path: string, value: unknown) { const tmp = `${path}.${process.pid}.tmp`; try { writeFileSync(tmp, serializeWorkflow(value), { mode: 0o600, flag: "wx" }); renameSync(tmp, path); } finally { if (existsSync(tmp)) unlinkSync(tmp); } }
 
-import { exampleDirectory } from "./authoring-example.js";
 import { authoringGuide,methodHelp } from "./method-help.js";
 export const authoringHelp = authoringGuide();
 
@@ -69,9 +68,8 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
   if (!stepEdit && !["authoring", "init", "show", "set", "remove", "check", "validate", "diff", "schema"].includes(command ?? "")) return false;
   if (args.includes("--help")) { process.stdout.write(methodHelp(args)!); return true; }
   if (command === "authoring") {
-    if (args.length > 2) throw Error("Use method authoring [TOPIC].");
-    process.stdout.write(authoringGuide(args[1]));
-    if (!args[1] || ["start", "example", "all"].includes(args[1])) process.stdout.write(`\nInstalled example folder: ${exampleDirectory}\nRead ${exampleDirectory}README.md for its files and setup.\n`);
+    if (args.length > 3 || args.length === 3 && args[1] !== 'example') throw Error("Use method authoring [TOPIC] or method authoring example EXAMPLE_ID.");
+    process.stdout.write(authoringGuide(args[1], args[2]));
     return true;
   }
   const { values: v, positionals: p } = parseArgs({ args: args.slice(1), allowPositionals: true, options: Object.fromEntries(["name", "goal", "id", "instructions-file", "json", "value-file", "text", "text-file", "path", "before", "model", "purpose", "kind", "runtime", "entrypoint", "config", "workspace"].map(k => [k, { type: "string" as const }])) });
