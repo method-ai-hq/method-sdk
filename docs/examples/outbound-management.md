@@ -836,7 +836,6 @@ outputs from the fictional first-day fixture, not a live account run.
 
 ## Installed files
 
-- outbound-management/.gitignore
 - outbound-management/README.md
 - outbound-management/TASK.md
 - outbound-management/check_plan.py

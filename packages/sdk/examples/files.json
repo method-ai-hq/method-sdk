@@ -1,5 +1,4 @@
 [
-  "daily-briefing/.gitignore",
   "daily-briefing/README.md",
   "daily-briefing/TASK.md",
   "daily-briefing/approved-report.md",
@@ -75,7 +74,6 @@
   "message-routing/retry/ticket.method",
   "message-routing/routing.mjs",
   "message-routing/routing.test.mjs",
-  "outbound-management/.gitignore",
   "outbound-management/README.md",
   "outbound-management/TASK.md",
   "outbound-management/check_plan.py",

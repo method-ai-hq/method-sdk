@@ -1614,7 +1614,6 @@ Open the website returned by the run. Source links open the saved records and se
 
 ## Installed files
 
-- daily-briefing/.gitignore
 - daily-briefing/README.md
 - daily-briefing/TASK.md
 - daily-briefing/approved-report.md
