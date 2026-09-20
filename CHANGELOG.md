@@ -1,3 +1,8 @@
+# 0.11.1
+
+- Preserve total run duration in inspection and sync.
+- Use runtime 0.9.1 with complete run metadata types and explicit cancellation and iteration-ID checks.
+
 # 0.11.0
 
 - Add Method 3.2 classification through the Method account, with a saved model version and one request per invocation.
