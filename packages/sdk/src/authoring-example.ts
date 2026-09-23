@@ -1,3 +1,4 @@
+import {exampleSelection} from "./authoring-instructions.js";
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
@@ -21,7 +22,7 @@ export function exampleDirectory(id: string) {
   return {example, directory:fileURLToPath(new URL(`../examples/${example.directory}/`,import.meta.url))};
 }
 export function exampleCatalog() {
-  return '# Example catalog\n\n' + authoringExamples.map(example=>`- [${example.id}](examples/${example.id}.md): ${example.description}`).join('\n') + '\n\nRead one complete example with `method authoring example EXAMPLE_ID`.\n';
+  return '# Example catalog\n\n' + authoringExamples.map(example=>`- [${example.id}](examples/${example.id}.md): ${example.description}`).join('\n') + '\n\n' + exampleSelection + '\n';
 }
 export function renderExample(id: string, installedPaths = true) {
   const {example,directory}=exampleDirectory(id);

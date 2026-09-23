@@ -62,7 +62,7 @@ it("keeps the repository manual equal to the guide shipped in the CLI", () => {
 });
 
 
-it('leaves the one-shot choice to the author and renders one selected complete lesson', async () => {
+it('offers complete examples and renders the requested lesson', async () => {
   const fetch=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('Offline'));
   for(const topic of ['start','all','examples','example']) {
     const guide=authoringGuide(topic);

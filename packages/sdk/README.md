@@ -3,7 +3,7 @@
 MIT-licensed JavaScript API and the `method` CLI. Source and releases: https://github.com/method-ai-hq/method-sdk
 
 ```sh
-npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.11.3/withmethod-sdk-0.11.3.tgz
+npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.11.4/withmethod-sdk-0.11.4.tgz
 npx method --version
 ```
 
@@ -19,4 +19,4 @@ New Methods use method/3.2; existing method/3.1 documents remain supported. The 
 
 Browser-safe document modules are available at `@withmethod/sdk/schema`, `/validate`, `/execution`, `/inspection`, and `/result-files`. Node tools use `/identity`, `/method-package`, `/method-client`, `/method-sync`, and `/process`. Do not import the Node package root into a browser bundle.
 
-Use `method authoring` for the full guide. The package includes reviewed examples. Saving and syncing need a Method account; local validation and execution do not.
+Before creating, editing, or proposing a Method, run `method authoring` and read its guidance. Do this before choosing an existing Method as a reference. The package includes reviewed examples. Saving and syncing need a Method account; local validation and execution do not.

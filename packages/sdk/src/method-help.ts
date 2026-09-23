@@ -1,4 +1,4 @@
-import { exampleSelection } from "./authoring-instructions.js";
+import { authoringEntryRule, designProcedure, designExamples, proposalRequirements } from "./authoring-instructions.js";
 export { exampleSelection } from "./authoring-instructions.js";
 import { exampleCatalog, renderExample } from "./authoring-example.js";
 
@@ -18,7 +18,7 @@ export const commandHelp: Record<string, Command> = {
   'run-status': {usage:"method run-status RUN_DIRECTORY",purpose:"Read worker status without waiting.",arguments:"Local run directory.",result:"Worker status and whether its process is active.",errors:"Unreadable run directory.",example:"method run-status .runs/example"},
   cancel: {usage:"method cancel RUN_DIRECTORY",purpose:"Stop a local run process.",arguments:"Inspect uncertain external actions before any explicit retry.",result:"Cancellation request. The checkpoint remains available.",errors:"Unreadable run directory.",example:"method cancel .runs/example"},
   progress: { usage: "method progress --message TEXT [--completed N --total N --unit NAME] [--child NAME]\nmethod progress --codex --child NAME", purpose: "Report public progress from a running script or relay a child Codex JSON stream.", arguments: "METHOD_PROGRESS_FD is supplied by the executor. --codex reads JSON lines from stdin; --message sends one message. Do not include secrets or source contents.", result: "Writes to the separate progress pipe. No stdout output. No-op outside a Method process.", errors: "Invalid arguments. Malformed Codex events are ignored.", example: "method progress --message 'Rendered 12 of 40 pages' --completed 12 --total 40 --unit pages" },
-  authoring: { usage: "method authoring [start|concepts|execution|examples|recipes|recovery|commands|all]\nmethod authoring example EXAMPLE_ID", purpose: "Read the installed authoring guide. Available offline.", arguments: "Default topic: start, with shared rules and the example catalog. Choose one named example after understanding the request. A named example prints its complete lesson and installed file paths. all prints the shared reference and catalog.", result: "Markdown text on stdout. No changes.", errors: "Unknown topic: lists the valid topics; exit 1.", example: "method authoring all > method-guide.md" },
+  authoring: { usage: "method authoring [start|concepts|execution|examples|recipes|recovery|commands|all]\nmethod authoring example EXAMPLE_ID", purpose: "Read the installed authoring guide. Available offline.", arguments: "Default topic: start, with the design procedure, contrasting design outlines, proposal requirements, concepts, and example catalog. Choose relevant examples after choosing the design. A named example prints its complete lesson and installed file paths. all prints the shared reference and catalog.", result: "Markdown text on stdout. No changes.", errors: "Unknown topic: lists the valid topics; exit 1.", example: "method authoring all > method-guide.md" },
   init: { usage: "method init FILE --name NAME --goal TEXT", purpose: "Create a local YAML draft.", arguments: "File must be new. Name and goal are required. The draft starts with an empty steps map and result map.", result: edited, errors: "Missing name or goal; file or sidecar already exists.", example: "method init task.method --name 'Find leads' --goal 'Find qualified leads from the specified sources.'" },
   show: { usage: "method show FILE [--path POINTER]", purpose: "Read a draft or one field.", arguments: "Default: the full document. Pointer example: /steps/search/do.", result: "Selected value as JSON. No changes.", errors: "The selected field does not exist.", example: "method show task.method --path /steps/search" },
   set: { usage: "method set FILE POINTER (--json JSON|--value-file FILE|--text TEXT|--text-file FILE)", purpose: "Add or replace one draft field.", arguments: valueFlags + " Parents must exist. An empty pointer replaces the document. Escape / as ~1 and ~ as ~0. Nested values replace in full.", result: edited, errors: "Invalid pointer, missing parent field, or conflicting value flags.", example: "method set task.method /steps/search/do/prompt --text-file search.txt" },
@@ -71,7 +71,11 @@ export function renderCommand(name: string, includeCommon = true): string {
 
 const start = `# Author with Method
 
-Build a Method for the user's repeated work. Understand the request and what a good result looks like before choosing an example.
+Build a Method for the user's repeated work.
+
+${designProcedure}
+${designExamples}
+${proposalRequirements}
 
 Validate with method validate task.method, save with method save task.method, then run the returned version with method run WORKFLOW_ID --version VERSION_ID. Inspect the result and its links.
 
@@ -184,7 +188,7 @@ New Methods use format method/3.2. Existing method/3.1 documents retain their va
 export const guideTopics = ["start", "concepts", "execution", "examples", "example", "recipes", "recovery", "commands"] as const;
 export function authoringGuide(topic = "start", exampleId?: string): string {
   if (exampleId && topic !== 'example') throw Error('Use method authoring example EXAMPLE_ID.');
-  const catalog = () => exampleCatalog() + '\n' + exampleSelection + '\n';
+  const catalog = () => exampleCatalog();
   const topics: Record<string, () => string> = {
     start: () => start + '\n' + concepts + '\n' + catalog(), concepts: () => concepts,
     execution: () => execution, examples: catalog,
@@ -198,6 +202,8 @@ export function authoringGuide(topic = "start", exampleId?: string): string {
 }
 
 export const overviewHelp = `Method — author, save and run methods with your coding agent.
+
+${authoringEntryRule}
 
 Learn: method authoring                 Start the installed guide.
        method authoring all             Read the full manual offline.
@@ -213,7 +219,7 @@ Inputs and shared state: bind, state.
 Browser and runner setup: browser connect, deploy.
 Account access: status, login, logout, devices, revoke.
 
-Choose one complete example, write the files, validate, run a sample, inspect the result, and save.
+Read the authoring guide, choose the execution types and boundaries, consult relevant examples, write the files, validate, save, and inspect an agreed sample run.
 Use method run task.method to run with runtime.json beside the Method.
 Online server: https://app.withmethod.ai. Use --server only to select another
 server. Sign-in uses browser approval. Never send credentials in chat.

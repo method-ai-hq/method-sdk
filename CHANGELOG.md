@@ -1,3 +1,9 @@
+# 0.11.4
+
+- Guide authors through execution choices, step boundaries, and a concise proposal before consulting complete examples.
+- Include three contrasting design outlines and require reading authoring guidance before proposing a Method.
+- Move account sign-in to the save stage in the shared setup prompt.
+
 # 0.11.3
 
 - Support method-owned `run_label_input` with runtime 0.9.2. Existing methods remain valid.
