@@ -1,5 +1,9 @@
 # 0.11.4
 
+- Replace the input-only run label field with `run_label`, a reference to a saved input or step output. Runtime 0.9.3 validates the reference.
+
+# 0.11.4
+
 - Guide authors through execution choices, step boundaries, and a concise proposal before consulting complete examples.
 - Include three contrasting design outlines and require reading authoring guidance before proposing a Method.
 - Move account sign-in to the save stage in the shared setup prompt.

@@ -47,7 +47,7 @@ export type CurrentStep = BaseStep & {
 };
 export type CurrentWorkflow = {
   name: string; goal: string; inputs?: Record<string,z.infer<typeof InputSchema>>; environment?: Record<string,z.infer<typeof EnvironmentSchema>>; result: string | Record<string,string>;
-  format: "method/3.1" | "method/3.2"; run_prompt?: string; run_label_input?: string; files?: string[];
+  format: "method/3.1" | "method/3.2"; run_prompt?: string; run_label?: string; files?: string[];
   state?: Record<string, z.infer<typeof InputSchema>>; steps: Record<string, CurrentStep>;
 };
 function currentShape<T>(validate: any): z.ZodType<T> {
