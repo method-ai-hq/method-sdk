@@ -1,10 +1,10 @@
 # withmethod
 
-MIT-licensed Python binding to the same installed Node Method runtime. Requires Python 3.11+ and the JavaScript SDK 0.11.2.
+MIT-licensed Python binding to the same installed Node Method runtime. Requires Python 3.11+ and the JavaScript SDK 0.11.3.
 
 ```sh
-npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.11.2/withmethod-sdk-0.11.2.tgz
-pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.11.2/withmethod-0.11.2-py3-none-any.whl
+npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.11.3/withmethod-sdk-0.11.3.tgz
+pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.11.3/withmethod-0.11.3-py3-none-any.whl
 withmethod authoring
 ```
 

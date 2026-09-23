@@ -1,3 +1,7 @@
+# 0.11.3
+
+- Support method-owned `run_label_input` with runtime 0.9.2. Existing methods remain valid.
+
 # 0.11.2
 
 - Preserve authored classifier option order in saved document and package identities, so an order-only change creates a version.
