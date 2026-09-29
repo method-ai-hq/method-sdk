@@ -1,3 +1,7 @@
+# 0.11.6
+
+- Guide browser research authors to select Method's browser connection and use the existing social-briefing example.
+
 # 0.11.5
 
 - Replace the input-only run label field with `run_label`, a reference to a saved input or step output. Runtime 0.9.3 validates the reference.
