@@ -1,4 +1,4 @@
-import { authoringEntryRule, designProcedure, designExamples, proposalRequirements } from "./authoring-instructions.js";
+import { checkEditingRule, authoringEntryRule, designProcedure, designExamples, proposalRequirements } from "./authoring-instructions.js";
 export { exampleSelection } from "./authoring-instructions.js";
 import { exampleCatalog, renderExample } from "./authoring-example.js";
 
@@ -27,8 +27,8 @@ export const commandHelp: Record<string, Command> = {
   "step update": { usage: "method step update FILE STEP_ID (--json JSON|--value-file FILE)", purpose: "Change fields of an existing step.", arguments: "Supply an object of fields. Top-level fields merge; nested values replace in full. Use remove to delete a field.", result: edited, errors: "Unknown step or invalid step fields.", example: "method step update task.method search --value-file search.yaml" },
   "step remove": { usage: "method step remove FILE STEP_ID", purpose: "Remove an operation.", arguments: "Repair references to its outputs and after constraints before saving.", result: edited, errors: "The selected step does not exist.", example: "method step remove task.method old_search" },
   "step move": { usage: "method step move FILE STEP_ID --before OTHER_ID", purpose: "Change display order.", arguments: "Both steps must exist. Data references and after still control execution order.", result: edited, errors: "The selected step or destination does not exist.", example: "method step move task.method search_exa --before search_bookface" },
-  "check set": { usage: "method check set FILE STEP_ID (--json JSON|--value-file FILE)", purpose: "Set the operation's independent check.", arguments: "Current methods require an equals/count/present/file object, a run check, or an agent check. Put plain-English criteria in an agent check prompt.", result: edited, errors: "Unknown step, invalid check, or conflicting value flags.", example: "method check set task.method search --value-file check.yaml" },
-  "check remove": { usage: "method check remove FILE STEP_ID", purpose: "Remove the operation's check.", arguments: "The operation will be unchecked. External changes require a check.", result: edited, errors: "The selected step does not exist.", example: "method check remove task.method copy" },
+  "check set": { usage: "method check set FILE STEP_ID (--json JSON|--value-file FILE)", purpose: "Set the operation's independent check.", arguments: "When a task check is needed, use an equals/count/present/file object, a run check, or an agent check. Put plain-English criteria in an agent check prompt.", result: edited, errors: "Unknown step, invalid check, or conflicting value flags.", example: "method check set task.method search --value-file check.yaml" },
+  "check remove": { usage: "method check remove FILE STEP_ID", purpose: "Remove the operation's check.", arguments: "The operation will have no additional task check. Remove unnecessary checks and their supporting tests and instructions. External changes require a check of the intended external result.", result: edited, errors: "The selected step does not exist.", example: "method check remove task.method copy" },
   check: { usage: "method check set|remove ...", purpose: "Edit an operation's check.", arguments: "Use method check set --help for arguments.", result: edited, errors: "Unknown action. Choose set or remove.", example: "method check set --help" },
   validate: { usage: "method validate FILE [--config FILE] [--workspace DIR]", purpose: "Check the definition and local setup without running the work.", arguments: "Checks data, names, dependencies, templates, declared files, executables, environment variables, runtime profiles and tool bindings. Defaults to runtime.json beside the Method. --workspace selects the helper folder and default config folder. Relative paths in config resolve from the config folder.", result: "JSON reports definition, local_setup, executed:false, and valid. Invalid definitions or missing declared files exit 1. Managed setup is reported separately as needs_preparation; run prepares it.", errors: "The error identifies the invalid field or reference.", example: "method validate task.method" },
   diff: { usage: "method diff FILE OTHER_FILE", purpose: "Compare two documents.", arguments: "Both files required. Values are compared after parsing YAML or JSON.", result: "JSON array of {path,before?,after?}. Empty means equal; exit 0 either way.", errors: "Both file paths are required.", example: "method diff original.method task.method" },
@@ -172,8 +172,12 @@ Use a script for exact file transforms and exports. Use a call for a structured 
 For incremental exports, keep a declared state ledger of source IDs and evidence hashes. Compare new evidence to that ledger and rebuild only changed days. Supply the prior run's state.json with --state for a new run.
 Resume continues the same input set and saved version. A new run can collect new files. A separate database is optional application state, not a workaround required to resume Method.
 To edit a failed method, read its exact saved version and logs, compare the current version, then save the complete repair with a reason.
+
+${checkEditingRule}
 `;
 const recovery = `# Recovery
+
+${checkEditingRule}
 
 For a stopped run, read summary.json, events.jsonl, and checkpoint.json. Resume with the original method, config, --run-dir DIR, and --resume. Accepted steps and iterations are reused.
 An unfinished action needs --retry STEP:ITERATION after inspection of its external effects. A retry consumes the remaining run budget. Budgets do not reset on resume. Changed methods or config require a new run.

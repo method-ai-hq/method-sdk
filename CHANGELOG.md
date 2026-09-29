@@ -1,3 +1,10 @@
+# 0.11.7
+
+- Default authoring to no additional task check. Require a concrete task purpose for each added check.
+- Tell authors and repair agents to delete unnecessary checks and their supporting tests and instructions.
+- Show summary and research designs without automatic checking steps, and explain the check-free routing example.
+- Report declared-check failure without claiming that the output is wrong (runtime 0.9.4).
+
 # 0.11.6
 
 - Guide browser research authors to select Method's browser connection and use the existing social-briefing example.

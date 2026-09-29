@@ -14,3 +14,5 @@ threshold by testing your own labeled messages.
 `result.fixture.json` is an illustrative result, not a live model response.
 The `retry/` folder contains a loopback recovery test. Run it from this folder
 with `node --test retry/retry.test.mjs`. It uses the installed Method runtime.
+
+This complete Method has no additional task checks. The runtime checks output types. Classification and routing return the requested result without changing an external system. Add a task check only when the request introduces a concrete failure that needs one.
