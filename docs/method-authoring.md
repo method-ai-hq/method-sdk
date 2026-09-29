@@ -18,6 +18,8 @@ Choose each operation's execution type from its requirements:
 | Selection from named options with probabilities | classify |
 | An answer or decision that must come from the user | ask |
 
+For browser work, declare a browser environment and select it with do.browser: environment.NAME. Method supplies the browser controls. Put the research task, limits, and required results in the prompt. Read method authoring example social-briefing for a complete example.
+
 Use built-in equals, count, present, and file checks where sufficient. Use a script check for rules those checks cannot express. Use an agent check when the check requires judgment.
 
 Use when for conditions, each for collections, repeat for bounded iteration, and after for required order without a data dependency.
