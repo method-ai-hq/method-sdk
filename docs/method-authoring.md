@@ -20,11 +20,11 @@ Choose each operation's execution type from its requirements:
 
 For browser work, declare a browser environment and select it with do.browser: environment.NAME. Method supplies the browser controls. Put the research task, limits, and required results in the prompt. Read method authoring example social-briefing for a complete example.
 
-Default to no additional task check. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
+Default to no additional task check, except for external changes. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
 
 Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
 
-When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For external changes, check the intended external result.
+When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. An external change needs a check that observes its effect independently of the call that made the change. A success status, receipt, or returned ID shows only that the request was accepted. Read the changed system again, or the place where it reports problems, and compare what you find with the intended result. If the effect cannot be observed, report the change as unconfirmed, and do not call it done.
 
 Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
 
@@ -730,7 +730,7 @@ method check remove FILE STEP_ID
 ```
 
 Arguments and defaults:
-The operation will have no additional task check. Remove unnecessary checks and their supporting tests and instructions. External changes require a check of the intended external result.
+The operation will have no additional task check. Remove unnecessary checks and their supporting tests and instructions. External changes require a check that observes their effect independently of the call that made them.
 
 Result and changes:
 JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
