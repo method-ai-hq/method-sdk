@@ -1,12 +1,10 @@
-import { authoringEntryRule, globalAgentRule } from "./authoring-instructions.js";
+import { authoringEntryRule, globalAgentSetup } from "./authoring-instructions.js";
 
 export const authoringPrompt = `I want to turn some repeated work into a method using the Method CLI. Can you help me do that?
 
 First, check that the CLI is installed with \`which method\`. If needed, follow the setup instructions at https://withmethod.ai/docs/quickstart.md to install the CLI.
 
-Then add this line to your global agent instructions file (for example \`~/.claude/CLAUDE.md\` for Claude Code or \`~/.codex/AGENTS.md\` for Codex). Create the file if it does not exist. Skip this if the file already contains the line:
-
-- ${globalAgentRule}
+${globalAgentSetup}
 
 ${authoringEntryRule}
 

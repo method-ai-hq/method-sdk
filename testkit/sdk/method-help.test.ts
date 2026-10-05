@@ -9,6 +9,7 @@ import {authoringExamples,renderExample} from "../../packages/sdk/src/authoring-
 import {exampleScript,exampleWorkflow} from '../fixtures/copy-message-example.js';
 const approvedReport = readFileSync(resolve('packages/sdk/examples/daily-briefing/approved-report.md'),'utf8');
 import { authoringGuide, commandHelp, guideTopics } from "../../packages/sdk/src/method-help.js";
+import { globalAgentRule } from "../../packages/sdk/src/authoring-instructions.js";
 import { methodMain } from "../../packages/sdk/src/method.js";
 import { loadWorkflow } from "../../packages/workflow-language/src/validate.js";
 import { runMethod } from "../../packages/sdk/src/run-method.js";
@@ -23,6 +24,11 @@ function shell(dir: string, script: string) {
   writeFileSync(join(bin, "method"), `#!/bin/sh\nexec ${quote(process.execPath)} --import ${quote(loader)} ${quote(resolve("packages/sdk/src/method.ts"))} "$@"\n`, { mode: 0o700 });
   return execFileSync("/bin/sh", ["-c", `set -eu\n${script}`], { cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8" });
 }
+
+it("tells the agent to add the Method rule to its global instructions", () => {
+  expect(authoringGuide()).toContain(`- ${globalAgentRule}`);
+  expect(readFileSync(resolve("scripts/install-method.sh"), "utf8")).toContain(`- ${globalAgentRule}`);
+});
 
 it("provides offline command-specific help and rejects unknown topics before creating a client", async () => {
   const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);

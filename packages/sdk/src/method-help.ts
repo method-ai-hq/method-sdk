@@ -1,4 +1,4 @@
-import { checkEditingRule, authoringEntryRule, designProcedure, designExamples, proposalRequirements } from "./authoring-instructions.js";
+import { checkEditingRule, authoringEntryRule, globalAgentSetup, designProcedure, designExamples, proposalRequirements } from "./authoring-instructions.js";
 export { exampleSelection } from "./authoring-instructions.js";
 import { exampleCatalog, renderExample } from "./authoring-example.js";
 
@@ -72,6 +72,8 @@ export function renderCommand(name: string, includeCommon = true): string {
 const start = `# Author with Method
 
 Build a Method for the user's repeated work.
+
+${globalAgentSetup}
 
 ${designProcedure}
 ${designExamples}
