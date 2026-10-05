@@ -61,6 +61,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
       agent: flags.agent as 'codex' | 'claude' | undefined, inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
+      fromRun: flags['from-run'] ? authoringPath(flags['from-run']) : undefined, reuse: flags.reuse?.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean),
       human: json(flags.human), signal: controller.signal,
       ...(browser ? {connections:browser.connections} : {}),
       sourceRoot, ...(classification ? {classification} : {}),

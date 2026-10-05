@@ -15,7 +15,7 @@ const help = "Use method run, check, steps, prompt, inspect, or doctor. See meth
 export function parse(args: string[]) {
   return parseArgs({ args, allowPositionals: true, options: {
     server: {type:"string"}, agent: {type:"string"}, background: {type:"boolean"}, config: {type:"string"}, state: {type:"string"}, out: {type:"string"}, inputs: {type:"string"}, workspace: {type:"string"},
-    "run-dir": {type:"string"}, resume: {type:"boolean"}, human: {type:"string"}, retry: {type:"string",multiple:true},
+    "run-dir": {type:"string"}, "from-run": {type:"string"}, reuse: {type:"string",multiple:true}, resume: {type:"boolean"}, human: {type:"string"}, retry: {type:"string",multiple:true},
     "include-files": {type:"boolean"}, verbose: {type:"boolean"}, help: {type:"boolean"}
   }});
 }

@@ -109,6 +109,13 @@ stderr, and public progress through Method's progress channel. Return the rule
 used for an important decision and the receipt or record ID for an external
 write. Keep credentials in runtime bindings.
 
+**Test later scripts before the expensive step.** A script after an agent or a
+long call fails only after that work is done. Run each such script on a saved
+input before a full run: pipe one JSON object, such as the step inputs in a
+step.started event of events.jsonl, to the entrypoint on stdin. Check that the
+result has exactly the declared out names. Keep one real or redacted input as a
+test fixture beside the helpers. Add a case for each input that broke the script.
+
 **Make recovery explicit.** For external writes, describe what a retry does and
 how to check uncertain completion. Use a stable operation or business key when
 the service supports duplicate prevention. Test decision boundaries and an
@@ -174,7 +181,8 @@ Existing checks and tests are implementation choices, not user requirements. Rem
 Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
 
 For a stopped run, read summary.json, events.jsonl, and checkpoint.json. Resume with the original method, config, --run-dir DIR, and --resume. Accepted steps and iterations are reused.
-An unfinished action needs --retry STEP:ITERATION after inspection of its external effects. A retry consumes the remaining run budget. Budgets do not reset on resume. Changed methods or config require a new run.
+An unfinished action needs --retry STEP:ITERATION after inspection of its external effects. A retry consumes the remaining run budget. Budgets do not reset on resume. Resume always uses the run's saved bundle, so a code fix needs a new run.
+When a fix changes only steps that were not accepted, start a fork: method run FILE --from-run DIR --reuse STEP[,STEP]. List the accepted steps to keep and every step they depend on; the failure summary names them. The fork has a new bundle and reuses a listed step only if its definition, referenced inputs and environment, model profile, tools, entrypoint files, and runtime are unchanged. Otherwise it stops with fork_mismatch. It copies declared file outputs and records forked_from with the parent run and the changed files. It does not trace helper files that an entrypoint imports: if you changed a helper that a reused step imports, do not reuse that step.
 For ask, supply --human FILE containing {steps: {"STEP:ITERATION": {outputs: {NAME: VALUE}}}}. Use the user's actual answer. Checks still run.
 For a stale .lock, first confirm the process has stopped. Never remove an active process lock.
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
@@ -1231,6 +1239,7 @@ Current methods optionally use runtime.json beside a local file, or in the curre
 --run-dir DIR: saved run folder.
 --agent codex|claude: select an agent for unconfigured profiles in a new run.
 --resume: continue the same saved run with its saved agent.
+--from-run DIR --reuse STEP[,STEP]: start a new run that reuses accepted steps of a stopped or completed run. Use it after a fix to steps that were not accepted. See method authoring recovery.
 --human FILE: saved human answers for the current runtime.
 --verbose: print runtime events.
 Use method doctor to check the installed Node and configured tools.

@@ -49,7 +49,24 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
       ...(event.exit_code !== undefined ? { exit_code: event.exit_code } : {}),
       ...(typeof event.diagnostics === "string" && event.diagnostics ? { diagnostics: event.diagnostics.length <= 4000 ? event.diagnostics : event.diagnostics.slice(0, 1000) + "\n[middle omitted]\n" + event.diagnostics.slice(-3000) } : {}),
     };
+    if (event.event === "run.started" && event.forked_from) {
+      const fork = event.forked_from;
+      recorded.detail = `Forked from run ${fork.run_dir} (execution ${fork.execution_id}). Reused: ${fork.steps.map((s: any) => s.step).join(", ")}. `
+        + (fork.changed_files.length ? `Changed files: ${fork.changed_files.map((f: any) => `${f.file} (${f.change})`).join(", ")}. Only the entrypoints of reused steps were compared.` : "No bundle file changed.");
+    }
     if (!event.step) { runEvents.push(recorded); continue; }
+    if (event.event === "step.imported") {
+      // A fork reuses accepted iterations from its parent run; they have no started event here.
+      const imported = { ...recorded, detail: `Reused from run ${event.parent_run_dir} (execution ${event.parent_execution_id})` };
+      const iterations: unknown[] = event.skipped ? [null] : event.outputs ?? [];
+      iterations.forEach((outputs, iteration) => {
+        const row = invocations[`${event.step}:${iteration}`] ??= { step_id: event.step, status: "running", checks: [], changes: {}, events: [] };
+        row.events.push(imported);
+        if (event.skipped) row.status = "skipped";
+        else { row.status = "passed"; row.outputs = outputs as Record<string, any>; }
+      });
+      continue;
+    }
     const id = `${event.step}:${event.iteration ?? 0}`;
     const row = invocations[id] ??= { step_id: event.step, status: "running", checks: [], changes: {}, events: [] };
     if (event.event === "step.started") {
