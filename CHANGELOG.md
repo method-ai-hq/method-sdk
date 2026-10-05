@@ -1,3 +1,9 @@
+# 0.11.8
+
+- Add `method run FILE --from-run RUN_DIR --reuse STEP[,STEP]`. A new run reuses accepted steps of a stopped or completed run when their definition, referenced inputs, model, tools, entrypoint files, and runtime are unchanged. The run records `forked_from`, and the run page shows reused steps (runtime 0.9.5).
+- A failed run's recovery text names the steps that a fork can reuse.
+- Tell authors to test later scripts on saved inputs before an expensive step, and to fork after a fix to steps that were not accepted.
+
 # 0.11.7
 
 - Default authoring to no additional task check. Require a concrete task purpose for each added check.
