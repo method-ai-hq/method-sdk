@@ -5,7 +5,7 @@ import {authoringExamples,exampleDirectory,renderExample} from '../../packages/s
 import {loadWorkflow} from '../../packages/workflow-language/src/validate.js';
 import {preflight} from '@withmethod/runtime/preflight.js';
 import {authoringPrompt} from '../../packages/sdk/src/authoring-prompt.js';
-import {authoringEntryRule} from '../../packages/sdk/src/authoring-instructions.js';
+import {authoringEntryRule,globalAgentRule} from '../../packages/sdk/src/authoring-instructions.js';
 it('ships four complete packages with valid definitions, source descriptions, and every declared helper',async()=>{
  const files=JSON.parse(readFileSync('packages/sdk/examples/files.json','utf8')) as string[];
  for(const example of authoringExamples){
@@ -21,5 +21,6 @@ it('ships four complete packages with valid definitions, source descriptions, an
   expect(renderExample(example.id)).toContain('# Request');
  }
  expect(authoringPrompt).toContain(authoringEntryRule);
+ expect(authoringPrompt).toContain('- '+globalAgentRule);
  expect(authoringPrompt.indexOf(authoringEntryRule)).toBeLessThan(authoringPrompt.indexOf('Before saving'));
 });
