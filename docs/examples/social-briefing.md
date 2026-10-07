@@ -33,6 +33,7 @@ environment:
     description: Browser with access to Grok, LinkedIn, and alphaXiv.
 steps:
   gather_sources:
+    no_effect_reason: Reads posts and papers in the browser; sends, posts and submits nothing.
     name: Find and read sources
     changes:
       - environment.browser

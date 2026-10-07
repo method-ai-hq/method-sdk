@@ -1,1 +1,0 @@
-{"inputs":{"expect":{"queue":"billing"}},"observations":[{"source":"http","ref":"GET /tickets/mop_fixture","data":{"status":404,"body":null}}],"expect":"no_evidence"}

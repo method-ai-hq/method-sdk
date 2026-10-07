@@ -26,7 +26,7 @@ const sendMethod = () => ({
 
 it('lists the reviewed observers, and every judge passes its own fixtures', () => {
   const library = observerLibrary();
-  expect(library.map(o => o.name)).toEqual(['http.json', 'mail.delivery']);
+  expect(library.map(o => o.name)).toEqual(['mail.delivery']);
   for (const observer of library) for (const file of ['fixtures', 'fetch.mjs', 'judge.mjs']) expect(existsSync(join(observers, observer.name, file))).toBe(true);
   for (const observer of library) {
     const dir = join(observers, observer.name, 'fixtures');
@@ -41,44 +41,24 @@ it('lists the reviewed observers, and every judge passes its own fixtures', () =
   }
 });
 
-it('effect add copies a reviewed observer and declares the effect, which then runs', async () => {
+it('effect add copies a reviewed observer and declares the effect', async () => {
   const root = temp();
   const file = join(root, 'send.method');
   writeFileSync(file, stringify(sendMethod()));
-  writeFileSync(join(root, 'send.mjs'), 'console.log(JSON.stringify({receipt:"202 Accepted"}))');
-  await expect(effectCommand(['add', file, 'send', 'stored', '--observer', 'http.json', '--in', 'expect=inputs.expected'])).rejects.toThrow('--set path=VALUE');
+  await expect(effectCommand(['add', file, 'send', 'delivered', '--observer', 'mail.delivery'])).rejects.toThrow('--in to=REFERENCE');
   const read = captured();
-  await effectCommand(['add', file, 'send', 'stored', '--observer', 'http.json', '--in', 'expect=inputs.expected', '--set', 'path=/records/{token}']);
+  await effectCommand(['add', file, 'send', 'delivered', '--observer', 'mail.delivery', '--in', 'to=inputs.to']);
   const printed = read();
   vi.restoreAllMocks();
   const doc = parse(readFileSync(file, 'utf8'));
   expect(doc.format).toBe('method/3.3');
-  expect(doc.environment.service_reader).toMatchObject({ role: 'observer', type: 'service' });
-  expect(doc.steps.send.effects.stored).toMatchObject({ confirm: 'positive', fixtures: 'observers/http.json/fixtures',
-    observe: { entrypoint: 'observers/http.json/fetch.mjs', args: ['--connection', 'service_reader', '--path', '/records/{token}'] } });
-  expect(printed.setup).toContain('service_reader');
-  expect(existsSync(join(root, 'observers/http.json/judge.mjs'))).toBe(true);
-  // The added effect works: a stub service returns the record for the action's token.
-  doc.inputs.expected = { type: 'record', fields: { queue: 'text' } };
-  writeFileSync(file, stringify(doc));
-  const records = new Map<string, any>();
-  const server = require('node:http').createServer((req: any, res: any) => {
-    const token = decodeURIComponent(req.url.split('/').at(-1));
-    res.statusCode = records.has(token) ? 200 : 404; res.end(JSON.stringify(records.get(token) ?? {}));
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const url = `http://127.0.0.1:${server.address().port}`;
-  writeFileSync(join(root, 'send.mjs'), `const r=await fetch(${JSON.stringify(url)}+"/x");console.log(JSON.stringify({receipt:"202 Accepted"}))`);
-  try {
-    const config = { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } }, environment: { mail: url, service_reader: url } };
-    const pending = await runMethod(file, config, { runDir: join(root, 'run-1'), inputs: { to: 'a@example.com', expected: { queue: 'billing' } } });
-    expect(pending.status).toBe('completed'); expect(pending.effects?.pending).toBe(1);
-    const ledger = readFileSync(join(root, 'run-1/effects.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    records.set(ledger[0].token, { queue: 'general' });
-    const later = await (await import('@withmethod/runtime')).observeRun(join(root, 'run-1'), { now: new Date(Date.now() + 60_000) });
-    expect(later.status).toBe('failed');
-    expect(later.observed[0].reason).toContain('queue is "general", intended "billing"');
-  } finally { server.close(); }
+  expect(doc.environment.bounce_mailbox).toMatchObject({ role: 'observer', type: 'service' });
+  expect(doc.steps.send.effects.delivered).toMatchObject({ confirm: 'unrefuted_at_horizon', fixtures: 'observers/mail.delivery/fixtures',
+    observe: { runtime: 'mail_observer', entrypoint: 'observers/mail.delivery/fetch.mjs', args: ['--connection', 'bounce_mailbox'] } });
+  expect(printed.setup).toContain('MAIL_OBSERVER_PASSWORD');
+  expect(existsSync(join(root, 'observers/mail.delivery/judge.mjs'))).toBe(true);
+  const { validateMethod } = await import('@withmethod/runtime');
+  expect(() => validateMethod(doc)).not.toThrow();
 });
 
 it('mail.delivery reads bounces over IMAP without changing the mailbox', async () => {

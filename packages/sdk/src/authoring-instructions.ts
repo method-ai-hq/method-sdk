@@ -29,7 +29,7 @@ Default to no additional task check, except for external changes, which need eff
 
 Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
 
-When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For an external change, declare an effect instead: an observer reads the changed system, or the place where it reports problems, separately from the call that made the change, and the runtime decides from that evidence whether the work is done. A success status, receipt, or returned ID shows only that the request was accepted. Use a reviewed observer when one fits (method effect list).
+When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For an external change, declare an effect instead: an observer reads the changed system, or the place where it reports problems, separately from the call that made the change, and the runtime decides from that evidence whether the work is done. A success status, receipt, or returned ID shows only that the request was accepted. Use a built-in observer (file, sqlite, http) when one fits. When a change cannot or need not be observed, such as a browser step that only reads, state no_effect_reason instead.
 
 ${checkEditingRule}
 

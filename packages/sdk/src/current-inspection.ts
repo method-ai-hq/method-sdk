@@ -52,6 +52,7 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
     // Effect verdicts are run events, so the dashboard shows them without a new inspection field.
     if (event.event === "effect.observed") recorded.detail = `${event.effect}: ${event.verdict}${event.final ? "" : " (observation continues)"}. ${String(event.reason ?? "")}`.slice(0, 4000);
     if (event.event === "run.status_changed") recorded.detail = `Status changed from ${event.from} to ${event.to} after a later observation.`;
+    if (event.event === "effects.waived") recorded.detail = event.waived.map((w: any) => `Not observed: ${w.step} (${w.reason})`).join("; ").slice(0, 4000);
     if (event.event === "effects.fixtures_passed") recorded.detail = `${event.fixtures.length} effect fixtures gave their expected verdicts.`;
     if (event.event === "run.started" && event.forked_from) {
       const fork = event.forked_from;

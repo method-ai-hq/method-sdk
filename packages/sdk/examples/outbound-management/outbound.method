@@ -34,6 +34,7 @@ steps:
         description: Current CRM, target customer, email dates, and state hash as JSON.
     purpose: Checks the two dates and rejects an email start date after the planned day. Returns the CRM, date range, and hash of the supplied state.
   gather_sources:
+    no_effect_reason: Reads email, Happenstance and LinkedIn in the browser; sends, posts and submits nothing. Outreach drafts are saved for review, not sent.
     name: Read email and find prospects
     changes:
       - environment.browser
