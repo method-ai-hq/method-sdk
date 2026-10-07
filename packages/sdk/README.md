@@ -15,7 +15,7 @@ const result = await runMethod('task.method', {allow_local_processes: true}, {in
 console.log(result.status, inspectRun('runs/first'));
 ```
 
-New Methods use method/3.2; existing method/3.1 documents remain supported. The executor is the pinned @withmethod/runtime dependency. Python uses method-bridge to call the same runtime.
+New Methods use method/3.3; existing method/3.1 and method/3.2 documents remain supported. The executor is the pinned @withmethod/runtime dependency. Python uses method-bridge to call the same runtime.
 
 Browser-safe document modules are available at `@withmethod/sdk/schema`, `/validate`, `/execution`, `/inspection`, and `/result-files`. Node tools use `/identity`, `/method-package`, `/method-client`, `/method-sync`, and `/process`. Do not import the Node package root into a browser bundle.
 

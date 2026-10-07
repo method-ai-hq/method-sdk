@@ -1,0 +1,299 @@
+format: method/3.3
+name: Learn from a correction
+goal: Turn one correction of a recorded run into an approved case and a repair that passes it without breaking earlier cases.
+inputs:
+  method_file: {type: text, description: "Absolute path of the Method file to repair."}
+  run_dir: {type: text, description: "The recorded run that the correction is about."}
+  note: {type: text, description: "The person's correction in their own words."}
+  cases_dir: {type: text, description: "Folder of the Method's cases."}
+  runs_root: {type: text, description: "Folder with other recorded runs of the same Method, for examples and the review."}
+  prepared_file: {type: text, description: "Runtime configuration that method learn prepared for the target Method."}
+  author: {type: text, description: "Who gave the correction.", default: ""}
+  git: {type: boolean, description: "Commit the change when the Method folder is a Git repository.", default: true}
+state:
+  proceed: {type: boolean, default: false}
+  approved_case: {type: boolean, default: false}
+  repaired: {type: boolean, default: false}
+  conflict: {type: boolean, default: false}
+  approved_change: {type: boolean, default: false}
+  outcome:
+    type: record
+    fields: {status: text, message: text}
+    default: {status: stopped, message: Learn stopped before a decision.}
+environment:
+  method_folder: {type: files, description: "The folder of the Method being repaired and its cases."}
+  method_folder_reader: {type: files, description: "The same folder, read by the observer that confirms the commit.", role: observer}
+files:
+  - scripts/lib.mjs
+steps:
+  prepare:
+    name: Copy the Method and read the run
+    purpose: Copies the Method folder (without cases, runs, and dependencies) and its cases into this run's private artifacts, records file hashes, and summarizes the recorded run's accepted steps and effect observations. Changes nothing outside the artifacts.
+    in: {method_file: inputs.method_file, run_dir: inputs.run_dir, cases_dir: inputs.cases_dir}
+    do: {kind: run, runtime: node, entrypoint: scripts/prepare.mjs}
+    changes: []
+    out:
+      workspace: {type: text, description: "Private copy of the Method folder."}
+      method_copy: {type: text, description: "The Method file inside the copy."}
+      cases_copy: {type: text, description: "Private copy of the cases folder."}
+      snapshot: {type: text, description: "JSON map of the Method folder's file hashes when learn started."}
+      run_record: {type: text, description: "Accepted steps of the run with inputs and outputs, shortened."}
+      method_text: {type: text, description: "The current Method file."}
+      method_changed: {type: boolean, description: "True when the Method changed after the recorded run."}
+  locate:
+    name: Find the cause in the recorded run
+    in: {note: inputs.note, run_record: run_record, method_text: method_text, method_file: inputs.method_file, run_dir: inputs.run_dir}
+    do:
+      kind: agent
+      model: default
+      prompt: |
+        A person corrected a result of a Method run. Find the cause in the recorded run. Do not change any file.
+
+        Correction: {{note}}
+
+        Method file ({{method_file}}):
+        {{method_text}}
+
+        Recorded run (full events are in {{run_dir}}/events.jsonl):
+        {{run_record}}
+
+        Return result as exactly one of:
+        - wrong_step: a step produced a wrong value.
+        - missing_step: no step does the work that the correction needs, for example nobody checked for a bounce.
+        - bad_input: the run's inputs or a source were wrong, and the steps used them correctly.
+        - note_wrong: the recorded evidence contradicts the correction.
+        step is the step that produced the wrong value, or for missing_step the step after which the missing work belongs.
+        evidence lists the recorded values you rely on. For each, give step, iteration, output (a dot path in that step's outputs, such as report or report.lines.0) and quoted: text copied exactly from that recorded value. A script checks each quote against the record, so copy characters exactly. Cite at least one value.
+        explanation is two to four plain sentences for the person.
+    changes: []
+    out:
+      locate:
+        type: record
+        fields:
+          result: text
+          step: text
+          explanation: text
+          evidence: {type: list, fields: {step: text, iteration: number, output: text, quoted: text}}
+    limits: {timeout_ms: 900000}
+  check_evidence:
+    name: Check the cited evidence against the record
+    purpose: Confirms that every value the locate agent quotes is in the recorded run, byte for byte, and writes a summary for the person. Changes nothing.
+    in: {run_dir: inputs.run_dir, locate: locate, note: inputs.note}
+    do: {kind: run, runtime: node, entrypoint: scripts/check-evidence.mjs}
+    changes: []
+    out:
+      evidence_check:
+        type: record
+        description: Whether the cited values are in the record, and the problems found.
+        fields: {verified: boolean, problems: {type: list, items: text}}
+      summary: {type: text, description: "The proposed cause and the evidence check, for the person."}
+  confirm:
+    name: Confirm the cause
+    in: {note: inputs.note, summary: summary}
+    ask: |
+      Your correction: {{note}}
+
+      {{summary}}
+
+      Is this the cause? Answer decision.proceed true to continue, or false to stop. Use decision.correction to correct the cause or add detail; use an empty text when there is nothing to add.
+    out:
+      decision: {type: record, fields: {proceed: boolean, correction: text}}
+  record_confirm:
+    name: Record the decision
+    purpose: Saves whether the person confirmed the cause, so later steps run only after a confirmation.
+    in: {decision: decision}
+    do: {kind: run, runtime: node, entrypoint: scripts/record-confirm.mjs}
+    changes: [state.proceed, state.outcome]
+    out:
+      confirmed: {type: boolean, description: "True when the person confirmed the cause."}
+  draft:
+    name: Draft the case
+    when: state.proceed
+    in: {note: inputs.note, decision: decision, locate: locate, run_record: run_record, method_text: method_text, runs_root: inputs.runs_root, run_dir: inputs.run_dir}
+    do:
+      kind: agent
+      model: default
+      prompt: |
+        Write one test case that captures this correction. Do not change any file.
+
+        Correction: {{note}}
+        Person's addition: {{decision.correction}}
+        Cause: {{locate.result}} at step {{locate.step}}. {{locate.explanation}}
+
+        Method:
+        {{method_text}}
+
+        Recorded run ({{run_dir}}):
+        {{run_record}}
+
+        Return:
+        - id: lowercase letters, digits and hyphens, at most 40 characters.
+        - text: one plain sentence a person can approve, such as "When the summary email bounces, the run does not report success."
+        - expect_json: a JSON list of expectations. Kinds: {"kind":"equals","ref":"outputs.NAME[.FIELD]","value":...} for an exact value; {"kind":"status","in":["failed"]} for the run status; {"kind":"effect","effect":"STEP/ITERATION/NAME","verdict":["contradicted"]} for an effect verdict; {"kind":"predicate","runtime":"node","entrypoint":"check.mjs"} for a rule that needs code. Add "text" to each. The expectations must FAIL on the recorded run and PASS once the error is fixed. Test the rule, not one example's exact wording: for prose, use a predicate that checks the rule. A replay returns recorded outputs for steps that did not change, so expect what a corrected version would produce from the same inputs.
+        - predicate_source: for a predicate, the complete Node ES module check.mjs. It reads {status, code, result, outputs, effects} as JSON from stdin and prints {"pass": true|false, "reason": "..."}. Use an empty text when there is no predicate.
+        - examples: plain text. For this run and up to three other runs of the same Method under {{runs_root}}, show the current output and what the case requires. Say where the rule does not apply.
+    changes: []
+    out:
+      draft:
+        type: record
+        fields: {id: text, text: text, expect_json: text, predicate_source: text, examples: text}
+    limits: {timeout_ms: 900000}
+  label:
+    name: Approve the case
+    when: state.proceed
+    in: {draft: draft}
+    ask: |
+      Proposed case {{draft.id}}: {{draft.text}}
+
+      What it checks (executable form):
+      {{draft.expect_json}}
+
+      Predicate code, if any:
+      {{draft.predicate_source}}
+
+      Examples:
+      {{draft.examples}}
+
+      Approve only if the examples are labeled right and the check tests the rule you meant. Answer labels.approved true or false, and labels.comment with any change you want.
+    out:
+      labels: {type: record, fields: {approved: boolean, comment: text}}
+  make_case:
+    name: Save the case and prove it fails now
+    when: state.proceed
+    purpose: Saves the approved case in the private cases copy, refuses an expectation that passes on an empty result, and replays the case on the current version, which must fail. Changes nothing outside the artifacts.
+    in: {labels: labels, draft: draft, method_file: inputs.method_file, run_dir: inputs.run_dir, note: inputs.note, cases_copy: cases_copy, prepared_file: inputs.prepared_file, author: inputs.author, locate: locate}
+    do: {kind: run, runtime: node, entrypoint: scripts/make-case.mjs}
+    changes: [state.approved_case, state.outcome]
+    out:
+      case_id: {type: text, description: "The saved case, or empty when it was not approved."}
+      red_report: {type: text, description: "Why the case fails on the current version."}
+      cases_digest: {type: text, description: "Digest of the cases copy, which the repair must not change."}
+  repair:
+    name: Repair a copy of the Method
+    when: state.approved_case
+    in: {note: inputs.note, decision: decision, draft: draft, locate: locate, case_id: case_id, red_report: red_report, workspace: workspace, method_copy: method_copy, method_file: inputs.method_file, cases_copy: cases_copy, cases_digest: cases_digest, prepared_file: inputs.prepared_file, snapshot: snapshot}
+    do:
+      kind: agent
+      model: default
+      prompt: |
+        Repair a Method so that a new test case passes and earlier cases keep passing.
+
+        Edit only files in {{workspace}}. The Method file is {{method_copy}}. Never edit {{cases_copy}}: a script compares its digest after your work.
+        If {{workspace}}/../gate-report.json exists, a previous attempt failed the gate. Read it first.
+
+        Correction: {{note}}
+        Person's addition: {{decision.correction}}
+        Cause: {{locate.result}} at step {{locate.step}}. {{locate.explanation}}
+        New case {{case_id}}: {{draft.text}}
+        Why it fails now: {{red_report}}
+
+        Rules:
+        - Make the smallest local change that fixes the rule: add a step, a branch, a check, or an effect, or fix one step. At most 80 changed lines.
+        - Do not delete steps, checks, effects or behavior that the correction does not require.
+        - Do not copy values from the correction (names, addresses, amounts) into the Method. Fix the rule, not the example.
+        - For an external change that nobody confirmed, add an effect. Run method effect list for reviewed observers and method authoring for the format.
+        - Check your work with: method test {{method_copy}} --cases {{cases_copy}} --baseline {{method_file}} --new {{case_id}}
+        - If the new case can pass only by breaking an earlier case whose rule the correction makes obsolete, change nothing and return result spec_conflict with those case IDs in conflicting_cases.
+
+        Return result (repaired or spec_conflict), summary (two plain sentences on what you changed and why), and conflicting_cases (empty unless spec_conflict).
+    changes: []
+    out:
+      repair:
+        type: record
+        fields: {result: text, summary: text, conflicting_cases: {type: list, items: text}}
+    check: {kind: run, runtime: node, entrypoint: scripts/gate.mjs}
+    reading:
+      check_name: Gate
+      check: Refuses the repair when the cases changed, the diff exceeds 80 lines or copies values from the note, the new case does not pass, or an earlier case that passed now fails. A reported conflict must name earlier active cases.
+    limits: {timeout_ms: 1800000}
+  record_repair:
+    name: Record the repair result
+    when: state.approved_case
+    purpose: Saves whether the repair passed the gate or reported a conflict with earlier cases.
+    in: {repair: repair}
+    do: {kind: run, runtime: node, entrypoint: scripts/record-repair.mjs}
+    changes: [state.repaired, state.conflict, state.outcome]
+    out:
+      repaired: {type: boolean, description: "True when a repair passed the gate."}
+  retire_decision:
+    name: Decide about conflicting cases
+    when: state.conflict
+    in: {repair: repair, draft: draft}
+    ask: |
+      The new case "{{draft.text}}" conflicts with earlier cases. Agent's summary: {{repair.summary}}
+
+      Retire an earlier case only when its rule no longer applies, for example after a policy change. Answer retire.retire_ids with the case IDs to retire (an empty list to stop), and retire.reason with why their rule no longer applies.
+    out:
+      retire: {type: record, fields: {retire_ids: {type: list, items: text}, reason: text}}
+  commit_retire:
+    name: Retire the chosen cases
+    when: state.conflict
+    purpose: Marks the chosen cases as retired, with the reason, in the Method's cases folder. The new case is not saved; run learn again.
+    in: {retire: retire, method_file: inputs.method_file, cases_dir: inputs.cases_dir, case_id: case_id}
+    do: {kind: run, runtime: node, entrypoint: scripts/commit-retire.mjs}
+    changes: [environment.method_folder, state.outcome]
+    out:
+      retired: {type: list, items: text, description: "The retired case IDs."}
+    effects:
+      retired:
+        intent: Each chosen case is marked retired in the cases folder.
+        in: {ids: retire.retire_ids, cases_dir: inputs.cases_dir}
+        observe: {kind: run, runtime: node, entrypoint: scripts/retired-observe.mjs}
+        judge: {kind: run, runtime: node, entrypoint: scripts/retired-judge.mjs}
+        fixtures: fixtures/retired
+        schedule: {first: 0s, horizon: 1m}
+        confirm: positive
+        blocking: true
+  review:
+    name: Show the change and its effect on recent runs
+    when: state.repaired
+    purpose: Shows a line diff of the changed files and replays up to ten recent runs of the same Method on the old and new versions, listing every output that changed. Changes nothing.
+    in: {method_file: inputs.method_file, method_copy: method_copy, workspace: workspace, snapshot: snapshot, runs_root: inputs.runs_root, run_dir: inputs.run_dir, prepared_file: inputs.prepared_file}
+    do: {kind: run, runtime: node, entrypoint: scripts/review.mjs}
+    changes: []
+    out:
+      review: {type: text, description: "The diff and the changed results of recent runs."}
+      changed_runs: {type: number, description: "Recent runs whose results the change alters."}
+  approve:
+    name: Approve the change
+    when: state.repaired
+    in: {review: review, repair: repair}
+    ask: |
+      {{repair.summary}}
+
+      {{review}}
+
+      Approve this change to the Method? Answer approval.approved true or false, and approval.comment with any reason.
+    out:
+      approval: {type: record, fields: {approved: boolean, comment: text}}
+  record_approval:
+    name: Record the approval
+    when: state.repaired
+    purpose: Saves whether the person approved the change.
+    in: {approval: approval}
+    do: {kind: run, runtime: node, entrypoint: scripts/record-approval.mjs}
+    changes: [state.approved_change, state.outcome]
+    out:
+      approved: {type: boolean, description: "True when the person approved the change."}
+  commit:
+    name: Save the repair and the case
+    when: state.approved_change
+    purpose: Copies the approved files into the Method folder, refusing files that changed there since learn started, saves the case with a learn.json record (note, cause, change), and commits only these paths when the folder is a Git repository and git is true.
+    in: {method_file: inputs.method_file, workspace: workspace, snapshot: snapshot, cases_dir: inputs.cases_dir, cases_copy: cases_copy, case_id: case_id, note: inputs.note, decision: decision, repair: repair, locate: locate, git: inputs.git, author: inputs.author}
+    do: {kind: run, runtime: node, entrypoint: scripts/commit.mjs}
+    changes: [environment.method_folder, state.outcome]
+    out:
+      changed_files: {type: list, items: text, description: "Files changed in the Method folder."}
+      commit: {type: text, description: "The Git commit, or empty."}
+    effects:
+      written:
+        intent: The Method folder holds the approved files and the new case.
+        in: {snapshot: snapshot, workspace: workspace, case_id: case_id, cases_dir: inputs.cases_dir}
+        observe: {kind: run, runtime: node, entrypoint: scripts/written-observe.mjs}
+        judge: {kind: run, runtime: node, entrypoint: scripts/written-judge.mjs}
+        fixtures: fixtures/written
+        schedule: {first: 0s, horizon: 1m}
+        confirm: positive
+        blocking: true
+result: state.outcome
+run_prompt: Run method learn with the Method file, the recorded run, and the person's correction. Show each question to the person and answer it with their words.

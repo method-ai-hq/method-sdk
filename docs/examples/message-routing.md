@@ -15,7 +15,7 @@ review. Return the destination, rule, probability, and threshold.
 ## message-routing.method
 
 ```yaml
-format: method/3.2
+format: method/3.3
 name: Classify and route a customer message
 goal: Choose a support destination and show the rule used.
 inputs:
@@ -36,6 +36,7 @@ steps:
         other: Other — no listed team fits, or more information is needed.
     out: message_category
   choose_destination:
+    changes: []
     name: Choose the destination
     purpose: |
       Chooses Billing or Technical support when that category is selected
@@ -159,8 +160,12 @@ This complete Method has no additional task checks. The runtime checks output ty
 - message-routing/inputs.json
 - message-routing/message-routing.method
 - message-routing/result.fixture.json
-- message-routing/retry/check-ticket.mjs
 - message-routing/retry/create-ticket.mjs
+- message-routing/retry/fixtures/saved/empty.json
+- message-routing/retry/fixtures/saved/saved.json
+- message-routing/retry/fixtures/saved/wrong-destination.json
+- message-routing/retry/judge-ticket.mjs
+- message-routing/retry/observe-ticket.mjs
 - message-routing/retry/retry.test.mjs
 - message-routing/retry/ticket.method
 - message-routing/routing.mjs

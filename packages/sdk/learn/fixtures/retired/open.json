@@ -1,0 +1,1 @@
+{"observations":[{"source":"request","ref":"retire_ids","data":{"count":1}},{"source":"case","ref":"old","data":{"status":"active"}}],"expect":"contradicted"}

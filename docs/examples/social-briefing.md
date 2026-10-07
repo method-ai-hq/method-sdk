@@ -15,7 +15,7 @@ in the research.
 ## social-briefing.method
 
 ```yaml
-format: method/3.2
+format: method/3.3
 name: Research social posts and papers
 goal: Read recent posts and papers in the browser, then write a briefing with quotes and links.
 inputs:
@@ -86,6 +86,7 @@ steps:
         value: sources
         min: 1
   write_briefing:
+    changes: []
     name: Write the briefing
     in:
       topic: inputs.topic

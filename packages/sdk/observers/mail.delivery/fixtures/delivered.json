@@ -1,0 +1,1 @@
+{"inputs":{"to":"dana@vendor.example"},"observations":[{"source":"imap","ref":"INBOX/uid:11","data":{"from":"postmaster@sender.example","subject":"Delivery Status Notification (Success)","date":"","action":"delivered","status":"2.0.0","mentions_token":true,"mentions_recipient":true}}],"expect":"confirmed"}

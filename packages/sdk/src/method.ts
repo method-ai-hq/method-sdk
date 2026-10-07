@@ -62,7 +62,16 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     const result=args[0]==='wait'?await waitForRun(directory):args[0]==='cancel'?cancelRun(directory):{running:workerAlive(directory),...(existsSync(join(directory,'worker.json'))?readDocument(join(directory,'worker.json')):{})};
     process.stdout.write(JSON.stringify(result)+'\n');return;
   }
-  if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.2\n`); return; }
+  if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.3\n`); return; }
+  if (["observe", "test", "case", "effect", "learn"].includes(args[0] ?? "")) {
+    const quality = await import("./quality.js");
+    if (args[0] === "observe") return quality.observeCommand(args.slice(1));
+    if (args[0] === "test") return quality.testCommand(args.slice(1));
+    if (args[0] === "case") return quality.caseCommand(args.slice(1));
+    if (args[0] === "effect") return quality.effectCommand(args.slice(1));
+    const { runCurrentFile } = await import("./current-runtime.js");
+    return void await quality.learnCommand(args.slice(1), (file, flags) => runCurrentFile(file, flags));
+  }
   if (args[0] === 'run' && /^https?:/.test(args[1] ?? '')) {
     const url = new URL(args[1]!);
     const match = url.pathname.match(/^\/methods\/([^/]+)$/);

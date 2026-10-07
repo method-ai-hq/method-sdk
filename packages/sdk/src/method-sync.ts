@@ -196,7 +196,8 @@ export class MethodSync {
     let inspection = inspectRun(directory, { includeFiles: "references" });
     if (state.dashboard_id) {
       const saved=await sync.client.request<{run:{status:string;inspection:RunInspection}}>(`/api/workspace/runs/${state.dashboard_id}`);
-      if (saved.run.status === "succeeded") {
+      // A later observation can change a finished run's status; then the local record replaces the saved one.
+      if (saved.run.status === "succeeded" && inspection.status === "succeeded") {
         // Keep bytes already saved if the local file was removed or changed.
         const files = [...(saved.run.inspection.files ?? [])];
         for (const file of inspection.files ?? []) {

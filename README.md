@@ -39,7 +39,7 @@ The Release workflow builds the npm archive, Python wheel, and four self-contain
 
 ## Breaking changes in 0.7
 
-New Methods use `format: method/3.2`; existing method/3.1 documents remain supported. The SDK uses one current runtime.
+New Methods use `format: method/3.3`; existing method/3.1 and method/3.2 documents remain supported. Method 3.3 confirms external changes with observers (effects), and `method test` and `method learn` turn corrections into recorded cases. The SDK uses one current runtime.
 
 Use `method`. The `workflow`, `sdk`, `method-run`, and `workflow-bridge` aliases are removed. Python keeps `withmethod`; `workflow-corp`, `method-python`, and the `workflow_corp` module are removed. `method-bridge` is the machine interface for Python.
 

@@ -16,7 +16,7 @@ export function validateShape(shape: Shape, label: string): void {
   Object.entries(s.fields ?? {}).forEach(([key, child]) => validateShape(child, `${label}.${key}`));
   if (s.items) validateShape(s.items, `${label}.items`);
 }
-export function references(step: Step): string[] { return [...Object.values(step.in ?? {}), ...Object.values(step.each ?? {}), ...(step.when ? [step.when] : [])]; }
+export function references(step: Step): string[] { return [...Object.values(step.in ?? {}), ...Object.values(step.each ?? {}), ...(step.when ? [step.when] : []), ...Object.values(step.effects ?? {}).flatMap(effect => Object.values(effect.in ?? {}))]; }
 export function producers(workflow: Workflow): Map<string, string> {
   const result = new Map<string, string>();
   for (const [id, step] of Object.entries(workflow.steps)) for (const name of Object.keys(effectiveOutputs(step))) {

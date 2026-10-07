@@ -1,4 +1,4 @@
-format: method/3.2
+format: method/3.3
 name: Route a message and create one ticket
 goal: Create a ticket and recover an interrupted response without a duplicate write.
 inputs:
@@ -30,6 +30,7 @@ steps:
       kind: run
       runtime: node
       entrypoint: choose-destination.mjs
+    changes: []
     out:
       routing:
         type: record
@@ -42,9 +43,8 @@ steps:
   create_ticket:
     name: Create the support ticket
     purpose: Creates a ticket for the selected destination and returns its receipt.
-      Retrying this invocation reuses its operation ID, so the test service
-      returns the same ticket. Inspect the service record for that ID if
-      completion is uncertain.
+      Sends the operation ID as the Idempotency-Key, so a retry returns the same
+      ticket. The saved effect confirms the ticket by reading it back.
     in:
       message: inputs.message
       routing: routing
@@ -62,13 +62,29 @@ steps:
         fields:
           ticket_id: text
           operation_id: text
-    check:
-      kind: run
-      runtime: node
-      entrypoint: retry/check-ticket.mjs
-    reading:
-      check: Reads the saved ticket and compares its message, destination, and
-        operation ID with the submitted values.
+    effects:
+      saved:
+        intent: The ticket service stores one ticket for this operation with the
+          submitted message and destination.
+        in:
+          message: inputs.message
+          destination: routing.destination
+        observe:
+          kind: run
+          runtime: node
+          entrypoint: retry/observe-ticket.mjs
+        judge:
+          kind: run
+          runtime: node
+          entrypoint: retry/judge-ticket.mjs
+        fixtures: retry/fixtures/saved
+        schedule:
+          first: 0s
+          then:
+            - 30s
+          horizon: 5m
+        confirm: positive
+        blocking: true
 result: ticket
 files:
   - routing.mjs
@@ -78,3 +94,7 @@ environment:
   ticket_service:
     type: service
     description: Ticket service with idempotent writes and operation lookup.
+  ticket_lookup:
+    type: service
+    description: The same ticket service, used only to read tickets by operation ID.
+    role: observer

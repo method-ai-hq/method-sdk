@@ -49,6 +49,10 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
       ...(event.exit_code !== undefined ? { exit_code: event.exit_code } : {}),
       ...(typeof event.diagnostics === "string" && event.diagnostics ? { diagnostics: event.diagnostics.length <= 4000 ? event.diagnostics : event.diagnostics.slice(0, 1000) + "\n[middle omitted]\n" + event.diagnostics.slice(-3000) } : {}),
     };
+    // Effect verdicts are run events, so the dashboard shows them without a new inspection field.
+    if (event.event === "effect.observed") recorded.detail = `${event.effect}: ${event.verdict}${event.final ? "" : " (observation continues)"}. ${String(event.reason ?? "")}`.slice(0, 4000);
+    if (event.event === "run.status_changed") recorded.detail = `Status changed from ${event.from} to ${event.to} after a later observation.`;
+    if (event.event === "effects.fixtures_passed") recorded.detail = `${event.fixtures.length} effect fixtures gave their expected verdicts.`;
     if (event.event === "run.started" && event.forked_from) {
       const fork = event.forked_from;
       recorded.detail = `Forked from run ${fork.run_dir} (execution ${fork.execution_id}). Reused: ${fork.steps.map((s: any) => s.step).join(", ")}. `

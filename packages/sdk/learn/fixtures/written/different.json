@@ -1,0 +1,1 @@
+{"observations":[{"source":"file","ref":"task.method","data":{"intended":"a","found":"b"}},{"source":"case","ref":"c1","data":{"intended":true,"found":true}}],"expect":"contradicted"}

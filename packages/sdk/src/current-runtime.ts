@@ -72,12 +72,13 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       },
       onEvent: async (event: any) => { await onEvent?.(event); sync?.snapshot(); if (flags.verbose) process.stderr.write(JSON.stringify(event) + "\n"); },
     });
-    runFailed = result.status !== 'completed';
-    if(!runFailed)finishDeploymentSource(authoringPath(flags['run-dir']!),method,config);
+    runFailed = !['completed','unconfirmed'].includes(result.status);
+    if(result.status==='completed')finishDeploymentSource(authoringPath(flags['run-dir']!),method,config);
     await sync?.finish();
     const display=sync&&flags['run-dir']?{...result,dashboard_sync:existsSync(join(authoringPath(flags['run-dir']),'method-pending.json'))?'pending':'saved'}:result;
     process.stdout.write(JSON.stringify(display, null, 2) + "\n");
-    if (result.status !== "completed") process.exitCode = result.status === "needs_input" ? 2 : 1;
+    // 3: every step finished, but an observer could not confirm an external change.
+    if (result.status !== "completed") process.exitCode = ({needs_input:2,unconfirmed:3} as Record<string,number>)[result.status] ?? 1;
     return result;
   } catch (error) { failure = error; throw error; }
   finally { try { await browser?.close(); } catch(error) { if(!failure&&!runFailed&&!controller.signal.aborted)throw error; } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); await sync?.finish(failure); } }

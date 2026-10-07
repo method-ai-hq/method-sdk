@@ -1,0 +1,1 @@
+{"inputs":{"to":"dana@vendor.example"},"observations":[{"source":"imap","ref":"INBOX/uid:9","data":{"from":"Mail Delivery Subsystem <mailer-daemon@googlemail.com>","subject":"Delivery Status Notification (Delay)","date":"","action":"delayed","status":"4.4.7","mentions_token":true,"mentions_recipient":true}}],"expect":"no_evidence"}

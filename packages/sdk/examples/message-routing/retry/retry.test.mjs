@@ -42,7 +42,7 @@ test('retry reuses the operation ID after the service commits and before stdout 
   method.files.push('retry/create-ticket.mjs');
   await writeFile(join(root,'retry/fixture-action.mjs'),`const write=process.stdout.write.bind(process.stdout);process.stdout.write=data=>{void fetch(${JSON.stringify(url+'/committed')},{method:'POST'}).then(()=>write(data));return true;};await import('./create-ticket.mjs');`);
   const file=join(root,'task.method');await writeFile(file,stringify(method));
-  const config={allow_local_processes:true,runtimes:{node:{command:process.execPath,version:process.version}},environment:{ticket_service:url},classification:{provider:'typesafe',model:'jev-fixture'}};
+  const config={allow_local_processes:true,runtimes:{node:{command:process.execPath,version:process.version}},environment:{ticket_service:url,ticket_lookup:url},classification:{provider:'typesafe',model:'jev-fixture'}};
   let classifications=0;
   const classification={resolve:async()=>config.classification,evaluate:async()=>{classifications++;return {...config.classification,choice:'billing',probabilities:{billing:.94,technical:.04,other:.02},confidence:.8,usage:null};}};
   const runDir=join(root,'run'),controller=new AbortController();
@@ -55,6 +55,10 @@ test('retry reuses the operation ID after the service commits and before stdout 
   assert.equal(resumed.status,'completed');assert.equal(records.size,1);assert.equal(classifications,1);
   assert.equal(writes.length,2);assert.equal(writes[0],writes[1]);
   assert.equal(resumed.result.operation_id,writes[0]);
+  // The effect read the ticket back through the lookup connection; the receipt did not confirm it.
+  assert.equal(resumed.effects.confirmed,1);
+  const ledger=(await readFile(join(runDir,'effects.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(ledger.at(-1).verdict,'confirmed');assert.equal(ledger.at(-1).token,writes[0]);
   const conflict=await fetch(url+'/tickets',{method:'POST',headers:{'Idempotency-Key':writes[0]},body:JSON.stringify({message:'Different',destination:'billing'})});
   assert.equal(conflict.status,409);
 });

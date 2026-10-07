@@ -1,0 +1,5 @@
+{
+  "allow_local_processes": true,
+  "runtimes": { "node": { "command": "node", "version": "22", "env": ["METHOD_LEARN_RUNTIME"] } },
+  "limits": { "timeout_ms": 7200000, "max_model_requests": 100, "max_invocations": 60, "max_tool_calls": 200 }
+}

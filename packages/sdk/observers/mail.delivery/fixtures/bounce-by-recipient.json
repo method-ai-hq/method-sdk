@@ -1,0 +1,1 @@
+{"inputs":{"to":"dana@vendor.example"},"observations":[{"source":"imap","ref":"INBOX/uid:8","data":{"from":"postmaster@vendor.example","subject":"Undeliverable: Morning summary","date":"","action":"","status":"","mentions_token":false,"mentions_recipient":true}}],"expect":"contradicted"}

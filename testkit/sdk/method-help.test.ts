@@ -55,7 +55,7 @@ it("provides offline command-specific help and rejects unknown topics before cre
 
 it("executes the copy-message editing fixture without adding it to the authoring guide", async () => {
   const dir = temp();
-  expect(loadWorkflow(exampleWorkflow).format).toBe('method/3.2');
+  expect(loadWorkflow(exampleWorkflow).format).toBe('method/3.3');
   expect(shell(dir,exampleScript())).toContain('"valid": true');
   const result = await runMethod(join(dir, 'message.method'), JSON.parse(readFileSync(join(dir, 'runtime.json'), 'utf8')), {inputs: {message:'Hello\n  '}, runDir:join(dir,'run')});
   expect(result).toMatchObject({status:'completed',result:'Hello\n  '});

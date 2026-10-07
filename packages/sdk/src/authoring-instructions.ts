@@ -25,11 +25,11 @@ Choose each operation's execution type from its requirements:
 
 For browser work, declare a browser environment and select it with do.browser: environment.NAME. Method supplies the browser controls. Put the research task, limits, and required results in the prompt. Read method authoring example social-briefing for a complete example.
 
-Default to no additional task check. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
+Default to no additional task check, except for external changes, which need effects. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
 
 Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
 
-When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For external changes, check the intended external result.
+When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For an external change, declare an effect instead: an observer reads the changed system, or the place where it reports problems, separately from the call that made the change, and the runtime decides from that evidence whether the work is done. A success status, receipt, or returned ID shows only that the request was accepted. Use a reviewed observer when one fits (method effect list).
 
 ${checkEditingRule}
 
@@ -48,7 +48,8 @@ These are design outlines, not runnable Method files.
 | --- | --- | --- |
 | Summarize supplied text | call → return summary | The model receives all source text. No additional task check is needed by default. Add a save step only if a saved file is requested. Use an agent if it must find or inspect additional sources. |
 | Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. A planning step does not require a task check merely because it returns structured data. |
-| Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action and check if the Method must send or change anything. |
+| Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action with an effect if the Method must send or change anything. |
+| Send a daily summary email | call to write → run to send, with an effect | The send script puts METHOD_OPERATION_ID in the Message-ID. A mail.delivery effect searches the bounce mailbox through its own read-only connection until a 5-day horizon. A bounce fails the run; no bounce by the horizon is unrefuted, not proven. |
 `;
 
 export const proposalRequirements = `# First design proposal

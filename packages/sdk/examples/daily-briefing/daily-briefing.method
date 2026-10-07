@@ -1,4 +1,4 @@
-format: method/3.2
+format: method/3.3
 name: Write a daily briefing
 goal: Turn one prepared day folder into a complete, cited daily briefing. Follow the approved example for writing and layout, and save the briefing with its website.
 inputs:
@@ -14,6 +14,7 @@ environment:
     description: Folder of prepared records for that day. Read-only.
 steps:
   open_inputs:
+    changes: []
     name: Check the input folders
     in:
       day: inputs.day
@@ -55,6 +56,7 @@ steps:
         description: Links to saved social sessions for this day. A link on its own line displays that session in the story.
     purpose: Checks the required record files, date, and timezone. Returns the prepared folder and its source hash, the complete approved report, and saved session links.
   write_briefing:
+    changes: []
     name: Write the briefing
     in:
       selected_day: selected_day
@@ -87,6 +89,7 @@ steps:
       check_name: Check source links
       check: Checks source IDs, citation line ranges, and supporting file hashes, names, dates, and timezones. Returns pass when those references are valid.
   render_and_save:
+    changes: []
     name: Render and save the briefing
     in:
       selected_day: selected_day

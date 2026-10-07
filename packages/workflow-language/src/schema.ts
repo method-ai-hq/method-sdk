@@ -11,7 +11,7 @@ export type Shape = ValueType | { type: ValueType; description?: string | undefi
 export const ShapeSchema: z.ZodType<Shape> = z.lazy(() => z.union([TypeSchema, z.strictObject({ type: TypeSchema, description: Text.optional(), fields: z.record(NameSchema, ShapeSchema).optional(), items: ShapeSchema.optional(), format: Text.optional() })]));
 export const DataSchema = z.strictObject({ type: TypeSchema, description: Text.optional(), fields: z.record(NameSchema, ShapeSchema).optional(), items: ShapeSchema.optional(), format: Text.optional() });
 export const InputSchema = DataSchema.extend({ default: JsonSchema.optional() });
-export const EnvironmentSchema = z.strictObject({ type: z.enum(["browser", "service", "desktop", "files", "tool"]), description: Text });
+export const EnvironmentSchema = z.strictObject({ type: z.enum(["browser", "service", "desktop", "files", "tool"]), description: Text, role: z.literal("observer").optional() });
 export type ExactCheck = {equals:{actual:string;expected:string}} | {count:{value:string;min?:number;max?:number}} | {present:string} | {file:string};
 export type BaseStep = {name?:string; in?:Record<string,string>; ask?:string; out?:string|Record<string,z.infer<typeof DataSchema>>; each?:Record<string,string>; when?:string; after?:string|string[]; changes?:string[]};
 export type DataDefinition = z.infer<typeof DataSchema>;
@@ -39,15 +39,20 @@ export type AgentExecution = { kind: "agent"; model: string; prompt: string; too
 export type ClassifyExecution = { kind: "classify"; question: string; options: Record<string, string> };
 export type Execution = ClassifyExecution | RunExecution | AgentExecution | { kind: "call"; model: string; prompt: string };
 export type CurrentCheck = ExactCheck | RunExecution | AgentExecution;
+/** An effect contract: an observer confirms an external change; the action's receipt never does. */
+export type Effect = {
+  intent: string; in?: Record<string, string>; observe: RunExecution; judge: RunExecution; fixtures: string;
+  schedule: { first?: string; then?: string[]; horizon: string }; confirm: "positive" | "unrefuted_at_horizon"; retry?: "never" | "idempotent"; blocking?: boolean;
+};
 export type CurrentStep = BaseStep & {
-  purpose?: string; do?: Execution; check?: CurrentCheck;
+  purpose?: string; do?: Execution; check?: CurrentCheck; effects?: Record<string, Effect>;
   reading?: { inputs?: string; outputs?: string; output_name?: string; condition?: string; check?: string; check_name?: string };
   repeat?: { max_iterations: number; until?: string };
   limits?: { timeout_ms?: number; max_agent_turns?: number; max_model_requests?: number };
 };
 export type CurrentWorkflow = {
   name: string; goal: string; inputs?: Record<string,z.infer<typeof InputSchema>>; environment?: Record<string,z.infer<typeof EnvironmentSchema>>; result: string | Record<string,string>;
-  format: "method/3.1" | "method/3.2"; run_prompt?: string; run_label?: string; files?: string[];
+  format: "method/3.1" | "method/3.2" | "method/3.3"; run_prompt?: string; run_label?: string; files?: string[];
   state?: Record<string, z.infer<typeof InputSchema>>; steps: Record<string, CurrentStep>;
 };
 function currentShape<T>(validate: any): z.ZodType<T> {

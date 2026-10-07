@@ -48,7 +48,7 @@ async function prepareOnce(root: string, config: any, method: any) {
   const nodePackage = hasNode ? JSON.parse(readFileSync(join(root,'package.json'),'utf8')) : {};
   const hasNodeDependencies = ['dependencies','devDependencies','optionalDependencies'].some(key => Object.keys(nodePackage[key] ?? {}).length > 0);
   const runtimes = {...config.runtimes};
-  const executions = Object.values(method.steps).flatMap((s:any) => [s.do,s.check]).filter(Boolean) as any[];
+  const executions = Object.values(method.steps).flatMap((s:any) => [s.do,s.check,...Object.values(s.effects ?? {}).flatMap((e:any) => [e.observe,e.judge])]).filter(Boolean) as any[];
   for (const tool of Object.values(config.tools ?? {}) as any[]) executions.push(tool.run);
   const needsPython = hasPython || executions.some(e => e?.runtime === 'python' && !runtimes.python);
   const key = createHash('sha256').update(JSON.stringify([process.platform, process.arch, process.version, needsPython, ...files.map(n => existsSync(join(root,n)) ? readFileSync(join(root,n),'utf8') : null)])).digest('hex');

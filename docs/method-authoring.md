@@ -24,11 +24,11 @@ Choose each operation's execution type from its requirements:
 
 For browser work, declare a browser environment and select it with do.browser: environment.NAME. Method supplies the browser controls. Put the research task, limits, and required results in the prompt. Read method authoring example social-briefing for a complete example.
 
-Default to no additional task check. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
+Default to no additional task check, except for external changes, which need effects. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
 
 Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
 
-When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For external changes, check the intended external result.
+When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For an external change, declare an effect instead: an observer reads the changed system, or the place where it reports problems, separately from the call that made the change, and the runtime decides from that evidence whether the work is done. A success status, receipt, or returned ID shows only that the request was accepted. Use a reviewed observer when one fits (method effect list).
 
 Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
 
@@ -46,7 +46,8 @@ These are design outlines, not runnable Method files.
 | --- | --- | --- |
 | Summarize supplied text | call → return summary | The model receives all source text. No additional task check is needed by default. Add a save step only if a saved file is requested. Use an agent if it must find or inspect additional sources. |
 | Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. A planning step does not require a task check merely because it returns structured data. |
-| Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action and check if the Method must send or change anything. |
+| Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action with an effect if the Method must send or change anything. |
+| Send a daily summary email | call to write → run to send, with an effect | The send script puts METHOD_OPERATION_ID in the Message-ID. A mail.delivery effect searches the bounce mailbox through its own read-only connection until a 5-day horizon. A bounce fails the run; no bounce by the horizon is unrefuted, not proven. |
 
 # First design proposal
 
@@ -79,7 +80,8 @@ Inputs and outputs have a type. Script outputs require descriptions; other data 
 Online runs upload declared file outputs separately, up to 20,000 files and 100 MB total, with 25 MB per file. Hash-checked receipts let interrupted transfers resume with only missing files. The single-file inspect export retains its separate 20 MB compressed-data limit. For a website, declare format: method-website and write a JSON file {schema: "method-website/1", title, entrypoint, files: [{path, sha256, media_type}]}. Paths in the file list are relative to that file; list every asset and identify an HTML start page. The run page opens the website only when all listed assets are attached. It can also download the complete website as a ZIP. No workspace scan occurs. See docs/result-files.md and examples/website-result.method for the full contract and working example. method sync RUN_DIRECTORY uploads files without executing steps again.
 Bind step inputs with in aliases and use named outputs as downstream references. These references set execution order. Use after for required order without a data reference, such as operations that share a browser session. Every output has one producer.
 Checks use equals, count, present, file, a script, or a bounded agent. Checker output is {status: pass|fail|unknown, reason, evidence}. Unknown never passes.
-Use changes for state.NAME or environment.NAME. External changes require a check. State changes commit only after acceptance. State is saved in state.json.
+Use changes for state.NAME or environment.NAME. In method/3.3 every run and agent step states changes, using changes: [] when it changes nothing. State changes commit only after acceptance. State is saved in state.json.
+An external change needs effects (method/3.3). A receipt, status, or returned ID shows only that a request was accepted. Each effect names the intended result, an observer that reads the changed system with its own read-only connection (role: observer), a deterministic judge, fixtures that show the judge can report a failure, and a schedule up to a horizon. The observer gets the correlation token (METHOD_OPERATION_ID), never the action's outputs: put the token where the system keeps a reference, such as a Message-ID. Prefer a reviewed observer: method effect list, then method effect add. The runtime sets the run status: an observed contradiction fails the run, an effect that cannot be confirmed by its horizon makes it unconfirmed (exit 3), and effects before their horizon stay pending in a completed run. Schedule method observe --pending so late evidence reaches the run. A browser connection is declared in changes also for reading; its effects are optional, but declare one when the browser submits, posts, or sends.
 Use each for a collection, repeat for bounded iteration, when for a boolean condition, and after for dependencies. Each and repeat cannot be combined.
 Run a single step with repeat: {max_iterations: N, until: BOOLEAN_OUTPUT}. The final accepted output is returned; all iterations are recorded.
 
@@ -117,7 +119,7 @@ result has exactly the declared out names. Keep one real or redacted input as a
 test fixture beside the helpers. Add a case for each input that broke the script.
 
 **Make recovery explicit.** For external writes, describe what a retry does and
-how to check uncertain completion. Use a stable operation or business key when
+declare the effect that confirms completion. Use a stable operation or business key when
 the service supports duplicate prevention. Test decision boundaries and an
 interruption after the service commits but before the script saves its receipt.
 
@@ -168,6 +170,10 @@ CLI runs of local files and saved Methods have their own process. Use --backgrou
 
 # Recipes
 
+## Corrections become cases
+
+When the user says a result was wrong, use method learn FILE --run RUN_DIRECTORY --note "the user's words". It finds the cause in the recorded run, checks the note against the evidence, drafts a case for the user to approve, proves that the current version fails it, repairs a copy, and accepts the repair only when the new case passes and no earlier case regresses. To write a case yourself, use method case new and check a change with method test FILE --baseline OLD_FILE --new ID. Do not edit or delete a case to make a change pass; when a rule really changed, retire the old case with its reason.
+
 Use a script for exact file transforms and exports. Use a call for a structured model response. A direct API call is one request without tools; the Codex backend controls its own internal requests and tools. Use an agent only when bounded tool use is needed.
 For incremental exports, keep a declared state ledger of source IDs and evidence hashes. Compare new evidence to that ledger and rebuild only changed days. Supply the prior run's state.json with --state for a new run.
 Resume continues the same input set and saved version. A new run can collect new files. A separate database is optional application state, not a workaround required to resume Method.
@@ -188,7 +194,8 @@ For a stale .lock, first confirm the process has stopped. Never remove an active
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
 For a save conflict, get the latest version and apply the change there. For an uncertain upload, retry the same file and command with its sidecar unchanged.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
-New Methods use format method/3.2. Existing method/3.1 documents retain their validation rules.
+New Methods use format method/3.3. Existing method/3.1 and method/3.2 documents retain their validation rules.
+After a failed action with effects, the failure lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
 
 
 # Command reference
@@ -742,7 +749,7 @@ method check remove FILE STEP_ID
 ```
 
 Arguments and defaults:
-The operation will have no additional task check. Remove unnecessary checks and their supporting tests and instructions. External changes require a check of the intended external result.
+The operation will have no additional task check. Remove unnecessary checks and their supporting tests and instructions. In method/3.3, external changes require effects (method effect add), not a check.
 
 Result and changes:
 JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
@@ -1245,7 +1252,7 @@ Current methods optionally use runtime.json beside a local file, or in the curre
 Use method doctor to check the installed Node and configured tools.
 
 Result and changes:
-Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, and 2 when human input is needed.
+Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, 2 when human input is needed, and 3 when an observer could not confirm an external change (unconfirmed).
 
 Errors:
 Missing inputs/access, failed check, timeout, unsafe resume/version mismatch, upload failure. See recovery. Never retry a business write without inspecting its saved changes.
@@ -1254,4 +1261,199 @@ Example:
 
 ```sh
 method run wf_example --version version_example --config runtime.json --workspace . --inputs inputs.json
+```
+
+## observe
+
+Make the effect observations that are due for finished runs.
+
+Usage:
+
+```sh
+method observe [RUN_DIRECTORY...] [--pending ROOT]... [--config FILE]
+```
+
+Arguments and defaults:
+Without directories, checks runs with open effects under .method-runs and the Method cache. Runs only observers and judges; never repeats an action. Schedule it, for example hourly, so late evidence such as a bounce reaches the run.
+
+Result and changes:
+JSON with each run's new verdicts, status, and next observation time. A synced run whose status changed is uploaded again.
+
+Errors:
+Locked run, changed bundle, or a missing observer credential.
+
+Example:
+
+```sh
+method observe --pending .method-runs
+```
+
+## test
+
+Replay recorded cases against this version of a Method.
+
+Usage:
+
+```sh
+method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--cases DIR]
+```
+
+Arguments and defaults:
+Cases are in cases/ beside the Method. Unchanged steps return their recorded outputs; changed steps run; a changed step that asks a person or acts on an external system makes the case unverifiable. --baseline compares each case on the old version: a case that passed there and fails now is a regression. --new names cases that must fail on the baseline and pass now.
+
+Result and changes:
+JSON report with a verdict per case and passed:true when no case blocks the change. Exit 0 or 1.
+
+Errors:
+Unknown case, invalid Method, or setup errors.
+
+Example:
+
+```sh
+method test task.method --baseline task-before.method --new bounce-reported
+```
+
+## case new
+
+Turn a correction into a recorded case.
+
+Usage:
+
+```sh
+method case new FILE --run RUN_DIRECTORY --id ID --note TEXT --expect EXPECT.json [--observations FILE] [--redact FILE] [--runs N --min-pass N] [--supersedes ID]...
+```
+
+Arguments and defaults:
+EXPECT.json lists expectations: {kind: equals, ref: outputs.NAME, value}, {kind: status, in: [STATUS]}, {kind: effect, effect: STEP/ITERATION/NAME, verdict: [VERDICT]}, or {kind: predicate, runtime: node, entrypoint: check.mjs}. Add text to each for people. --redact maps recorded text to replacements. Use --runs above 1 when a changed model step runs live. Cases from sensitive/ are refused.
+
+Result and changes:
+The saved case. An expectation that passes on an empty result is refused.
+
+Errors:
+Vacuous expectation, existing ID, or unreadable run.
+
+Example:
+
+```sh
+method case new task.method --run .method-runs/2026-10-07 --id bounce-reported --note 'The bounce was not reported.' --expect expect.json
+```
+
+## case retire
+
+Retire a case whose rule no longer applies.
+
+Usage:
+
+```sh
+method case retire FILE ID --reason TEXT [--by NEW_ID]
+```
+
+Arguments and defaults:
+The case stays on disk with its reason and is no longer run. Use it when a policy changed, not to make a failing change pass.
+
+Result and changes:
+JSON {retired}.
+
+Errors:
+Unknown or already retired case.
+
+Example:
+
+```sh
+method case retire task.method old-terms --by new-terms --reason 'Payment terms changed on 1 October.'
+```
+
+## case list
+
+List the cases of a Method.
+
+Usage:
+
+```sh
+method case list FILE
+```
+
+Arguments and defaults:
+Reads cases/ beside the Method unless --cases DIR is given.
+
+Result and changes:
+JSON list of cases with status and note.
+
+Example:
+
+```sh
+method case list task.method
+```
+
+## effect add
+
+Declare an effect with a reviewed observer.
+
+Usage:
+
+```sh
+method effect add FILE STEP NAME --observer OBSERVER [--connection NAME] [--in ALIAS=REF]... [--set KEY=VALUE]... [--intent TEXT] [--horizon DURATION] [--blocking]
+```
+
+Arguments and defaults:
+Copies the observer, its judge, and its fixtures into observers/ beside the Method, adds the observer connection with role: observer, and sets the effect. --set fills observer settings such as path=/tickets/{token} for http.json. The step must already declare the changed connection in changes. Read the printed setup for the observer's credential.
+
+Result and changes:
+The edited workflow and the observer's setup instructions. Sets format method/3.3.
+
+Errors:
+Unknown observer, missing --in binding, or a step without an external change.
+
+Example:
+
+```sh
+method effect add task.method send_summary delivered --observer mail.delivery --in to=inputs.ap_lead
+```
+
+## effect list
+
+List the reviewed observers.
+
+Usage:
+
+```sh
+method effect list
+```
+
+Arguments and defaults:
+No arguments.
+
+Result and changes:
+JSON list of observers and what they need.
+
+Example:
+
+```sh
+method effect list
+```
+
+## learn
+
+Turn a correction into a case and a checked repair.
+
+Usage:
+
+```sh
+method learn FILE --run RUN_DIRECTORY --note TEXT [--cases DIR] [--runs-root DIR] [--no-git]
+method learn --resume --run-dir LEARN_RUN --human ANSWERS.json
+```
+
+Arguments and defaults:
+Runs the learn Method: find the cause in the recorded run, check the note against the recorded evidence, draft a case for you to approve, prove that the current version fails it, let an agent repair a copy, and accept the repair only if the new case passes and no earlier case regresses. You approve the cause, the case, and the change. Each approval stops the run with exit 2; answer with --resume --human.
+
+Result and changes:
+The case, the changed files, and a Git commit when the folder is a repository and --no-git is absent.
+
+Errors:
+A note that the evidence contradicts, a case that already passes, a repair that fails the gate (resume with --retry repair:0), or a conflict with an earlier case (retire it, then learn again).
+
+Example:
+
+```sh
+method learn task.method --run .method-runs/2026-10-07 --note "The AP lead's email bounced, but the report said it was sent."
 ```

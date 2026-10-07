@@ -16,4 +16,4 @@ result = run_method("task.method", {"allow_local_processes": True}, inputs={}, d
 print(result["status"])
 ```
 
-Use method/3.2 for new Methods. Python calls the executor through the method-bridge command. Source and releases: https://github.com/method-ai-hq/method-sdk
+Use method/3.3 for new Methods. Python calls the executor through the method-bridge command. Source and releases: https://github.com/method-ai-hq/method-sdk

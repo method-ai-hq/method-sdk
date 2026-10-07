@@ -11,7 +11,7 @@ it('ships four complete packages with valid definitions, source descriptions, an
  for(const example of authoringExamples){
   const {directory}=exampleDirectory(example.id);
   const workflow=loadWorkflow(readFileSync(directory+example.entrypoint,'utf8'));
-  expect(workflow.format).toBe('method/3.2');
+  expect(workflow.format).toBe('method/3.3');
   const config=existsSync(directory+'runtime.json')?JSON.parse(readFileSync(directory+'runtime.json','utf8')):{allow_local_processes:true};
   const result=await preflight(workflow,config,directory,{allowMissingSetup:true});
   for(const name of [...result.files,...example.lessonFiles]){

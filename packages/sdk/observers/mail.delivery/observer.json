@@ -1,0 +1,14 @@
+{
+  "description": "Searches the mailbox that receives bounces for delivery reports about one sent message. Uses IMAP EXAMINE and BODY.PEEK, so it does not change the mailbox or mark mail as read.",
+  "connection": { "name": "bounce_mailbox", "type": "service", "description": "IMAP mailbox that receives delivery reports for the sending address, as imaps://USER@HOST:993/INBOX. Used only to read." },
+  "needs": "A runtime profile mail_observer whose env lists MAIL_OBSERVER_PASSWORD (an app password for the bounce mailbox), and the bounce_mailbox connection URL in runtime.json.",
+  "inputs": [{ "alias": "to", "description": "The recipient address of the sent message, for example inputs.ap_lead." }],
+  "effect": {
+    "intent": "The recipient's mail server accepts the message and does not return it.",
+    "observe_runtime": "mail_observer",
+    "args": ["--connection", "{connection}"],
+    "schedule": { "first": "2m", "then": ["15m", "1h", "6h", "1d", "2d"], "horizon": "5d" },
+    "confirm": "unrefuted_at_horizon"
+  },
+  "setup": "In runtime.json, add runtimes.mail_observer = {\"command\": \"node\", \"version\": \"22\", \"env\": [\"MAIL_OBSERVER_PASSWORD\"]} and environment.bounce_mailbox = \"imaps://USER@HOST:993/INBOX\". Set MAIL_OBSERVER_PASSWORD wherever method run and method observe run. Use an app password with read access only where the provider allows it. The send step must put METHOD_OPERATION_ID in the message, for example Message-ID: <TOKEN@your-domain>; without it the observer can match bounces only by recipient address. Schedule method observe --pending, for example hourly, so bounces that arrive after the run reach it."
+}
