@@ -41,7 +41,7 @@ These are design outlines, not runnable Method files.
 | Request | Design | Explanation |
 | --- | --- | --- |
 | Summarize supplied text | call → return summary | The model receives all source text. No additional task check is needed by default. Add a save step only if a saved file is requested. Use an agent if it must find or inspect additional sources. |
-| Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. A planning step does not require a task check merely because it returns structured data. |
+| Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. A planning step does not require a task check merely because it returns structured data. When the user requires that the findings say only what the sources say, add an agent check on the assess step (method authoring recipes). |
 | Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action with an effect if the Method must send or change anything. |
 | Send a daily summary email | call to write → run to send, with an effect | The send script puts METHOD_OPERATION_ID in the Message-ID. A mail.delivery effect searches the bounce mailbox through its own read-only connection until a 5-day horizon. A bounce fails the run; no bounce by the horizon is unrefuted, not proven. |
 
@@ -185,21 +185,35 @@ Use reading.output_name to give a returned result a short, honest name. Use read
 When the user says a result was wrong:
 1. Read the run (result.json, events.jsonl) and fix the Method. Run it again and show the user the new result.
 2. If the user wants the fix to stay, ask once: "Keep this as a rule: <the rule in plain words>?"
-3. On yes, record it: method case new FILE --id ID --run BAD_RUN --passing-run NEW_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). When a rule compares the output with the sources, add --context outputs.SOURCES. For an exact value, use --expect instead.
+3. On yes, record it: method case new FILE --id ID --run BAD_RUN --passing-run NEW_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names the output to judge (default: the Method's result; a path to a file that the run saved is judged by that file's contents). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
 4. Run method test FILE. Every case must pass. method save refuses a version that breaks a case.
-For a one-time preference, edit and run again; a case is not needed. Never edit or delete a case to make a change pass. When a rule really changed, retire the old case: method case retire FILE ID --reason TEXT.
+For a one-time preference, edit and run again; a case is not needed.
+
+## Checked on every run, or on every new version
+
+A case checks future versions of the Method: method test and method save run it. A check on a step checks every run, and a failed check stops the run before later steps (for example before the save), with the check's reason in the error. When the user wants something "checked every time", add a step check; when they also want the rule kept for future edits, add a case too. A check that the output says only what the sources say:
+  check:
+    kind: agent
+    model: default
+    prompt: |
+      Sources:
+      {{inputs.material}}
+
+      Report:
+      {{outputs.report}}
+
+      Return fail if the report states any fact, number, or cause that the sources do not give.
+  reading: {check_name: Only what the sources say, check: Fails when the report states something the sources do not give.}
+Check prompts insert the step's inputs as {{inputs.NAME}} and its outputs as {{outputs.NAME}}. Never edit or delete a case to make a change pass. When a rule really changed, retire the old case: method case retire FILE ID --reason TEXT.
 
 Use a script for exact file transforms and exports. Use a call for a structured model response. A direct API call is one request without tools; the Codex backend controls its own internal requests and tools. Use an agent only when bounded tool use is needed.
 For incremental exports, keep a declared state ledger of source IDs and evidence hashes. Compare new evidence to that ledger and rebuild only changed days. Supply the prior run's state.json with --state for a new run.
 Resume continues the same input set and saved version. A new run can collect new files. A separate database is optional application state, not a workaround required to resume Method.
 To edit a failed method, read its exact saved version and logs, compare the current version, then save the complete repair with a reason.
 
-Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
 
 
 # Recovery
-
-Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
 
 For a stopped run, read summary.json, events.jsonl, and checkpoint.json. Resume with the original method, config, --run-dir DIR, and --resume. Accepted steps and iterations are reused.
 An unfinished action needs --retry STEP:ITERATION after inspection of its external effects. A retry consumes the remaining run budget. Budgets do not reset on resume. Resume always uses the run's saved bundle, so a code fix needs a new run.
@@ -1251,6 +1265,7 @@ Run a local .method file, or a saved Method by ID. A local file run keeps its re
 Usage:
 
 ```sh
+method run FILE.method [OPTIONS]
 method run WORKFLOW_ID [--version VERSION_ID] [--server URL] [OPTIONS]
 ```
 
@@ -1258,7 +1273,7 @@ Arguments and defaults:
 Current methods optionally use runtime.json beside a local file, or in the current folder for a saved ID. --workspace selects a different folder. --config FILE overrides the config. See method authoring execution. Optional --state FILE initializes state for a new run. Resume with --resume --run-dir DIR; authorize unfinished work with --retry STEP:ITERATION.
 
 --inputs FILE: JSON input values.
---run-dir DIR: saved run folder.
+--run-dir DIR: the folder for this run's records (new runs too; default .method-runs/ID).
 --agent codex|claude: select an agent for unconfigured profiles in a new run.
 --resume: continue the same saved run with its saved agent.
 --from-run DIR --reuse STEP[,STEP]: start a new run that reuses accepted steps of a stopped or completed run. Use it after a fix to steps that were not accepted. See method authoring recovery.
