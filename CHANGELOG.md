@@ -1,4 +1,4 @@
-# Unreleased
+# 0.12.0
 
 - Method 3.3 (runtime 0.10.0): the runtime confirms external changes by reading the changed system, not by trusting a receipt.
   - **Local files need nothing.** For a `files` connection in `changes`, the runtime reads the folder before and after the step, records the changed files, keeps a copy of what the step wrote, and fails the run when the step returns a path that did not change. A step with nothing to save may change nothing.
