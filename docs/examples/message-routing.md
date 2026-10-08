@@ -36,7 +36,6 @@ steps:
         other: Other — no listed team fits, or more information is needed.
     out: message_category
   choose_destination:
-    changes: []
     name: Choose the destination
     purpose: |
       Chooses Billing or Technical support when that category is selected
@@ -161,11 +160,6 @@ This complete Method has no additional task checks. The runtime checks output ty
 - message-routing/message-routing.method
 - message-routing/result.fixture.json
 - message-routing/retry/create-ticket.mjs
-- message-routing/retry/fixtures/saved/empty.json
-- message-routing/retry/fixtures/saved/saved.json
-- message-routing/retry/fixtures/saved/wrong-destination.json
-- message-routing/retry/judge-ticket.mjs
-- message-routing/retry/observe-ticket.mjs
 - message-routing/retry/retry.test.mjs
 - message-routing/retry/ticket.method
 - message-routing/routing.mjs

@@ -6,7 +6,7 @@ import {loadWorkflow} from '../../packages/workflow-language/src/validate.js';
 import {preflight} from '@withmethod/runtime/preflight.js';
 import {authoringPrompt} from '../../packages/sdk/src/authoring-prompt.js';
 import {authoringEntryRule,globalAgentRule} from '../../packages/sdk/src/authoring-instructions.js';
-it('ships four complete packages with valid definitions, source descriptions, and every declared helper',async()=>{
+it('ships five complete packages with valid definitions, source descriptions, and every declared helper',async()=>{
  const files=JSON.parse(readFileSync('packages/sdk/examples/files.json','utf8')) as string[];
  for(const example of authoringExamples){
   const {directory}=exampleDirectory(example.id);

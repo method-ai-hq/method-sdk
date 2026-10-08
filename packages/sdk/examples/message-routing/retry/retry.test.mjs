@@ -42,7 +42,7 @@ test('retry reuses the operation ID after the service commits and before stdout 
   method.files.push('retry/create-ticket.mjs');
   await writeFile(join(root,'retry/fixture-action.mjs'),`const write=process.stdout.write.bind(process.stdout);process.stdout.write=data=>{void fetch(${JSON.stringify(url+'/committed')},{method:'POST'}).then(()=>write(data));return true;};await import('./create-ticket.mjs');`);
   const file=join(root,'task.method');await writeFile(file,stringify(method));
-  const config={allow_local_processes:true,runtimes:{node:{command:process.execPath,version:process.version}},environment:{ticket_service:url,ticket_lookup:url},classification:{provider:'typesafe',model:'jev-fixture'}};
+  const config={allow_local_processes:true,runtimes:{node:{command:process.execPath,version:process.version}},environment:{ticket_service:url},classification:{provider:'typesafe',model:'jev-fixture'}};
   let classifications=0;
   const classification={resolve:async()=>config.classification,evaluate:async()=>{classifications++;return {...config.classification,choice:'billing',probabilities:{billing:.94,technical:.04,other:.02},confidence:.8,usage:null};}};
   const runDir=join(root,'run'),controller=new AbortController();

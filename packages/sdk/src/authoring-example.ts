@@ -3,6 +3,9 @@ import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
 export const authoringExamples = [
+  {id:'notes-summary', description:'The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call, and saves a summary file. The folder is observed automatically.', directory:'notes-summary', entrypoint:'notes-summary.method', lessonFiles:[
+    'TASK.md','notes-summary.method','read-notes.mjs','save.mjs','runtime.json','README.md',
+  ]},
   {id:'daily-briefing', description:'Turns prepared records into a cited briefing website using an approved writing example, a source check, and rendering scripts.', directory:'daily-briefing', entrypoint:'daily-briefing.method', lessonFiles:[
     'TASK.md','daily-briefing.method','approved-report.md','briefing_check_inputs.py','briefing_files.py','briefing_artifacts.py','briefing_times.py','briefing_sessions.py','briefing_validation.py','briefing_render.py','briefing_manifest.py','briefing_markdown.py','briefing_website.py','briefing_progress.py','reader/reader.css','reader/reader.js','inputs.json','runtime.json','sample-report.md','README.md',
   ]},

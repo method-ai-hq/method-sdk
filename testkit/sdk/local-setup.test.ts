@@ -27,12 +27,12 @@ it('validates and runs using the Method folder even from a different working fol
 });
 it('reports missing custom runtimes and helper files without running work',async()=>{
  const s=setup(); rmSync(join(s.dir,'runtime.json'));
- await methodMain(['validate',s.file]); expect(s.result()).toMatchObject({valid:true,definition:'valid',local_setup:'needs_preparation',executed:false});
+ await methodMain(['validate',s.file]); expect(s.result()).toMatchObject({valid:true,definition:'valid',local_setup:'valid',executed:false}); expect(s.result().note).toBe('method run prepares node on the first run.');
  writeFileSync(join(s.dir,'runtime.json'),exampleFiles['runtime.json']!);rmSync(join(s.dir,'copy.cjs'));s.stdout.mockClear();
  await methodMain(['validate',s.file]);expect(s.result().error).toContain('copy.cjs');
  writeFileSync(join(s.dir,'copy.cjs'),exampleFiles['copy.cjs']!);
  writeFileSync(join(s.dir,'runtime.json'),JSON.stringify({...JSON.parse(exampleFiles['runtime.json']!),runtimes:{}}));s.stdout.mockClear();
- await methodMain(['validate',s.file]);expect(s.result().local_setup).toBe('needs_preparation');
+ await methodMain(['validate',s.file]);expect(s.result().local_setup).toBe('valid');
 });
 it('uses an explicit config and resolves its executable path from that folder',async()=>{
  const s=setup();const configDir=join(s.dir,'config');mkdirSync(configDir);

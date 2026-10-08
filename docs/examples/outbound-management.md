@@ -35,7 +35,6 @@ environment:
     description: Browser signed in to email, Happenstance, and LinkedIn.
 steps:
   read_crm:
-    changes: []
     name: Read the CRM
     in:
       day: inputs.day
@@ -100,7 +99,6 @@ steps:
     reading:
       check: Requires completed searches, unique email IDs, valid message dates and links, and linked enrichment facts. A completed search may contain no results.
   plan_day:
-    changes: []
     name: Update contact status and plan the day
     in:
       context: context

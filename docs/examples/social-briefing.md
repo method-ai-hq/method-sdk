@@ -87,7 +87,6 @@ steps:
         value: sources
         min: 1
   write_briefing:
-    changes: []
     name: Write the briefing
     in:
       topic: inputs.topic

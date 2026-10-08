@@ -19,7 +19,6 @@ steps:
         other: Other — no listed team fits, or more information is needed.
     out: message_category
   choose_destination:
-    changes: []
     name: Choose the destination
     purpose: |
       Chooses Billing or Technical support when that category is selected

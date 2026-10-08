@@ -63,7 +63,7 @@ it('runs without an installed agent, saves the model once, and reuses accepted c
 it('validates offline and resolves downstream classifier references from the shared output shape', async () => {
   const f=fixture(); const fetch = vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('No network allowed'));
   expect(await localAuthoring(['validate', f.file])).toBe(true); expect(fetch).not.toHaveBeenCalled();
-  expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('needs_preparation'));
+  expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('needs_action'));
   const method=loadWorkflow(definition);
   expect(effectiveOutputs(method.steps.classify!)).toHaveProperty('category');
   expect(referenceShape(method,'category.probabilities.billing')).toEqual('number');

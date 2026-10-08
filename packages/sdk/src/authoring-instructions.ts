@@ -25,11 +25,11 @@ Choose each operation's execution type from its requirements:
 
 For browser work, declare a browser environment and select it with do.browser: environment.NAME. Method supplies the browser controls. Put the research task, limits, and required results in the prompt. Read method authoring example social-briefing for a complete example.
 
-Default to no additional task check, except for external changes, which need effects. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
+Default to no additional task check. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
 
 Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
 
-When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. For an external change, declare an effect instead: an observer reads the changed system, or the place where it reports problems, separately from the call that made the change, and the runtime decides from that evidence whether the work is done. A success status, receipt, or returned ID shows only that the request was accepted. Use a built-in observer (file, sqlite, http) when one fits. When a change cannot or need not be observed, such as a browser step that only reads, state no_effect_reason instead.
+When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. Local file writes need no check: the runtime observes files connections itself. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back, because a receipt or a 200 status shows only that the request was accepted. Use a built-in observer (http, sqlite, file) when one fits. When a change cannot or need not be observed, such as a browser step that only reads, write no_effect_reason instead.
 
 ${checkEditingRule}
 

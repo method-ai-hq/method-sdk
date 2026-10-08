@@ -25,8 +25,8 @@ function shell(dir: string, script: string) {
   return execFileSync("/bin/sh", ["-c", `set -eu\n${script}`], { cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8" });
 }
 
-it("tells the agent to add the Method rule to its global instructions", () => {
-  expect(authoringGuide()).toContain(`- ${globalAgentRule}`);
+it("keeps the global-instructions rule in setup, not in the authoring guide", () => {
+  expect(authoringGuide()).not.toContain(`- ${globalAgentRule}`);
   expect(readFileSync(resolve("scripts/install-method.sh"), "utf8")).toContain(`- ${globalAgentRule}`);
 });
 

@@ -22,6 +22,8 @@ export function parse(args: string[]) {
 export async function run(target: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync): Promise<void> {
   const path = isWorkflowLink(target) ? (await saveWorkflowLink(target, process.cwd())).path : resolve(target);
   loadWorkflow(readFileSync(path, "utf8"));
+  const notice = await (await import("./quality.js")).casesNotice(path);
+  if (notice) process.stderr.write(notice + "\n");
   await runCurrentFile(path, flags, syncFactory);
 }
 export async function localMain(args = process.argv.slice(2)) {

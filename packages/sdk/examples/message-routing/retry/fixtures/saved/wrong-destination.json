@@ -1,1 +1,0 @@
-{"token":"mop_fixture","inputs":{"message":"Please send my invoice.","destination":"billing"},"observations":[{"source":"ticket_service","ref":"mop_fixture","data":{"status":200,"record":{"ticket_id":"ticket-1","operation_id":"mop_fixture","message":"Please send my invoice.","destination":"technical"}}}],"expect":"contradicted"}

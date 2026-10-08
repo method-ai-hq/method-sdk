@@ -63,14 +63,12 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     process.stdout.write(JSON.stringify(result)+'\n');return;
   }
   if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.3\n`); return; }
-  if (["observe", "test", "case", "effect", "learn"].includes(args[0] ?? "")) {
+  if (["observe", "test", "case", "effect"].includes(args[0] ?? "") && !args.includes("--help")) {
     const quality = await import("./quality.js");
     if (args[0] === "observe") return quality.observeCommand(args.slice(1));
     if (args[0] === "test") return quality.testCommand(args.slice(1));
     if (args[0] === "case") return quality.caseCommand(args.slice(1));
-    if (args[0] === "effect") return quality.effectCommand(args.slice(1));
-    const { runCurrentFile } = await import("./current-runtime.js");
-    return void await quality.learnCommand(args.slice(1), (file, flags) => runCurrentFile(file, flags));
+    return quality.effectCommand(args.slice(1));
   }
   if (args[0] === 'run' && /^https?:/.test(args[1] ?? '')) {
     const url = new URL(args[1]!);
@@ -102,6 +100,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     "method",
     "request-id",
     "connection",
+    "accept-failing-case",
   ]);
   const values: Record<string, string> = {},
     rest: string[] = [];
@@ -212,6 +211,9 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     try { fd = openSync(lock, "wx", 0o600); } catch { throw Error("The draft is locked. Wait for the other command."); }
     try {
       const workflow = loadWorkflow(readDocument(authorFile));
+      // A version that breaks an approved case is not saved, unless each failing case is accepted with a reason.
+      const accepted = (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean);
+      const gate = await (await import("./quality.js")).caseGate(safePath(authorFile), accepted, meta.pending?.reason ?? values.reason);
       const latest = existsSync(metaFile) ? readDocument(metaFile) : {};
       if (JSON.stringify(latest) !== JSON.stringify(meta)) throw Error("The draft was saved by another process. Retry.");
       const pack = await collectPackage(authorFile, workflow, client);
@@ -222,7 +224,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       };
       if (!meta.pending && meta.digest === digest && meta.package_digest === pack?.digest && meta.workflow_id) { await confirm(meta.workflow_id, meta.base_version); print({ confirmed: true, document_sha256: digest, unchanged: true, workflow_id: meta.workflow_id, version_id: meta.base_version, url: `${client.server}/methods/${meta.workflow_id}?version=${meta.base_version}` }); return; }
       if (meta.pending && ((meta.pending.digest !== digest && (meta.digest_format || meta.pending.digest !== semanticDigest(workflow))) || meta.pending.package_digest !== pack?.digest)) throw Error("A previous save has no confirmed response. Restore that draft and retry before changing it.");
-      const reason = meta.pending?.reason ?? values.reason;
+      const reason = meta.pending?.reason ?? (values.reason && gate.line ? `${values.reason} ${gate.line}` : values.reason);
       if (meta.workflow_id && !reason) throw Error("Supply --reason for the new version.");
       const requestId = meta.pending?.request_id ?? values["request-id"] ?? randomUUID();
       const pending = { ...meta, digest_format: "document/1", server: client.server, pending: { digest, package_digest:pack?.digest, request_id: requestId, reason } };
@@ -233,7 +235,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       const workflowId = meta.workflow_id ?? saved.workflow_id;
       await confirm(workflowId, saved.version_id);
       writePrivateJson(metaFile, { server: client.server, workflow_id: workflowId, base_version: saved.version_id, digest, package_digest:pack?.digest, digest_format: "document/1" });
-      print({ ...saved, confirmed: true, document_sha256: digest, ...(pack?{package_sha256:pack.digest,runtime:pack.runtime,files:pack.files.map(f=>f.path)}:{}), workflow_id: workflowId, server: client.server, url: `${client.server}/methods/${workflowId}?version=${saved.version_id}` });
+      print({ ...saved, confirmed: true, document_sha256: digest, ...(gate.line ? { cases: gate.line } : {}), ...(pack?{package_sha256:pack.digest,runtime:pack.runtime,files:pack.files.map(f=>f.path)}:{}), workflow_id: workflowId, server: client.server, url: `${client.server}/methods/${workflowId}?version=${saved.version_id}` });
     } finally { closeSync(fd); unlinkSync(lock); }
     return;
   }
@@ -245,8 +247,9 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
         "Supply --file, --base-version, and --reason. Use method get to read the current version first.",
       );
     const workflow = loadWorkflow(readFileSync(safePath(values.file), "utf8"));
+    const gate = await (await import("./quality.js")).caseGate(safePath(values.file), (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean), values.reason);
     const pack = await collectPackage(values.file, workflow, client);
-    const updated=await client.request<any>(path,"POST",{workflow,package:pack,base_version:values["base-version"],reason:values.reason});
+    const updated=await client.request<any>(path,"POST",{workflow,package:pack,base_version:values["base-version"],reason:gate.line?`${values.reason} ${gate.line}`:values.reason});
     const confirmed=await client.request<any>(path+`?version=${encodeURIComponent(updated.version_id)}`);
     if(workflowDocumentDigest(loadWorkflow(confirmed.workflow))!==workflowDocumentDigest(workflow)||confirmed.package?.digest!==pack?.digest)throw Error('Saved version readback does not match the complete package.');
     print({...updated,confirmed:true,...(pack?{package_sha256:pack.digest,runtime:pack.runtime,files:pack.files.map(f=>f.path)}:{})});

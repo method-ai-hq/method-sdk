@@ -30,7 +30,6 @@ steps:
       kind: run
       runtime: node
       entrypoint: choose-destination.mjs
-    changes: []
     out:
       routing:
         type: record
@@ -44,7 +43,7 @@ steps:
     name: Create the support ticket
     purpose: Creates a ticket for the selected destination and returns its receipt.
       Sends the operation ID as the Idempotency-Key, so a retry returns the same
-      ticket. The saved effect confirms the ticket by reading it back.
+      ticket. The saved effect reads the ticket back by the operation ID.
     in:
       message: inputs.message
       routing: routing
@@ -70,20 +69,13 @@ steps:
           message: inputs.message
           destination: routing.destination
         observe:
-          kind: run
-          runtime: node
-          entrypoint: retry/observe-ticket.mjs
-        judge:
-          kind: run
-          runtime: node
-          entrypoint: retry/judge-ticket.mjs
-        fixtures: retry/fixtures/saved
-        schedule:
-          first: 0s
-          then:
-            - 30s
-          horizon: 5m
-        confirm: positive
+          kind: http
+          path: /tickets/by-operation/{token}
+          expect:
+            fields:
+              operation_id: "{token}"
+              message: "{inputs.message}"
+              destination: "{inputs.destination}"
         blocking: true
 result: ticket
 files:
@@ -94,7 +86,3 @@ environment:
   ticket_service:
     type: service
     description: Ticket service with idempotent writes and operation lookup.
-  ticket_lookup:
-    type: service
-    description: The same ticket service, used only to read tickets by operation ID.
-    role: observer

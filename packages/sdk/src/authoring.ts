@@ -106,7 +106,10 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
       {
         const { config, configFile, sourceRoot } = await localSetup(file, v);
         const { files, missingSetup } = await preflight(workflow, config, sourceRoot, {allowMissingSetup:true});
-        print({ valid: true, definition, local_setup: missingSetup.length ? "needs_preparation" : "valid", ...(missingSetup.length ? {missing_setup:missingSetup} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps: Object.keys(workflow.steps).length, executed: false });
+        // Managed runtimes are prepared by method run; only the other items need action.
+        const automatic = [...new Set(missingSetup.filter((item: string) => item.startsWith("Prepare ") && item.endsWith(" with method run.")))];
+        const needed = [...new Set(missingSetup.filter((item: string) => !automatic.includes(item)))];
+        print({ valid: true, definition, local_setup: needed.length ? "needs_action" : "valid", ...(needed.length ? {missing_setup:needed} : {}), ...(automatic.length ? {note:`method run prepares ${automatic.map((item: string) => item.slice(8, -17)).join(" and ")} on the first run.`} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps: Object.keys(workflow.steps).length, executed: false });
       }
     } catch (error) { print({ valid: false, definition, local_setup: definition === "valid" ? "invalid" : "not_checked", executed: false, error: error instanceof Error ? error.message : String(error) }); process.exitCode = 1; }
     return true;
