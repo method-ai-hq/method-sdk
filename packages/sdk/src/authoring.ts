@@ -108,8 +108,15 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
         const { files, missingSetup } = await preflight(workflow, config, sourceRoot, {allowMissingSetup:true});
         // Managed runtimes are prepared by method run; only the other items need action.
         const automatic = [...new Set(missingSetup.filter((item: string) => item.startsWith("Prepare ") && item.endsWith(" with method run.")))];
-        const needed = [...new Set(missingSetup.filter((item: string) => !automatic.includes(item)))];
-        print({ valid: true, definition, local_setup: needed.length ? "needs_action" : "valid", ...(needed.length ? {missing_setup:needed} : {}), ...(automatic.length ? {note:`method run prepares ${automatic.map((item: string) => item.slice(8, -17)).join(" and ")} on the first run.`} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps: Object.keys(workflow.steps).length, executed: false });
+        // method run opens the browser and connects its controls itself.
+        const browser = missingSetup.some((item: string) => item.startsWith("Prepare browser:") || item.startsWith("Connect tool: browser_"));
+        // Classification uses the Method account; with a saved sign-in, method run needs nothing more.
+        const { MethodClient } = await import("./method-client.js");
+        const signedIn = (() => { try { return !!new MethodClient().token(); } catch { return false; } })();
+        const classification = signedIn && missingSetup.some((item: string) => item.startsWith("Classification needs Method sign-in"));
+        const needed = [...new Set(missingSetup.filter((item: string) => !automatic.includes(item) && !item.startsWith("Prepare browser:") && !item.startsWith("Connect tool: browser_") && !(classification && item.startsWith("Classification needs Method sign-in"))))];
+        const prepared = [...automatic.map((item: string) => item.slice(8, -17)), ...(browser ? ["the browser"] : []), ...(classification ? ["classification with your Method sign-in"] : [])];
+        print({ valid: true, definition, local_setup: needed.length ? "needs_action" : "valid", ...(needed.length ? {missing_setup:needed} : {}), ...(prepared.length ? {note:`method run prepares ${prepared.join(" and ")} on the first run.`} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps: Object.keys(workflow.steps).length, executed: false });
       }
     } catch (error) { print({ valid: false, definition, local_setup: definition === "valid" ? "invalid" : "not_checked", executed: false, error: error instanceof Error ? error.message : String(error) }); process.exitCode = 1; }
     return true;
