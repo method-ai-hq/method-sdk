@@ -36,6 +36,11 @@ for(const version of ['0.7.0','0.7.1','0.7.2','0.8.0','0.8.1','0.8.2'])it(`runs 
  expect(readFileSync(join(f.records,'ledger.txt'),'utf8')).toBe('Hello from a local binding\n');
  expect(f.client.request.mock.calls.some(([path,verb]:any[])=>path.startsWith('/api/cli/methods/')&&['POST','PUT'].includes(verb))).toBe(false);
 });
+// A Method saved with an earlier SDK release keeps running after an SDK update.
+for(const runtime of ['0.9.3','0.9.4','0.9.5'])it(`runs a package saved with runtime ${runtime}`,async()=>{
+ const f=fixture();f.saved.package.runtime=runtime;f.saved.package.digest=packageDigest(f.saved.workflow,f.saved.package);
+ expect(await runSaved(f.saved,f.flags,f.client)).toMatchObject({status:'completed'});
+});
 it('rejects an unsupported package before restoring files, resolving connections, or acquiring state',async()=>{
  const f=fixture();f.saved.package.runtime='99.0.0';f.saved.package.digest=packageDigest(f.saved.workflow,f.saved.package);
  await expect(runSaved(f.saved,f.flags,f.client)).rejects.toMatchObject({code:'needs_update',message:expect.stringContaining('99.0.0')});

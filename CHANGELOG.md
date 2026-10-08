@@ -1,3 +1,7 @@
+# 0.12.1
+
+- Run Methods saved with SDK 0.11.8 (runtime 0.9.5). SDK 0.12.0 refused their packages and asked for an update.
+
 # 0.12.0
 
 - Method 3.3 (runtime 0.10.0): the runtime confirms external changes by reading the changed system, not by trusting a receipt.
