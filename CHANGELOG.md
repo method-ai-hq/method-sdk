@@ -8,6 +8,9 @@
 - `method test` replays the cases: every case must pass. Unchanged steps return recorded outputs; written folders become scratch copies; only the steps a case needs run; cases run in parallel and stop early.
 - `method save` (and `update`) refuse a version that breaks an approved case, unless `--accept-failing-case ID --reason TEXT` is given; the version records the result. `method run` notes when the cases were not checked since the Method changed.
 - `method effect list|add` with the reviewed `mail.delivery` observer (IMAP, read-only).
+- A case with a live model step runs three times by default, and a rule kept only sometimes is reported as unreliable. `method save` says how many cases it checks, then the time, live model steps and judge calls. `method case new` warns when `cases/` (which holds run data) would be committed to Git.
+- A saved Method whose run ends `unconfirmed` now releases its shared account state.
+- Observed folders are listed in about a second; a folder over 20,000 files or 3 seconds is reported once as not observed.
 - Clearer errors: schema errors name the field and explain a YAML comma in `{ }`; an input that shares a name with an output names the step. `method validate` shows managed runtimes as a note. A run that waits for an effect reading shows progress.
 - Examples use Method 3.3. New smallest example: `notes-summary`. The ticket example confirms its ticket with the built-in `http` observer.
 - The guide treats local runs as the normal path, explains effects with one short example, and gives the correction loop as a recipe.

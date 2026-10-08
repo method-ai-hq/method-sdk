@@ -1,6 +1,7 @@
 /** Effect observation, recorded cases, the save gate, and library observers. */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
@@ -105,7 +106,11 @@ export async function testCommand(args: string[]) {
 export async function caseGate(file: string, accept: string[] = [], reason?: string) {
   const cases = (await listCases(file)).filter((c: any) => c.status === "active");
   if (!cases.length) return { line: undefined, report: undefined };
+  // A save checks every case; say so first, because live model steps and judges take time and cost money.
+  process.stderr.write(`Checking ${cases.length} case${cases.length === 1 ? "" : "s"} before saving. Cases whose model steps changed run them live, up to three times each.\n`);
   const report = await runCases(file, {});
+  const t = report.totals;
+  process.stderr.write(`Cases checked in ${Math.round(t.duration_ms / 1000)} s: ${t.live_model_steps} live model step${t.live_model_steps === 1 ? "" : "s"}, ${t.judge_calls} judge call${t.judge_calls === 1 ? "" : "s"}.\n`);
   const failing = report.cases.filter((c: any) => !["pass", "fixed"].includes(c.verdict));
   const unaccepted = failing.filter((c: any) => !accept.includes(c.id));
   if (unaccepted.length) throw Object.assign(Error(`This version breaks ${unaccepted.length} approved case${unaccepted.length === 1 ? "" : "s"}: ${unaccepted.map((c: any) => `${c.id} (${c.verdict}: ${c.note})`).join("; ")}. Fix the Method and run method test, or retire a case whose rule no longer applies with method case retire. To save anyway, add --accept-failing-case ${unaccepted.map((c: any) => c.id).join(",")} with --reason.`), { code: "cases_failed" });
@@ -128,11 +133,27 @@ export async function caseCommand(args: string[]) {
   if (!values.id || !values.note || (!values.run && !values["passing-run"])) throw Error('Supply --id, --note "the person\'s words", and --run (the run that went wrong) or --passing-run (a run that was right).');
   if (!values.rubric?.length && !values.expect) throw Error('Say what must be true with --rubric "plain sentence" (repeatable), or give --expect FILE.');
   const prepared = await preparedConfig(methodFile, { ...(values.config ? { config: values.config } : {}), ...(values.workspace ? { workspace: values.workspace } : {}), ...(values.agent ? { agent: values.agent } : {}) });
+  const privacy = casesPrivacyWarning(methodFile, casesDir);
+  if (privacy) process.stderr.write(privacy + "\n");
   print(await createCase({ methodFile, runDir: values.run ? authoringPath(values.run) : undefined, passingRun: values["passing-run"] ? authoringPath(values["passing-run"]) : undefined,
     id: values.id, note: values.note, author: values.author ?? null, rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
     retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, config: prepared.config,
     options: { runOptions: { processPath: prepared.processPath, ...(values.agent ? { agent: values.agent } : {}) } } }));
+}
+
+/**
+ * A case copies run data (inputs, outputs, written files) into cases/. When that folder would be committed to a Git
+ * repository, say so once per case: the repository may be shared.
+ */
+export function casesPrivacyWarning(methodFile: string, casesDir?: string) {
+  const folder = casesDir ?? join(dirname(methodFile), "cases");
+  try {
+    execFileSync("git", ["-C", dirname(methodFile), "rev-parse", "--is-inside-work-tree"], { stdio: "ignore" });
+  } catch { return undefined; }
+  try { execFileSync("git", ["-C", dirname(methodFile), "check-ignore", "-q", join(folder, "x", "recording.json")], { stdio: "ignore" }); return undefined; }
+  catch { /* not ignored */ }
+  return `Note: ${folder} keeps copies of run data (inputs, outputs and written files) and is inside a Git repository. Commit it only if that data may be shared with everyone who can read the repository. To keep the data local, add this line to .gitignore: ${relative(dirname(methodFile), folder)}/*/recording.json, and the same for files/ and artifacts/; or use --redact.`;
 }
 
 const library = () => fileURLToPath(new URL("../observers/", import.meta.url));

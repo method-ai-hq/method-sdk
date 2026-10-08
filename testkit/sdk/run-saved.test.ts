@@ -2,7 +2,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {runSaved} from '../../packages/sdk/src/run-saved.js';
+import {runSaved,finishedRun} from '../../packages/sdk/src/run-saved.js';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
 import {runtimeVersion} from '../../packages/sdk/src/method-files.js';
 import {packageDigest} from '../../packages/contracts/src/method-package.js';
@@ -70,4 +70,8 @@ it('uploads completed results despite an unsupported package and a different exe
  expect(f.client.transfer).not.toHaveBeenCalled();
  expect(existsSync(join(f.root,'cache'))).toBe(false);
  expect(readFileSync(join(f.records,'ledger.txt'),'utf8')).toBe('Hello from a local binding\n');
+});
+
+it('releases shared state when every step finished, also when an external change was unconfirmed',()=>{
+ expect(['completed','unconfirmed','failed','needs_input'].map(finishedRun)).toEqual([true,true,false,false]);
 });

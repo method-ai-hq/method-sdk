@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
-import { effectCommand, observeCommand, caseCommand, testCommand, observerLibrary } from '../../packages/sdk/src/quality.js';
+import { effectCommand, observeCommand, caseCommand, testCommand, observerLibrary, casesPrivacyWarning } from '../../packages/sdk/src/quality.js';
 import { runMethod } from '@withmethod/runtime';
 
 const roots: string[] = [];
@@ -129,4 +129,15 @@ it('method case and method test replay a run, and method observe reports runs wi
   vi.restoreAllMocks(); read = captured();
   await observeCommand(['--pending', join(root, 'runs')]);
   expect(read().runs).toEqual([]);
+});
+
+it('warns that cases hold run data when they would be committed to Git, and not when they are ignored', () => {
+  const root = temp();
+  const file = join(root, 'task.method');
+  writeFileSync(file, 'format: method/3.3');
+  expect(casesPrivacyWarning(file)).toBeUndefined();
+  execFileSync('git', ['init', '-q', root]);
+  expect(casesPrivacyWarning(file)).toMatch(/keeps copies of run data .* inside a Git repository/);
+  writeFileSync(join(root, '.gitignore'), 'cases/*/recording.json\n');
+  expect(casesPrivacyWarning(file)).toBeUndefined();
 });
