@@ -97,7 +97,8 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       processPath: prepared.processPath,
       prepareBundle: prepared.prepareBundle,
       onStart: async ({ method, inputs }: any) => {
-        await sync?.start(method, inputs, Object.fromEntries(Object.entries(config.environment ?? {}).map(([key, path]) => [key, { description: method.environment[key].description, path: String(path) }])));
+        // A configured binding that the Method does not declare is not one of its connections.
+        await sync?.start(method, inputs, Object.fromEntries(Object.entries(config.environment ?? {}).filter(([key]) => method.environment?.[key]).map(([key, path]) => [key, { description: method.environment[key].description, path: String(path) }])));
       },
       onEvent: async (event: any) => { await onEvent?.(event); sync?.snapshot(); if (flags.verbose) process.stderr.write(JSON.stringify(event) + "\n"); },
     });
