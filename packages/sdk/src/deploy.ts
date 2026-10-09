@@ -9,6 +9,7 @@ import {writePrivateJson} from './files.js';
 import {browserDirectory,browserName,browserVersion} from './browser.js';
 import {digest,readJson,privateCopy,inventory,safeFile} from './deployment-source.js';
 import {MethodClient} from './method-client.js';
+import {directBackends} from '@withmethod/runtime/model.js';
 import packageInfo from '../package.json' with {type:'json'};
 import runtimeInfo from '@withmethod/runtime/package.json' with {type:'json'};
 
@@ -32,7 +33,7 @@ function portableConfig(config:any){
   else throw missing(`Runtime ${name} needs a supported runner installation before deployment.`);
  }
  for(const profile of Object.values(portable.models??{}) as any[]){
-  if(!['codex','claude','openai-responses'].includes(profile.backend)||profile.command)throw missing('This agent command needs a supported runner installation before deployment.');
+  if(!['codex','claude',...directBackends].includes(profile.backend)||profile.command)throw missing('This agent command needs a supported runner installation before deployment.');
  }
  for(const tool of Object.values(portable.tools??{}) as any[])if(tool.connection&&!tool.tool?.startsWith('browser_'))throw missing('This custom tool connection needs a runner provider before deployment.');
  return portable;

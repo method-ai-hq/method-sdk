@@ -35,7 +35,8 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   try {
     sync = syncFactory?.();
     await sync?.start(method, json(flags.inputs) ?? {}, {});
-    const classification = Object.values(method.steps).some((step: any) => step.do?.kind === 'classify') ? managedClassification(client) : undefined;
+    // A run with its own Typesafe key (config.classification.api_key_env) needs no Method sign-in for classification.
+    const classification = Object.values(method.steps).some((step: any) => step.do?.kind === 'classify') && !config.classification?.api_key_env ? managedClassification(client) : undefined;
     if (classification && !client.token()) await client.login();
     const resolvedFile = flags['run-dir'] ? join(authoringPath(flags['run-dir']), 'runtime.resolved.json') : undefined;
     const priorCheckpoint = !!flags.resume && !!resolvedFile && !existsSync(resolvedFile)

@@ -8,6 +8,7 @@ import {writePrivateJson} from './files.js';
 import {planDirectory} from './deploy.js';
 import {digest,readJson,privateCopy,inventory} from './deployment-source.js';
 import {MethodClient} from './method-client.js';
+import {directBackends} from '@withmethod/runtime/model.js';
 
 const base='node@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d';
 let packageRoot=fileURLToPath(new URL('../',import.meta.url));
@@ -31,7 +32,7 @@ export function connectionCheck(plan:any,method:any){
  return {format:'method/3.1',name:'Check runner access',goal:'Confirm the selected agent and required browser accounts work on this runner.',
   inputs:{expected:{type:'boolean',default:true}},...(browser?{environment:{[browser]:method.environment[browser]}}:{}),steps:{access:{in:{expected:'inputs.expected'},
    ...(browser?{changes:[`environment.${browser}`]}:{}),
-   do:{kind:profiles[model].backend==='openai-responses'?'call':'agent',model,...(browser?{browser:`environment.${browser}`} : {}),prompt:browser?
+   do:{kind:directBackends.includes(profiles[model].backend)?'call':'agent',model,...(browser?{browser:`environment.${browser}`} : {}),prompt:browser?
     `Open each of these sites in the browser: ${sites.map((s:string)=>`https://${s}`).join(', ')}. Check the account access needed for this Method: ${method.goal}. Confirm the signed-in account label where sign-in is required. A public page alone does not prove account access. If access is missing, leave its sign-in page open. Do not perform the Method's business task. Return ready=true only when all required connections work; otherwise return ready=false and state the missing access. Return short observations and account labels, never cookies, tokens, or passwords.`:
     'Confirm this coding agent can respond on the runner. Return ready=true and a short observation.',
    },out:{ready:{type:'boolean'},observations:{type:'text'}},check:{equals:{actual:'ready',expected:'expected'}}}},result:{ready:'ready',observations:'observations'}};

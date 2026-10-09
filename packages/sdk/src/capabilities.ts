@@ -1,5 +1,6 @@
 import {resolveModels} from '@withmethod/runtime/agents.js';
 import {executable} from '@withmethod/runtime/io.js';
+import {directBackends} from '@withmethod/runtime/model.js';
 import {command} from './prepare.js';
 /** Check supported agent access without starting a model request. Custom commands remain operator-owned. */
 export async function checkAgents(profiles:Record<string,any>){
@@ -20,7 +21,7 @@ export async function resolveAgentProfiles(method: any, config: any, agent?: str
 export async function checkConfiguration(config: any) {
   for (const profile of Object.values(config.runtimes ?? {}) as any[]) await executable(profile.command);
   for (const profile of Object.values(config.models ?? {}) as any[]) {
-    if (profile.backend === 'openai-responses' && !process.env[profile.api_key_env]) throw Error(`Missing environment variable: ${profile.api_key_env}`);
+    if (directBackends.includes(profile.backend) && !process.env[profile.api_key_env]) throw Error(`Missing environment variable: ${profile.api_key_env}`);
     if (['codex','claude'].includes(profile.backend)) await executable(profile.command ?? profile.backend);
   }
   await checkAgents(config.models ?? {});

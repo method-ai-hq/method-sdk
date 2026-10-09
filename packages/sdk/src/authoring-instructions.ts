@@ -33,7 +33,7 @@ When a check is needed, use the simplest check that establishes the required fac
 
 ${checkEditingRule}
 
-Use when for conditions, each for collections, repeat for bounded iteration, and after for required order without a data dependency.
+Use when for conditions, each for collections (add concurrency: N to run read-only items at once), repeat for bounded iteration, and after for required order without a data dependency.
 
 Split operations when an intermediate check, independent retry, human decision, or external change requires a boundary. A separate reasoning stage does not by itself require a separate agent.
 
