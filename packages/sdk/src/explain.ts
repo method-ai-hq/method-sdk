@@ -96,20 +96,27 @@ const explainRules = `You explain one script of a Method to the person who owns 
 Rules:
 - summary: one sentence in command form (for example "Score each lead and keep those above 50."). changes: "data" when the script writes files, sends data, or changes another system; otherwise "nothing".
 - steps: 3 to 8 numbered plain-English steps in the order the code runs them. Each step has lines [first, last] from the numbered code.
-- State thresholds, limits, time windows, and sort orders exactly as the code has them. Use the code's own field names in backticks.
-- Add one step that begins with "If" for each branch and each failure path (for example "If \`leads\` is empty, print an empty list.").
-- not_done: edge cases that the code ignores (for example duplicates, missing fields, time zones). Use an empty list if there are none.
+- Write for a reader who does not read code. Say what happens, not how the code does it: no function calls, expressions, or variable names of the code's internals. Example: write "Keep the links to x.com and twitter.com as handles", not "append urlsplit(url).path to handles".
+- State thresholds, limits, time windows, sort orders, hosts, and file names exactly as the code has them. Name the step's input and output fields in backticks.
+- Add one step that begins with "If" for each branch and each failure path (for example "If \`leads\` is empty, print an empty list."). Join small branches that lead to the same result into one step.
+- not_done: up to 4 edge cases that matter to the result and that the code ignores (for example duplicates, missing fields, time zones). Use an empty list if there are none.
 - Make no claim that is not in the code. Do not describe the effects list again; it is shown separately.`;
 
-async function ask(models: Models, model: string, system: string, user: string, schema: object, name: string) {
-  const signal = AbortSignal.timeout(180_000);
-  const data = await models.request({
-    model, max_tokens: 8000, provider: { require_parameters: true },
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-    response_format: { type: 'json_schema', json_schema: { name, strict: true, schema } },
-  }, signal);
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string') throw Error('The hosted model returned no answer.');
+async function ask(models: Models, model: string, system: string, user: string, schema: object, name: string, reasoning: object = { effort: 'low' }) {
+  // A reasoning model can spend the whole token budget before it answers a long script, so reasoning is kept low
+  // and an empty answer gets one more attempt.
+  let data: any, content: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    data = await models.request({
+      model, max_tokens: 16000, reasoning, provider: { require_parameters: true },
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      response_format: { type: 'json_schema', json_schema: { name, strict: true, schema } },
+    }, AbortSignal.timeout(180_000));
+    content = data?.choices?.[0]?.message?.content;
+    if (typeof content === 'string' && content.trim()) break;
+  }
+  if (typeof content !== 'string' || !content.trim())
+    throw Error(`The hosted model returned no answer (finish reason: ${data?.choices?.[0]?.finish_reason ?? 'unknown'}).`);
   const json = content.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
   return { value: JSON.parse(json), model: typeof data.model === 'string' ? data.model : model };
 }
@@ -212,8 +219,13 @@ async function roundTrip(o: { models: Models; model: string; language: Language;
   if (!o.inputs.length) return { result: 'not_run', inputs: 0, reason: 'no recorded inputs of this step on this computer' };
   if (/\.(?:ts|mts|cts)$/i.test(o.entrypoint)) return { result: 'not_run', inputs: 0, reason: 'TypeScript scripts are not replayed' };
   const language = o.language === 'python' ? 'Python 3 (standard library only)' : 'JavaScript for Node.js (CommonJS, no packages)';
-  const { value } = await ask(o.models, o.model, `Write one complete program in ${language}. It reads one JSON object from standard input and prints one JSON object to standard output. Follow the description exactly; it is your only source. Return JSON {code}.`,
-    JSON.stringify({ summary: o.draft.summary, steps: o.draft.steps.map(step => step.text), effects: o.effects }, null, 2), programSchema, 'method_program');
+  // The program must follow the text, not the model's own ideas, so it is written without reasoning. A model that
+  // cannot write it leaves the card in place with the round trip not run.
+  let value: any;
+  try {
+    ({ value } = await ask(o.models, o.model, `Write one complete program in ${language}. It reads one JSON object from standard input and prints one JSON object to standard output. Follow the description exactly; it is your only source. Return JSON {code}.`,
+      JSON.stringify({ summary: o.draft.summary, steps: o.draft.steps.map(step => step.text), effects: o.effects }, null, 2), programSchema, 'method_program', { enabled: false }));
+  } catch (error) { return { result: 'not_run', inputs: 0, reason: `no program was written from the steps: ${(error as Error).message}` }; }
   if (typeof value?.code !== 'string' || !value.code.trim()) return { result: 'failed', inputs: 0, reason: 'the model wrote no program' };
   const scratch = mkdtempSync(join(tmpdir(), 'method-explain-'));
   try {
