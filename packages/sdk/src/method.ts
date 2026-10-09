@@ -28,7 +28,7 @@ import { fixFor } from "@withmethod/runtime/runner.js";
 export function setupFix(error: any) {
   if (error.code === 'missing_secret') {
     const names = (error.missing ?? []).join(' ');
-    return `No step ran. Copy the values from a file the user names with method secret import FILE ${names}, or ask the user to enter each one with method secret set NAME (a private form in their browser). Never ask for a value in chat.`;
+    return `No step ran. Run method secret find to see which nearby files hold ${names}, then method secret import FILE ${names}; or ask the user to enter each one with method secret set NAME (a private form in their browser). Never open or print a key file, and never ask for a value in chat.`;
   }
   return fixFor(error);
 }

@@ -47,7 +47,7 @@ with your webmail URL if needed. Use the intended signed-in account.
 mkdir -p work/crm
 cp starter/crm.json work/crm/crm.json
 method validate outbound.method
-method save outbound.method
+method publish outbound.method --reason "First version"
 python3 - <<'PY' > work/state.json
 import json
 from pathlib import Path

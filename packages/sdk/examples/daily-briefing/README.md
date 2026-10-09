@@ -8,7 +8,7 @@ Copy this folder to a working folder, then run:
 
 ```sh
 method validate daily-briefing.method
-method save daily-briefing.method
+method publish daily-briefing.method --reason "First version"
 method bind WORKFLOW_ID prepared_day --file sample
 method run WORKFLOW_ID --version VERSION_ID --inputs inputs.json
 ```

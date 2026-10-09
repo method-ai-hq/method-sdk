@@ -8,7 +8,7 @@
 4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. `--rerun STEP` runs a step again anyway; `--fresh` runs every step.
 5. **Keep the inputs of the existing code.** If the code takes an ID and looks up the record, the Method takes the same ID and looks it up the same way.
 6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: {backend: method, model: "provider/model"}}` to runtime.json and use `model: writer` in the steps; it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. `run_data: device` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running. Do not ask the user to choose and do not wait: change this only if the user says that no data may leave this computer. Say these defaults in one line and continue.
-7. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose. Look for the key where the project keeps its keys: the README, `.env` files, and the code. Name the file to the user, ask once, then run `method secret import FILE NAME...` for the declared names only. Only when you find no file, ask the user to run `method secret set NAME`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
+7. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose. Run `method secret find` in the Method's folder: it lists the key files nearby and the names in each, never the values, and prints the import command. Name the file to the user, ask once, then run that command. If it finds nothing, ask the user to run `method secret set NAME`, which opens a private form in their browser. Never open, print, or search a key file (`cat`, `grep`, an editor): its values would go into the chat. Never ask for a value in chat.
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand. If you cannot run, say so.
 10. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
@@ -1129,13 +1129,14 @@ Give this computer the values of a Method's declared secrets.
 Usage:
 
 ```sh
+method secret find [FILE]
 method secret import FILE NAME...
 method secret set NAME
 method secret list [NAME...]
 ```
 
 Arguments and defaults:
-import copies the named values from a KEY=VALUE file that the user names, without printing them. set opens a private form on 127.0.0.1 in the browser for one value. list shows names and where each value is found (shell, this computer, or missing), never values. Values are kept in ~/.config/method/secrets.json (mode 0600) and are never sent to Method. A value exported in the shell is used first.
+find lists the KEY=VALUE files in this folder (3 levels down) and in the parent folder (2 levels down) with the key names in each, never values; for the Method FILE (or the only Method here) it says which declared secrets each file holds and prints the import command. import copies the named values from a KEY=VALUE file that the user names, without printing them. set opens a private form on 127.0.0.1 in the browser for one value. list shows names and where each value is found (shell, this computer, or missing), never values. Values are kept in ~/.config/method/secrets.json (mode 0600) and are never sent to Method. A value exported in the shell is used first.
 
 Result and changes:
 JSON with the saved names, or the list.
@@ -1146,6 +1147,7 @@ A name is missing from the file, or no value was entered.
 Example:
 
 ```sh
+method secret find
 method secret import ../service/.env ARCHIVE_TOKEN
 ```
 

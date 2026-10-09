@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { writePrivateJson } from './files.js';
 import { openUrl } from './method-client.js';
@@ -53,6 +53,51 @@ export function importSecrets(file: string, names: string[]) {
   return { saved: names, store: storeFile() };
 }
 
+const keyFile = /^(?:\.env(?:\..+)?|.+\.env|secrets?\.env)$/i;
+const skipped = new Set(['node_modules', '.git', '.method-runs', '.venv', 'venv', 'dist', 'build', '__pycache__']);
+function keyFiles(root: string, depth: number, found: Set<string>) {
+  let entries: string[];
+  try { entries = readdirSync(root); } catch { return; }
+  for (const entry of entries) {
+    const path = join(root, entry);
+    let info; try { info = statSync(path); } catch { continue; }
+    if (info.isDirectory()) { if (depth > 0 && !skipped.has(entry)) keyFiles(path, depth - 1, found); }
+    else if (keyFile.test(entry) && info.size < 1 << 20) found.add(path);
+  }
+}
+
+/**
+ * Find KEY=VALUE files in this folder (3 levels down) and next to it (the parent folder, 2 levels down), and say which
+ * key names each one holds. Values are never read into the result, so an agent can choose what to import without
+ * opening a key file in the chat.
+ */
+export function findSecrets(wanted: string[] = [], folder = process.cwd()) {
+  const found = new Set<string>();
+  keyFiles(folder, 3, found);
+  keyFiles(dirname(folder), 2, found);
+  const files = [...found].sort().map(path => {
+    const values = parseEnv(readFileSync(path, 'utf8'));
+    return { path: relative(folder, path) || path, names: Object.keys(values).sort(), empty: Object.keys(values).filter(key => !values[key]).sort() };
+  });
+  const store = readStore();
+  const secrets = Object.fromEntries(wanted.map(key => [key, {
+    on_this_computer: !!(process.env[key] || store[key]),
+    in_files: files.filter(file => file.names.includes(key) && !file.empty.includes(key)).map(file => file.path),
+  }]));
+  const missing = wanted.filter(key => !secrets[key]!.on_this_computer);
+  // One import per file, preferring the file that holds the most missing names.
+  const next: string[] = [];
+  let left = missing.filter(key => secrets[key]!.in_files.length);
+  while (left.length) {
+    const best = files.map(file => ({ file, keys: left.filter(key => secrets[key]!.in_files.includes(file.path)) })).sort((a, b) => b.keys.length - a.keys.length)[0]!;
+    next.push(`method secret import ${JSON.stringify(best.file.path)} ${best.keys.join(' ')}`);
+    left = left.filter(key => !best.keys.includes(key));
+  }
+  const unfound = missing.filter(key => !secrets[key]!.in_files.length);
+  return { files, ...(wanted.length ? { secrets } : {}), ...(next.length ? { next } : {}),
+    ...(unfound.length ? { not_found: unfound, ask: `Ask the user to run method secret set ${unfound[0]} for each name in not_found.` } : {}) };
+}
+
 export function listSecrets(names?: string[]) {
   const store = readStore();
   const keys = names?.length ? names : Object.keys(store).sort();
@@ -99,5 +144,14 @@ export async function secretCommand(args: string[]) {
   if (action === 'import' && rest[0]) return print(importSecrets(rest[0], rest.slice(1)));
   if (action === 'set' && rest.length === 1) return print(await setSecret(rest[0]!));
   if (action === 'list') return print({ secrets: listSecrets(rest) });
-  throw Error('Use method secret import FILE NAME..., method secret set NAME, or method secret list.');
+  if (action === 'find') return print(findSecrets(await declaredSecrets(rest[0])));
+  throw Error('Use method secret find [FILE], method secret import FILE NAME..., method secret set NAME, or method secret list.');
+}
+
+/** The secrets that a Method declares: the named file, or the only Method in this folder. */
+async function declaredSecrets(file?: string) {
+  const path = file ?? (() => { const methods = readdirSync(process.cwd()).filter(entry => entry.endsWith('.method')); return methods.length === 1 ? methods[0] : undefined; })();
+  if (!path) return [];
+  const { readDocument } = await import('@withmethod/runtime/io.js');
+  return Object.keys((await readDocument(resolve(path)) as { secrets?: Record<string, string> }).secrets ?? {});
 }
