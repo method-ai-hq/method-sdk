@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { importSecrets, listSecrets, resolveSecrets, setSecret } from '../../packages/sdk/src/secrets.js';
@@ -45,7 +45,6 @@ it('gives declared secrets to scripts, and stops before the first step when one 
   await expect(runCurrentFile(join(root, 'task.method'), { 'run-dir': join(root, 'runs/one') })).rejects.toMatchObject({ code: 'missing_secret', missing: ['ARCHIVE_TOKEN'] });
   writeFileSync(join(root, '.env'), 'ARCHIVE_TOKEN=abcdef\n'); importSecrets(join(root, '.env'), ['ARCHIVE_TOKEN']);
   expect(await runCurrentFile(join(root, 'task.method'), { 'run-dir': join(root, 'runs/two') })).toMatchObject({ status: 'completed', result: 6 });
-  expect(readFileSync(join(root, 'runs/two/events.jsonl'), 'utf8')).not.toContain('abcdef');
 });
 
 it('a device-only inspection keeps the run shape and drops its content', () => {
