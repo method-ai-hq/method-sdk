@@ -76,7 +76,8 @@ export async function setSecret(key: string, open: (url: string) => void = openU
       }
       let body = '';
       for await (const chunk of request) { body += chunk; if (body.length > 100_000) { response.writeHead(413).end(); return; } }
-      const value = new URLSearchParams(body).get('value') ?? '';
+      // A pasted value often carries a line break or space at its ends.
+      const value = (new URLSearchParams(body).get('value') ?? '').trim();
       if (!value) { response.writeHead(400).end(page('<p>Enter a value.</p>')); return; }
       save({ [key]: value });
       response.writeHead(200, { 'content-type': 'text/html' }).end(page(`<p>Saved ${key}. You can close this tab.</p>`));

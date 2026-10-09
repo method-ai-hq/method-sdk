@@ -105,7 +105,8 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
       const workflow = loadWorkflow(readDocument(file)); definition = "valid";
       {
         const { config, configFile, sourceRoot } = await localSetup(file, v);
-        const { files, missingSetup } = await preflight(workflow, config, sourceRoot, {allowMissingSetup:true});
+        const secrets = (await import('./secrets.js')).resolveSecrets(Object.keys((workflow as any).secrets ?? {}));
+        const { files, missingSetup } = await preflight(workflow, config, sourceRoot, {allowMissingSetup:true, secrets});
         // Managed runtimes are prepared by method run; only the other items need action.
         const automatic = [...new Set(missingSetup.filter((item: string) => item.startsWith("Prepare ") && item.endsWith(" with method run.")))];
         // method run opens the browser and connects its controls itself.
