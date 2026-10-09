@@ -12,7 +12,7 @@ import { inspectRun } from "./inspect.js";
 import type { MethodSync } from "./method-sync.js";
 import { accountNeeds, checkConfiguration, resolveAgentProfiles } from './capabilities.js';
 import { MethodClient } from "./method-client.js";
-import { MethodSync as Sync } from "./method-sync.js";
+import { MethodSync as Sync, organizationKeepsContent } from "./method-sync.js";
 import { saveVersion } from "./versions.js";
 import { localSetup } from "./local-setup.js";
 import { readDocument } from "./authoring.js";
@@ -33,6 +33,7 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
   if (notice) process.stderr.write(notice + "\n");
   const update = await (await import("./update.js")).updateNotice();
   if (update) process.stderr.write(update + "\n");
+  (await import("./prepare.js")).pruneCachedRuns();
   flags = { ...flags, "run-dir": flags["run-dir"] ?? join(process.cwd(), ".method-runs", randomUUID()) };
   const sync = syncFactory ?? await accountSync(path, flags);
   try { await runCurrentFile(path, flags, sync); }
@@ -53,7 +54,8 @@ async function accountSync(path: string, flags: ReturnType<typeof parse>["values
   if (flags.resume) {
     if (!existsSync(linked)) return undefined;
     const state = JSON.parse(readFileSync(linked, "utf8"));
-    return () => new Sync(client, runDir, state.workflow_id, state.version_id, state.id, readDocument(path).run_data === "device");
+    const device = readDocument(path).run_data === "device" || await organizationKeepsContent(client);
+    return () => new Sync(client, runDir, state.workflow_id, state.version_id, state.id, device);
   }
   const method = readDocument(path);
   const needs = accountNeeds(method, (await localSetup(path, flags)).config, flags.agent);
@@ -63,7 +65,8 @@ async function accountSync(path: string, flags: ReturnType<typeof parse>["values
     const saved = await saveVersion(client, path);
     process.stderr.write(`Version: ${saved.url}${saved.unchanged ? " (unchanged)" : ""}\n`);
     savedVersion = { path, method, version_id: saved.version_id, server: client.server };
-    return () => new Sync(client, runDir, saved.workflow_id, saved.version_id, undefined, method.run_data === "device");
+    const device = method.run_data === "device" || await organizationKeepsContent(client);
+    return () => new Sync(client, runDir, saved.workflow_id, saved.version_id, undefined, device);
   } catch (error) {
     process.stderr.write(`Not saved to your Method account: ${(error as Error).message} The run continues on this computer.\n`);
     return undefined;

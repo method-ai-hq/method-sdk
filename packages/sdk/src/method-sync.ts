@@ -9,6 +9,7 @@ import { writePrivateJson } from "./files.js";
 import { MethodClient } from "./method-client.js";
 import {
   InspectionSchema,
+  deviceOnly,
   type RunInspection,
 } from "../../workflow-language/src/inspection.js";
 
@@ -20,6 +21,8 @@ const SyncSchema = z.object({
   version_id: z.string(),
   sequence: z.number().int().nonnegative(),
   dashboard_id: z.string().optional(),
+  // The run's content stays on this computer, also when the sync is retried later.
+  device: z.literal(true).optional(),
 });
 export class MethodSync {
   private state: z.infer<typeof SyncSchema>;
@@ -36,8 +39,9 @@ export class MethodSync {
     workflowId: string,
     versionId: string,
     runId?: string,
-    // run_data: device. The account receives the run's shape and timing; its content stays on this computer.
-    readonly device = false,
+    // run_data: device, or the organization keeps run content on devices. The account receives the run's shape and
+    // timing; its content stays on this computer.
+    device = false,
   ) {
     const path = join(directory, "method-sync.json");
     this.state = existsSync(path)
@@ -56,7 +60,11 @@ export class MethodSync {
       this.state.version_id !== versionId
     )
       throw Error("This run is linked to another Method method or server.");
+    if (device) this.state.device = true;
     this.save();
+  }
+  get device() {
+    return this.state.device === true;
   }
   private save() {
     writePrivateJson(join(this.directory, "method-sync.json"), this.state);
@@ -234,18 +242,15 @@ async function retryTransfer<T>(send:()=>Promise<T>):Promise<T> {
   }
 }
 
-/** Keep step status, kinds, names, and timing. Remove inputs, outputs, prompts, files, and free text. */
-export function deviceOnly(inspection: RunInspection): RunInspection {
-  const event = ({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }: any) =>
-    Object.fromEntries(Object.entries({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }).filter(([, value]) => value !== undefined)) as any;
-  return {
-    schema: inspection.schema, content: 'device', workflow: inspection.workflow, run_id: inspection.run_id, status: inspection.status,
-    ...(inspection.started_at ? { started_at: inspection.started_at } : {}), ...(inspection.device_name ? { device_name: inspection.device_name } : {}),
-    inputs: {}, resources: Object.fromEntries(Object.entries(inspection.resources).map(([name, value]) => [name, { description: value.description }])),
-    ...(inspection.events ? { events: inspection.events.map(event) } : {}),
-    invocations: Object.fromEntries(Object.entries(inspection.invocations).map(([id, value]) => [id, {
-      step_id: value.step_id, status: value.status, ...(value.verification ? { verification: value.verification } : {}),
-      checks: value.checks.map(check => ({ id: check.id, result: check.result, summary: '', evidence: [], method: check.method })), changes: {}, events: value.events.map(event),
-    }])),
-  } as RunInspection;
+/**
+ * The organization setting "Keep run content on devices". When it cannot be read, the run's content stays on this
+ * computer: the server would refuse the content anyway when the setting is on.
+ */
+export async function organizationKeepsContent(client: MethodClient): Promise<boolean> {
+  try {
+    const me = await client.request<{ organization?: { keep_run_content_on_devices?: boolean } }>("/api/cli/me");
+    return me?.organization?.keep_run_content_on_devices === true;
+  } catch {
+    return true;
+  }
 }

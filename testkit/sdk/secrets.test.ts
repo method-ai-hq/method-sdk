@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { importSecrets, listSecrets, resolveSecrets, setSecret } from '../../packages/sdk/src/secrets.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
-import { deviceOnly } from '../../packages/sdk/src/method-sync.js';
+import { deviceOnly } from '../../packages/workflow-language/src/inspection.js';
 import { publish } from '../../packages/sdk/src/versions.js';
 
 const roots: string[] = [];

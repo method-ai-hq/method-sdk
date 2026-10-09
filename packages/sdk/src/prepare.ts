@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, cpSync, openSync, closeSync, symlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, cpSync, openSync, closeSync, symlinkSync, readdirSync, lstatSync } from 'node:fs';
 import { dirname, join, delimiter, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -6,6 +6,25 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const exec = promisify(execFile);
 export const methodCache = () => process.env.METHOD_CACHE_DIR ?? join(homedir(), '.cache', 'method');
+export const runFolderDays = 30;
+/**
+ * Delete the run folders that the SDK keeps under the cache when nothing in them changed for 30 days. A project's own
+ * .method-runs folder is not touched. A folder that cannot be read or removed is left as it is.
+ */
+export function pruneCachedRuns(root = join(methodCache(), 'runs'), now = Date.now()) {
+  const cutoff = now - runFolderDays * 86_400_000;
+  let entries: string[];
+  try { entries = readdirSync(root); } catch { return; }
+  for (const name of entries) {
+    const folder = join(root, name);
+    try {
+      const info = lstatSync(folder);
+      if (!info.isDirectory()) continue;
+      const latest = Math.max(info.mtimeMs, ...readdirSync(folder).map(entry => lstatSync(join(folder, entry)).mtimeMs));
+      if (latest < cutoff) rmSync(folder, { recursive: true, force: true });
+    } catch { /* Left for a later run. */ }
+  }
+}
 const uvVersion = '0.8.22';
 export async function command(program: string, args: string[], cwd: string, env = process.env) {
   try { return await exec(program, args, {cwd, env, maxBuffer: 8_000_000, timeout:600_000}); }

@@ -4,10 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { assertCheckpointExecutor } from '@withmethod/runtime/executor-version.js';
 import { MethodClient } from './method-client.js';
 import { restorePackage, runtimeVersion } from './method-files.js';
-import { methodCache } from './prepare.js';
+import { methodCache, pruneCachedRuns } from './prepare.js';
 import { resolveBindings } from './bindings.js';
 import { runCurrentFile } from './current-runtime.js';
-import { MethodSync } from './method-sync.js';
+import { MethodSync, organizationKeepsContent } from './method-sync.js';
 import { writePrivateJson } from './files.js';
 import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
@@ -18,6 +18,7 @@ const supportedPackageRuntimes = new Set([runtimeVersion, '0.11.1', '0.11.0', '0
 /** A run whose steps all finished: completed, or unconfirmed (an external change could not be confirmed). */
 export const finishedRun = (status: string) => status === 'completed' || status === 'unconfirmed';
 export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values'], client:MethodClient) {
+  pruneCachedRuns();
   const directory=resolve(flags['run-dir']??join(methodCache(),'runs',randomUUID()));
   mkdirSync(directory,{recursive:true,mode:0o700});
   const requestFile=join(directory,'request.json');
@@ -26,7 +27,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   const request=prior??{run_id:randomUUID(),workflow_id:saved.workflow_id,version_id:saved.version_id,server:client.server};
   if(prior&&!flags.resume)throw Error('This run already exists. Use --resume.');
   writePrivateJson(requestFile,request);
-  const sync=new MethodSync(client,directory,saved.workflow_id,saved.version_id,request.run_id);
+  const sync=new MethodSync(client,directory,saved.workflow_id,saved.version_id,request.run_id,saved.workflow?.run_data==='device'||await organizationKeepsContent(client));
   const completedFile=join(directory,'summary.json');
   if(flags.resume&&existsSync(completedFile)){const completed=JSON.parse(readFileSync(completedFile,'utf8'));if(completed.status==='completed'){
     const statePath=`/api/cli/methods/${encodeURIComponent(saved.workflow_id)}/state`;

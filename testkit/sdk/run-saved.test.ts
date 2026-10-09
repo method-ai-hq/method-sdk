@@ -9,7 +9,7 @@ import {packageDigest} from '../../packages/contracts/src/method-package.js';
 
 const roots:string[]=[];
 afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();process.exitCode=0;for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
-function fixture(version='0.7.0') {
+function fixture(version='0.7.0',keep=false) {
  const original=JSON.parse(readFileSync(new URL(`../fixtures/runtime-upgrades/${version}.json`,import.meta.url),'utf8'));
  const root=mkdtempSync(join(tmpdir(),'method-upgrade-'));roots.push(root);
  const records=join(root,'records');mkdirSync(records);writeFileSync(join(records,'message.txt'),'Hello from a local binding\n');
@@ -17,6 +17,7 @@ function fixture(version='0.7.0') {
  vi.stubEnv('METHOD_CACHE_DIR',join(root,'cache'));
  vi.spyOn(process.stdout,'write').mockImplementation(()=>true);vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
  const client:any={server:'https://example.test',credentialFile:join(root,'credentials.json'),request:vi.fn(async(path:string)=>{
+  if(path==='/api/cli/me')return {user:{id:'user'},organization:{keep_run_content_on_devices:keep}};
   if(path.endsWith('/state'))return {enabled:false};
   if(path.endsWith('/bindings'))return {};
   if(path.startsWith('/api/cli/runs/'))return {id:'run_test'};
@@ -45,7 +46,7 @@ it('rejects an unsupported package before restoring files, resolving connections
  const f=fixture();f.saved.package.runtime='99.0.0';f.saved.package.digest=packageDigest(f.saved.workflow,f.saved.package);
  await expect(runSaved(f.saved,f.flags,f.client)).rejects.toMatchObject({code:'needs_update',message:expect.stringContaining('99.0.0')});
  expect(f.client.transfer).not.toHaveBeenCalled();
- expect(f.client.request.mock.calls.every(([path]:any[])=>path.startsWith('/api/cli/runs/'))).toBe(true);
+ expect(f.client.request.mock.calls.every(([path]:any[])=>path.startsWith('/api/cli/runs/')||path==='/api/cli/me')).toBe(true);
  expect(existsSync(join(f.root,'cache'))).toBe(false);
 });
 for(const version of [undefined,'0.0.0',runtimeVersion])it(`checks the saved executor before SDK setup or state access: ${version}`,async()=>{
@@ -58,7 +59,7 @@ for(const version of [undefined,'0.0.0',runtimeVersion])it(`checks the saved exe
  else {
   await expect(runSaved(f.saved,{...f.flags,resume:true,human},f.client)).rejects.toMatchObject({code:'resume_mismatch'});
   expect(f.client.transfer).not.toHaveBeenCalled();
-  expect(f.client.request.mock.calls.every(([path]:any[])=>path.startsWith('/api/cli/runs/'))).toBe(true);
+  expect(f.client.request.mock.calls.every(([path]:any[])=>path.startsWith('/api/cli/runs/')||path==='/api/cli/me')).toBe(true);
   await expect(runCurrentFile(join(f.flags['run-dir'],'saved.method'),{...f.flags,resume:true})).rejects.toMatchObject({code:'resume_mismatch'});
   expect(existsSync(join(f.root,'cache'))).toBe(false);
   expect(readFileSync(checkpoint,'utf8')).toBe(before);
@@ -79,4 +80,18 @@ it('uploads completed results despite an unsupported package and a different exe
 
 it('releases shared state when every step finished, also when an external change was unconfirmed',()=>{
  expect(['completed','unconfirmed','failed','needs_input'].map(finishedRun)).toEqual([true,true,false,false]);
+});
+
+it('sends only the device form of the run when the organization keeps run content on devices',async()=>{
+ for(const keep of [false,true]){
+  const f=fixture('0.7.0',keep);
+  expect(await runSaved(f.saved,f.flags,f.client)).toMatchObject({status:'completed'});
+  const uploads=f.client.request.mock.calls.filter(([path,verb]:any[])=>path.startsWith('/api/cli/runs/')&&verb==='PUT').map(([,,body]:any[])=>body.inspection);
+  expect(uploads.length).toBeGreaterThan(0);
+  for(const inspection of uploads){
+   if(keep){expect(inspection.content).toBe('device');expect(inspection.inputs).toEqual({});expect(JSON.stringify(inspection)).not.toContain('Hello from a local binding');}
+   else expect(inspection.content).toBeUndefined();
+  }
+  expect(JSON.parse(readFileSync(join(f.flags['run-dir'],'method-sync.json'),'utf8')).device).toBe(keep?true:undefined);
+ }
 });
