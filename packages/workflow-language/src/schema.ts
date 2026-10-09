@@ -36,7 +36,8 @@ import { methodShape, stepShape, checkShape } from "@withmethod/runtime/document
 import { methodSchema } from "@withmethod/runtime/schema.js";
 export type RunExecution = { kind: "run"; runtime: string; entrypoint: string; args?: string[] };
 export type AgentExecution = { kind: "agent"; model: string; prompt: string; tools?: string[]; browser?: string };
-export type ClassifyExecution = { kind: "classify"; question: string; options: Record<string, string> };
+/** Exactly one answer form: options (a choice), answer: "yes_no", or levels (2-10 ordered names, lowest first). */
+export type ClassifyExecution = { kind: "classify"; question: string; options?: Record<string, string>; answer?: "yes_no"; levels?: string[] };
 export type Execution = ClassifyExecution | RunExecution | AgentExecution | { kind: "call"; model: string; prompt: string };
 export type CurrentCheck = ExactCheck | RunExecution | AgentExecution;
 /** An effect contract: an observer confirms an external change; the action's receipt never does. */

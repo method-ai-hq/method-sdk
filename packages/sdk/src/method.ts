@@ -140,10 +140,10 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     );
     return;
   }
-  const authorFile = command === "publish" ? target : undefined;
+  const authorFile = command === "publish" || command === "explain" ? target : undefined;
   const metaFile = authorFile ? safePath(`${authorFile}.method.json`) : undefined;
   const meta = metaFile && existsSync(metaFile) ? readDocument(metaFile) : {};
-  if (!["status","login","logout","devices","revoke","list","get","steps","step","run","runs","logs","publish","bind","state"].includes(command)) throw Error(help);
+  if (!["status","login","logout","devices","revoke","list","get","steps","step","run","runs","logs","publish","explain","bind","state"].includes(command)) throw Error(help);
   const client = clientFactory(values.server ?? meta.server ?? DEFAULT_SERVER);
   if (command === "login") {
     await client.login();
@@ -164,6 +164,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn, ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : {}), ...(update ? { update } : {}) }, null, 2) + "\n");
     return;
   }
+  // Without sign-in, explain prints one line and stops: script cards need a hosted model.
+  if (command === "explain") { await (await import("./explain.js")).explainCommand(client, rest.slice(1)); return; }
   // The first real command starts browser approval if no credential is saved.
   if (!client.token()) await client.login();
   else if(command==='run') {try{await client.request('/api/cli/me');}catch(error){if(String(error).includes('401:'))await client.login();else throw error;}}

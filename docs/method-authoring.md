@@ -7,7 +7,7 @@
 3. **Show the design, then build it in the same turn.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Do not wait for approval unless the user asked to approve first. Ask only for information that you cannot find and that would change the design.
 4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. `--rerun STEP` runs a step again anyway; `--fresh` runs every step.
 5. **Keep the inputs of the existing code.** If the code takes an ID and looks up the record, the Method takes the same ID and looks it up the same way.
-6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: {backend: method, model: "provider/model"}}` to runtime.json and use `model: writer` in the steps; it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. `run_data: device` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running; ask only if the user says that no data may leave this computer. Say these defaults in one line and continue.
+6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: {backend: method, model: "provider/model"}}` to runtime.json and use `model: writer` in the steps; it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. `run_data: device` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running. Do not ask the user to choose and do not wait: change this only if the user says that no data may leave this computer. Say these defaults in one line and continue.
 7. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose. Look for the key where the project keeps its keys: the README, `.env` files, and the code. Name the file to the user, ask once, then run `method secret import FILE NAME...` for the declared names only. Only when you find no file, ask the user to run `method secret set NAME`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand. If you cannot run, say so.
@@ -153,8 +153,10 @@ STEP   name, purpose          a run step needs both: its rules, result, and exte
          {kind: call, model: PROFILE, prompt: TEXT}
              the step's in go to the model as JSON; {{ALIAS}} puts a text, number, or boolean value into the prompt
          {kind: agent, model: PROFILE, prompt: TEXT, tools: [TOOL]}
-         {kind: classify, question: TEXT, options: {ID: description}}
-             out: NAME; the value has choice and probabilities
+         {kind: classify, question: TEXT, options: {ID: description}}   value: {choice, probabilities}
+         {kind: classify, question: TEXT, answer: yes_no}                value: {answer, probability} (of yes)
+         {kind: classify, question: TEXT, levels: [LOW, ..., HIGH]}      value: {level, score, probabilities}; 2-10 levels
+             Do counting, math, and date comparisons in a run step; Jev reads the question literally. Choose thresholds from a few labeled samples.
        ask: TEXT              in place of do: a question for the user
        out: {NAME: DATA}      (classify: out: NAME)
        changes: [state.NAME | environment.NAME]; a service change needs effects or no_effect_reason
@@ -174,7 +176,7 @@ runtime.json beside the Method (optional)
 | Fixed rules, calculations, file changes, or an API that is not a model | run |
 | A structured model answer from supplied information | call |
 | Model-directed investigation or tool use | agent |
-| A choice from named options, with probabilities | classify |
+| A choice from named options, a yes/no, or a score on ordered levels, with probabilities | classify |
 | An answer or decision that must come from the user | ask |
 
 For browser work, declare a browser environment and select it with do.browser: environment.NAME; see method authoring example social-briefing.
@@ -225,7 +227,7 @@ These are design outlines, not runnable Method files.
 
 
 A method has format, name, goal, steps, result, and optional inputs, state, environment, and files.
-Each step uses do or ask. The do kinds are run, call, agent, and classify. Script actions require name and purpose; script checks require reading.check. A classify action takes bound inputs, a question, and options, and returns a named choice with probabilities. Use a script to apply business rules to that result.
+Each step uses do or ask. The do kinds are run, call, agent, and classify. Script actions require name and purpose; script checks require reading.check. A classify action takes bound inputs, a question, and one of options (a named choice with probabilities), answer: yes_no (answer and the probability of yes), or levels (2-10 ordered names; the most likely level, an expected level index as score, and probabilities). Use a script to apply business rules to that result.
 run uses runtime and entrypoint; call uses model and prompt; agent can select browser: environment.NAME and optional custom tools.
 Optional run_label selects one saved text, number, or boolean value, such as inputs.topic or steps.prepare.outputs.plan.date. Step references must select a step without each or repeat. Choose a short non-sensitive value. The site uses the current Method's reference with each run's recorded inputs or outputs; absent or empty values keep timestamps. Set it with method set task.method /run_label --json '"steps.prepare.outputs.plan.date"'.
 
@@ -302,9 +304,9 @@ destination and the rule used.”
 
 
 Use method run FILE_OR_ID [--config runtime.json] [--workspace HELPERS_FOLDER] [--inputs inputs.json] [--state state.json] [--run-dir DIR].
-Classification uses the Method account. A classifier-only Method needs sign-in and network access, with no agent installation or provider key. To use your own Typesafe key instead, set TYPESAFE_API_KEY (or classification: {provider: typesafe, model: MODEL, api_key_env: NAME} in runtime.json); the run then calls Typesafe directly, needs no sign-in, and is not counted against the Method allowance. The SDK saves the pinned model before execution and reuses it on resume. Each invocation makes one request; uncertain answers complete normally. Questions and option descriptions are literal text. Bind JSON inputs through in or each, and use out: RESULT_NAME for the choice and probability record. There must be 2–255 options. Classifiers cannot receive declared files or declare changes.
+Classification uses the Method account. A classifier-only Method needs sign-in and network access, with no agent installation or provider key. To use your own OpenRouter key instead, add classification: {provider: typesafe, model: jev-1.13.0, api_key_env: OPENROUTER_API_KEY} to runtime.json; the run then calls Jev through OpenRouter directly, needs no sign-in, and is not counted against the Method allowance. The SDK saves the pinned model before execution and reuses it on resume. Each invocation makes one request; uncertain answers complete normally. Questions and option descriptions are literal text. Bind JSON inputs through in or each, and use out: RESULT_NAME for the result record. There must be 2–255 options or 2–10 levels. Classifiers cannot receive declared files or declare changes.
 
-Classification sends the step's declared inputs to Method and its classification provider. Method currently covers the cost within service limits. Saved runs contain the declared inputs and results.
+Classification sends the step's declared inputs to Method and its classification provider. Classification and hosted models share the account's model credit. Saved runs contain the declared inputs and results.
 
 Explicit named model profiles keep their settings. For an unconfigured profile, Method uses --agent, the configured default, the account's hosted model when this computer is signed in, the identified calling agent, or the sole available supported agent. A hosted model needs no key and no local agent; each account has a model credit, and the run summary reports usage.cost_usd. If a choice is needed, use --agent codex or --agent claude. The selected provider stays fixed on resume.
 A simple local-agent Method needs no runtime.json. When needed, put runtime.json beside the Method. New saved versions carry their helpers and runtime.json. Older versions without saved files still need --workspace DIR. --config overrides that file. Relative files-environment paths and executable paths in configuration resolve from the config folder. A bare executable name is found on PATH.
@@ -1068,6 +1070,31 @@ Example:
 
 ```sh
 method get wf_example --out edit.method
+```
+
+## explain
+
+Explain each script step of the saved version in a script card.
+
+Usage:
+
+```sh
+method explain FILE [--step ID] [--no-round-trip] [--server URL]
+```
+
+Arguments and defaults:
+FILE is a local Method with a saved version (FILE.method.json). For each run step whose script has no card, code analysis finds the hosts, secrets, environment variables, files, and commands the script uses; a hosted model writes a one-sentence summary and 3 to 8 steps; every number, quoted name, and host in that text must appear in the code (one retry). The round trip writes a program from the steps alone and replays up to 3 recorded inputs of the step from local runs through both programs without network access. A script that calls the network is not replayed. --step explains one step. --no-round-trip skips the replay. A signed-in run starts this in the background; publish waits for it.
+
+Result and changes:
+One line per step with its summary and check results. Cards upload to the version; the dashboard shows them beside each script. A failed check is shown on the card and never blocks publish.
+
+Errors:
+No saved version, local files that differ from the saved version, or no hosted-model credit. Without sign-in it prints one line and makes no card.
+
+Example:
+
+```sh
+method explain leads.method --step score
 ```
 
 ## publish

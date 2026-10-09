@@ -3,10 +3,17 @@ import { z } from "zod";
 import { JsonSchema, WorkflowSchema, effectiveOutputs, executionText, type Json, type Step, type Workflow, type Shape } from "./schema.js";
 import { producers, references, referenceShape } from "./validate.js";
 export const FailureSchema = z.strictObject({ phase: z.enum(["environment", "input", "action", "check", "change"]), expected: z.string(), observed: z.string(), evidence: z.array(z.string()) });
+// What a script process was seen to do (runtime observed_effects): hosts, paths, variable names, and program names.
+const observedList = z.array(z.string()).max(200);
+export const ObservedEffectsSchema = z.union([
+  z.strictObject({ network: observedList, reads: observedList, writes: observedList, env: observedList, runs: observedList, truncated: z.literal(true).optional() }),
+  z.strictObject({ unavailable: z.string() }),
+]);
+export type ObservedEffects = z.infer<typeof ObservedEffectsSchema>;
 export const RunEventSchema = z.strictObject({
   provider: z.string().optional(), model: z.string().optional(), kind: z.literal('classify').optional(),
-  request_id: z.string().optional(), operation_id: z.string().optional(), confidence: z.number().finite().min(0).max(1).optional(),
-  usage: z.strictObject({input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative()}).nullable().optional(),
+  request_id: z.string().optional(), operation_id: z.string().optional(), confidence: z.number().finite().min(0).max(1).nullable().optional(),
+  usage: z.strictObject({input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative(), cost: z.number().finite().nonnegative().optional()}).nullable().optional(),
   duration_ms: z.number().finite().nonnegative().optional(),
   at: z.string(), type: z.string(), detail: z.string().optional(),
   sequence: z.number().int().nonnegative().optional(), phase: z.enum(["action", "check"]).optional(),
@@ -30,6 +37,7 @@ export const InspectionSchema = z.strictObject({
     checks: z.array(z.object({ id: z.string(), result: z.enum(["pass", "fail", "ambiguous"]), summary: z.string(), evidence: z.array(z.string()), method: z.string() })), changes: z.record(JsonSchema),
     prompts: z.array(z.strictObject({ sequence: z.number().int(), phase: z.enum(["action", "check"]), template: z.string(), rendered: z.string() })).optional(),
     events: z.array(RunEventSchema),
+    observed_effects: ObservedEffectsSchema.optional(),
   }))
 });
 export type RunInspection = z.infer<typeof InspectionSchema>;

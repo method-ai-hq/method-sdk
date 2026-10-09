@@ -10,7 +10,7 @@ export const designProcedure = `# Choose the design
 | Fixed rules, calculations, file changes, or an API that is not a model | run |
 | A structured model answer from supplied information | call |
 | Model-directed investigation or tool use | agent |
-| A choice from named options, with probabilities | classify |
+| A choice from named options, a yes/no, or a score on ordered levels, with probabilities | classify |
 | An answer or decision that must come from the user | ask |
 
 For browser work, declare a browser environment and select it with do.browser: environment.NAME; see method authoring example social-briefing.
@@ -40,7 +40,7 @@ export const firstMethodRules = `# Build a Method
 3. **Show the design, then build it in the same turn.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Do not wait for approval unless the user asked to approve first. Ask only for information that you cannot find and that would change the design.
 4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. \`--rerun STEP\` runs a step again anyway; \`--fresh\` runs every step.
 5. **Keep the inputs of the existing code.** If the code takes an ID and looks up the record, the Method takes the same ID and looks it up the same way.
-6. **Use the defaults without asking.** Model steps use the account's hosted models and \`classify\` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add \`models: {writer: {backend: method, model: "provider/model"}}\` to runtime.json and use \`model: writer\` in the steps; it needs no key. Run content goes to the user's account; set \`run_data: device\` only when the user asks to keep it on this computer. \`run_data: device\` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running; ask only if the user says that no data may leave this computer. Say these defaults in one line and continue.
+6. **Use the defaults without asking.** Model steps use the account's hosted models and \`classify\` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add \`models: {writer: {backend: method, model: "provider/model"}}\` to runtime.json and use \`model: writer\` in the steps; it needs no key. Run content goes to the user's account; set \`run_data: device\` only when the user asks to keep it on this computer. \`run_data: device\` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running. Do not ask the user to choose and do not wait: change this only if the user says that no data may leave this computer. Say these defaults in one line and continue.
 7. **Keys stay out of chat.** Declare each key that a script needs under \`secrets:\` with its purpose. Look for the key where the project keeps its keys: the README, \`.env\` files, and the code. Name the file to the user, ask once, then run \`method secret import FILE NAME...\` for the declared names only. Only when you find no file, ask the user to run \`method secret set NAME\`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand. If you cannot run, say so.
@@ -108,8 +108,10 @@ STEP   name, purpose          a run step needs both: its rules, result, and exte
          {kind: call, model: PROFILE, prompt: TEXT}
              the step's in go to the model as JSON; {{ALIAS}} puts a text, number, or boolean value into the prompt
          {kind: agent, model: PROFILE, prompt: TEXT, tools: [TOOL]}
-         {kind: classify, question: TEXT, options: {ID: description}}
-             out: NAME; the value has choice and probabilities
+         {kind: classify, question: TEXT, options: {ID: description}}   value: {choice, probabilities}
+         {kind: classify, question: TEXT, answer: yes_no}                value: {answer, probability} (of yes)
+         {kind: classify, question: TEXT, levels: [LOW, ..., HIGH]}      value: {level, score, probabilities}; 2-10 levels
+             Do counting, math, and date comparisons in a run step; Jev reads the question literally. Choose thresholds from a few labeled samples.
        ask: TEXT              in place of do: a question for the user
        out: {NAME: DATA}      (classify: out: NAME)
        changes: [state.NAME | environment.NAME]; a service change needs effects or no_effect_reason

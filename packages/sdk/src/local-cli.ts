@@ -34,8 +34,14 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
   const update = await (await import("./update.js")).updateNotice();
   if (update) process.stderr.write(update + "\n");
   flags = { ...flags, "run-dir": flags["run-dir"] ?? join(process.cwd(), ".method-runs", randomUUID()) };
-  await runCurrentFile(path, flags, syncFactory ?? await accountSync(path, flags));
+  const sync = syncFactory ?? await accountSync(path, flags);
+  try { await runCurrentFile(path, flags, sync); }
+  finally {
+    // Script cards are made after the run, so that this run's inputs can be replayed. They never delay or fail it.
+    if (savedVersion?.path === path) (await import("./explain.js")).startBackgroundExplain(path, savedVersion.method, savedVersion.version_id, savedVersion.server);
+  }
 }
+let savedVersion: { path: string; method: any; version_id: string; server: string } | undefined;
 
 /**
  * When this computer is signed in, each run of a local file belongs to a saved version: the version is saved when the
@@ -56,6 +62,7 @@ async function accountSync(path: string, flags: ReturnType<typeof parse>["values
   try {
     const saved = await saveVersion(client, path);
     process.stderr.write(`Version: ${saved.url}${saved.unchanged ? " (unchanged)" : ""}\n`);
+    savedVersion = { path, method, version_id: saved.version_id, server: client.server };
     return () => new Sync(client, runDir, saved.workflow_id, saved.version_id, undefined, method.run_data === "device");
   } catch (error) {
     process.stderr.write(`Not saved to your Method account: ${(error as Error).message} The run continues on this computer.\n`);

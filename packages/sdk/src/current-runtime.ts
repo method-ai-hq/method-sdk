@@ -53,7 +53,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   try {
     sync = syncFactory?.();
     await sync?.start(method, json(flags.inputs) ?? {}, {});
-    // A run with its own Typesafe key (config.classification.api_key_env) needs no Method sign-in for classification.
+    // A run with its own OpenRouter key (config.classification.api_key_env) needs no Method sign-in for classification.
     const needs = accountNeeds(method, config, flags.agent);
     const classification = needs.classification ? managedClassification(client) : undefined;
     // Classification uses the Method account. Hosted models are used when this computer is signed in.

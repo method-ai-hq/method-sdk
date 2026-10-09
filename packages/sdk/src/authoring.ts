@@ -126,7 +126,7 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
           const exec = step.do, profile = config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
           const runs = step.ask ? "asks the user"
             : exec.kind === "run" ? `${exec.runtime} ${exec.entrypoint}`
-            : exec.kind === "classify" ? (config.classification?.api_key_env ? "Typesafe with your own key" : "Method's classifier")
+            : exec.kind === "classify" ? (config.classification?.api_key_env ? "Jev through OpenRouter with your own key" : "Method's classifier")
             : profile?.backend === "method" ? `the hosted model ${profile.model}`
             : profile ? `${profile.backend}${profile.model ? ` ${profile.model}` : ""}`
             : signedIn ? "the account's hosted model" : "a local Codex or Claude agent";

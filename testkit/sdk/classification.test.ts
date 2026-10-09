@@ -79,10 +79,34 @@ it('rejects malformed provider data and returns a saved-version error without re
   await expect(provider.evaluate(request,signal)).rejects.toThrow("This run's classifier version is unavailable. Start a new run to use the current default.");
   expect(f.fetcher).toHaveBeenCalledTimes(2);
 });
+it('describes and validates yes/no and score answers', async () => {
+  const f=fixture(); const provider=managedClassification(f.client), signal=new AbortController().signal;
+  const base={request_id:crypto.randomUUID(),model:'jev-test',question:'Is it urgent?',inputs:{message:'Invoice'}};
+  const yesNo={...definition,steps:{classify:{...definition.steps.classify,do:{kind:'classify',question:'Is it urgent?',answer:'yes_no'}}}};
+  const scored={...definition,steps:{classify:{...definition.steps.classify,do:{kind:'classify',question:'How urgent?',levels:['low','high']}}}};
+  expect(referenceShape(loadWorkflow(yesNo),'category.probability')).toEqual('number');
+  expect(referenceShape(loadWorkflow(scored),'category.probabilities.high')).toEqual('number');
+  const meta={provider:'typesafe',model:'jev-test',confidence:null,usage:{input_tokens:3,output_tokens:1,cost:1e-5}};
+  f.fetcher.mockResolvedValueOnce(Response.json({...meta,answer:true,probability:.8}));
+  await expect(provider.evaluate({...base,answer:'yes_no'},signal)).resolves.toMatchObject({answer:true,probability:.8});
+  f.fetcher.mockResolvedValueOnce(Response.json({...meta,level:'high',score:.7,probabilities:{low:.3,high:.7}}));
+  await expect(provider.evaluate({...base,levels:['low','high']},signal)).resolves.toMatchObject({level:'high'});
+  f.fetcher.mockResolvedValueOnce(Response.json({...meta,level:'low',score:.7,probabilities:{low:.3,high:.7}}));
+  await expect(provider.evaluate({...base,levels:['low','high']},signal)).rejects.toThrow('not a maximum');
+});
 it('bounds the response stream and forwards cancellation to the authenticated request', async () => {
   const f=fixture(); const provider=managedClassification(f.client), controller=new AbortController();
   f.fetcher.mockResolvedValueOnce(new Response('x'.repeat(65_537)));
   await expect(provider.resolve(controller.signal)).rejects.toThrow('size limit');
   const signal=f.fetcher.mock.calls[0]![1].signal;
   controller.abort(); expect(signal.aborted).toBe(true);
+});
+
+it('accepts the run events that Jev through OpenRouter records', async () => {
+  const { RunEventSchema } = await import('../../packages/workflow-language/src/inspection.js');
+  const at = new Date().toISOString();
+  // A yes/no answer has no confidence, and OpenRouter reports the cost of each request.
+  expect(RunEventSchema.safeParse({ at, type: 'model_response', kind: 'classify', provider: 'typesafe', model: 'jev-1.13.0',
+    confidence: null, usage: { input_tokens: 471, output_tokens: 58, cost: 0.000019782 } }).success).toBe(true);
+  expect(RunEventSchema.safeParse({ at, type: 'model_response', usage: { input_tokens: 1, output_tokens: 1, cost: -1 } }).success).toBe(false);
 });

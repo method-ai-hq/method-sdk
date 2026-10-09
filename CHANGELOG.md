@@ -12,6 +12,8 @@ A first Method needs fewer steps, no keys, and no extra commands (runtime 0.12.0
 - **Clearer failures.** A failed run reports `failed_step`, `iteration`, `diagnostics`, and `fix`, also when it fails before its first step. A classification that the service briefly cannot answer gets three attempts. Saving a version waits up to two minutes.
 - The default `method authoring` guide is short and starts with the rules for a first Method, with a field reference; `method schema` without a name prints the same reference. `method validate` lists each step with its runner and the secrets it needs. An `each` step whose `in` repeats the item names the fix. The installer adds the CLI to PATH. `METHOD_SERVER` selects another server.
 - `method status` and `method run` name a newer release, checked once a day.
+- **Classify answers yes/no and scores.** Besides `options`, a classify step takes `answer: yes_no` (value `{answer, probability}`) or `levels: [LOW, ..., HIGH]` (2–10 ordered names; value `{level, score, probabilities}`, where score is the expected level index).
+- **Classification through OpenRouter.** Jev now runs through OpenRouter: the Method account uses the organization's OpenRouter key, so classification and hosted models share one model credit, and its cost appears in `usage.cost_usd`. To use your own key, set `classification: {provider: typesafe, model: jev-1.13.0, api_key_env: OPENROUTER_API_KEY}` in runtime.json; a key in the environment alone no longer changes where classification runs (`TYPESAFE_API_KEY` is gone).
 
 # 0.13.1
 

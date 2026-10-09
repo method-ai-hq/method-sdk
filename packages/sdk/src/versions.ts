@@ -63,7 +63,12 @@ export async function saveVersion(client: MethodClient, file: string, options: {
 
 /** Check the cases, save the version if needed, and mark it published with a reason. */
 export async function publish(client: MethodClient, file: string, reason = 'Published.', accepted: string[] = []) {
+  const { explain, waitForExplain } = await import('./explain.js');
+  await waitForExplain(file);
   const saved = await saveVersion(client, file, { gate: { accepted, reason }, reason });
+  // Script cards come before publishing. A failed check shows on its card and never blocks the publish.
+  try { await explain(client, file, { write: line => process.stderr.write(`Script card: ${line}\n`) }); }
+  catch (error) { process.stderr.write(`Script cards not made: ${(error as Error).message}\n`); }
   const published = await client.request<any>(`/api/cli/methods/${encodeURIComponent(saved.workflow_id)}/versions/${encodeURIComponent(saved.version_id)}/publish`, 'POST', { reason });
   return { ...saved, published_at: published.published_at, publish_reason: published.publish_reason };
 }

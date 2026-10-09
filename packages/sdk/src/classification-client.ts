@@ -20,7 +20,7 @@ export function managedClassification(client: MethodClient): ClassificationProvi
         if (error.status === 409) throw Object.assign(Error("This run's classifier version is unavailable. Start a new run to use the current default."), {code: 'classification_version_unavailable'});
         throw error;
       }
-      validateClassification(answer, request.options, {provider: 'typesafe', model: request.model});
+      validateClassification(answer, request, {provider: 'typesafe', model: request.model});
       return answer;
     },
   };
