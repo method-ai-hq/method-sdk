@@ -1,4 +1,4 @@
-import { checkEditingRule, authoringEntryRule, designProcedure, designExamples, proposalRequirements, firstMethodRules, fieldReference } from "./authoring-instructions.js";
+import { authoringEntryRule, designProcedure, designExamples, checkRules, firstMethodRules, fieldReference, promptRules, watchRules, costRules } from "./authoring-instructions.js";
 export { exampleSelection } from "./authoring-instructions.js";
 import { exampleCatalog, renderExample } from "./authoring-example.js";
 
@@ -89,6 +89,9 @@ inputs:
   week:
     type: text
     description: Monday of the week to summarize, as YYYY-MM-DD.
+  example:
+    type: text
+    description: A past summary that the team liked. The summary step copies its style.
 secrets:
   HELPDESK_TOKEN: Read-only token for the help desk export.
 steps:
@@ -110,20 +113,37 @@ steps:
         high: High - a customer cannot work, or data is at risk.
         normal: Normal - a problem with a workaround.
         low: Low - a question or a request.
+        unclear: Unclear - the ticket does not say enough to tell.
     out: urgency
-  summary:
+  join:
+    name: Join tickets and scores
+    purpose: Gives each ticket its urgency. Marks a ticket unsure when the choice is unclear or its probability is below 0.7. Changes nothing.
     in: {tickets: tickets, urgency: urgency}
+    do: {kind: run, runtime: python, entrypoint: join_scores.py}
+    out:
+      scored: {type: list, fields: {id: text, text: text, urgency: text, unsure: boolean}, description: Each ticket with its urgency.}
+  summary:
+    in: {scored: scored, example: inputs.example}
     do:
       kind: call
       model: default
       prompt: |
         Write a five-sentence summary of this week's support tickets for the team.
         Start with the high-urgency tickets. Quote no customer names.
-        The inputs hold the tickets and their urgency, in the same order.
+        End with "Check these:" and the ids of the unsure tickets, or "Check these: none".
+        Write it in the style of this summary from an earlier week:
+
+        {{example}}
     out:
       summary: {type: text, description: The summary for the team.}
 result: summary
 \`\`\`
+
+What this example shows:
+- **One task per step.** The classifier only scores urgency. The script applies the 0.7 rule. The call only writes.
+- **An example output.** The \`example\` input is a past summary that the team liked. One real example makes the style clear in fewer words than a description of it.
+- **A way to say "I do not know".** The \`unclear\` option and the 0.7 rule mark tickets for a person to check, so a guess is not hidden.
+- **The output shape is in \`out\`**, not in the prompt.
 
 \`read_tickets.py\` reads HELPDESK_TOKEN from its environment. The classify and call steps use the Method account, so they need no key.
 
@@ -131,19 +151,25 @@ result: summary
 method validate tickets.method
 method run tickets.method --inputs inputs.json   # prints the version and dashboard links
 # change the summary prompt, then:
-method run tickets.method --inputs inputs.json   # reuses read and urgency; runs summary
+method run tickets.method --inputs inputs.json   # reuses read, urgency and join; runs summary
 \`\`\`
 `;
 const start = `${firstMethodRules}
+${promptRules}
 ${firstExample}
+${watchRules}
 ${fieldReference}
 ${designProcedure}
-${designExamples}
-${proposalRequirements}
 
 Use method schema for field definitions, method authoring concepts for the format, method authoring execution for setup, and method COMMAND --help for command arguments.
 `;
 const concepts = `# Method concepts
+
+${costRules}
+
+${checkRules}
+
+${designExamples}
 
 A method has format, name, goal, steps, result, and optional inputs, state, environment, and files.
 Each step uses do or ask. The do kinds are run, call, agent, and classify. Script actions require name and purpose; script checks require reading.check. A classify action takes bound inputs, a question, and options, and returns a named choice with probabilities. Use a script to apply business rules to that result.

@@ -17,7 +17,7 @@ Keep messages unsent. Reuse saved state on the next run.
 ```yaml
 format: method/3.3
 name: Manage daily outbound
-goal: Search Happenstance, read email, enrich prospects from company and LinkedIn pages, and prepare today's outreach tasks.
+goal: Read campaign email, find prospects in Happenstance, enrich them from company and LinkedIn pages, update the CRM, and prepare today's outreach tasks.
 inputs:
   day:
     type: text
@@ -28,7 +28,7 @@ inputs:
 state:
   crm:
     type: text
-    description: CRM as JSON text in shared Method account state. Updated only after the save check passes.
+    description: CRM as JSON text in shared Method account state. Updated only by save_day, after every check passes.
 environment:
   browser:
     type: browser
@@ -36,132 +36,233 @@ environment:
 steps:
   read_crm:
     name: Read the CRM
+    purpose: Rejects an invalid date or an email start date after the planned day. Returns the target settings, the contacts, the IDs of messages already matched to a contact, and the hash of the supplied CRM text. Changes nothing.
     in:
       day: inputs.day
-      crm: state.crm
       from_date: inputs.from_date
-    do:
-      kind: run
-      runtime: python
-      entrypoint: read_crm.py
+      crm: state.crm
+    do: {kind: run, runtime: python, entrypoint: read_crm.py}
     out:
-      context:
+      target:
+        type: record
+        fields: {customer: text, offer: text, new_prospects_per_day: number, mailbox_url: text}
+        description: Target customer, offer, daily prospect limit, and mailbox URL.
+      contacts:
+        type: list
+        fields:
+          id: text
+          name: text
+          email: text
+          company: text
+          role: text
+          fit: text
+          sources: {type: list, items: text}
+          status: text
+          next_action: text
+          next_action_date: text
+          introduction_path: text
+          manual_notes: text
+        description: Contacts saved in the CRM.
+      resolved:
+        type: list
+        items: text
+        description: IDs of saved messages that are matched to a contact.
+      crm_sha256:
         type: text
-        description: Current CRM, target customer, email dates, and state hash as JSON.
-    purpose: Checks the two dates and rejects an email start date after the planned day. Returns the CRM, date range, and hash of the supplied state.
-  gather_sources:
-    no_effect_reason: Reads email, Happenstance and LinkedIn in the browser; sends, posts and submits nothing. Outreach drafts are saved for review, not sent.
-    name: Read email and find prospects
-    changes:
-      - environment.browser
+        description: SHA-256 of the CRM text that this run read.
+
+  read_email:
+    name: Read campaign email
+    no_effect_reason: Reads the mailbox in the browser; sends, replies to, and deletes nothing.
+    changes: [environment.browser]
     in:
-      context: context
+      mailbox_url: target.mailbox_url
+      offer: target.offer
+      from_date: inputs.from_date
+      day: inputs.day
+      contacts: contacts
     do:
       kind: agent
       model: default
       browser: environment.browser
       prompt: |
-        Open target.mailbox_url from the CRM in context. Read received and sent
-        email from from_date through day for the outbound campaign. Search by
-        existing contact addresses, companies, and target.offer. Open the threads
-        and read the messages, including opt-outs and requests. Keep each email's
-        stable message ID, thread URL, sender address, date, direction, and text.
-        Collect relevant replies from people not yet in the CRM too.
-
-        Open https://happenstance.ai and ask:
-        "Find people in my network who fit this customer description: <target.customer>.
-        I offer <target.offer>. Show their current roles, companies, profile links,
-        and how I can reach them or get an introduction."
-        Replace the angle-bracket values with the CRM's target values.
-        Select up to target.new_prospects_per_day suitable new prospects.
-
-        Open each prospect's company website and LinkedIn profile. Check their
-        current role, what the company does, and the reason our offer fits.
-        Record source URLs and the facts read on each page. Use contact details
-        shown by the sources; leave unknown details empty.
-
-        Return observations as JSON with messages, prospects, and searches.
-        Each message has id, url, email, at, direction, text, and contact_id
-        when known. Each prospect has name, email, company, role, fit, sources,
-        profile_url, and introduction_path. Each source has url and facts.
-        searches contains email, happenstance, and enrichment; each has status
-        complete or blocked, and notes describing the search and any limits.
-        A completed search can have no results. Report blocked access as blocked.
-        Read email and prepare evidence; leave messages unsent.
+        Open {{mailbox_url}} and read the received and sent campaign email from {{from_date}} through {{day}}.
+        Search by the addresses and companies in contacts and by this offer: {{offer}}
+        Open each matching thread and keep every message, including opt-outs and replies from people who are not in contacts.
+        Set contact_id when the address matches a contact; otherwise leave it empty. Leave email empty when the address is not shown.
+        If you cannot open the mailbox, set status to blocked and say why in notes.
     out:
-      observations:
-        type: text
-        description: Email records, Happenstance prospects, enrichment facts, and search results as JSON.
-    check:
-      kind: run
-      runtime: python
-      entrypoint: check_sources.py
+      messages:
+        type: list
+        fields: {id: text, url: text, email: text, at: text, direction: text, text: text, contact_id: text}
+        description: Campaign messages. id is the mailbox message ID, url the thread link, at an ISO date and time, direction received or sent.
+      email_search:
+        type: record
+        fields: {status: text, notes: text}
+        description: complete or blocked, and what limited the search.
+    check: {kind: run, runtime: python, entrypoint: check_sources.py, args: [email]}
     reading:
-      check: Requires completed searches, unique email IDs, valid message dates and links, and linked enrichment facts. A completed search may contain no results.
-  plan_day:
-    name: Update contact status and plan the day
+      check_name: Check email records
+      check: Requires a complete search, unique message IDs, valid dates, https thread links, and message text.
+
+  find_prospects:
+    name: Find prospects in Happenstance
+    no_effect_reason: Searches Happenstance in the browser; sends no messages or introduction requests.
+    changes: [environment.browser]
+    after: read_email
     in:
-      context: context
-      observations: observations
+      customer: target.customer
+      offer: target.offer
+      limit: target.new_prospects_per_day
+      contacts: contacts
     do:
       kind: agent
       model: default
+      browser: environment.browser
       prompt: |
-        Read the CRM in context and the email and prospect records in observations.
-        Use email:<address> as a new contact ID when an email is known,
-        otherwise use the person's full profile URL. Keep existing IDs.
-        Add the prospect's role, fit, source URLs, and introduction path to
-        the CRM. sources is a list of URLs from the enrichment records.
-        Skip email IDs already resolved in the CRM; revisit unresolved senders.
-
-        Read each new message. Match it by contact ID or exact email. When its
-        sender is unclear, record it as unresolved for review. Record replies,
-        requests, meetings, opt-outs, and sent messages in the contact's status
-        and next action. Keep customers and opt-outs out of outreach tasks.
-        An outreach draft is a task to review; it is not a sent message.
-
-        Prepare today's due tasks and drafts using target.offer and the facts
-        you found. Each task needs a contact ID, action, due date, reason, and
-        draft. For tasks such as meetings, draft can be empty. Record gaps in
-        research_notes, including pages you could not read.
-
-        Return plan as JSON with contacts, messages, tasks, and research_notes.
-        contacts is a list of new or changed contacts with id, name, email,
-        company, role, fit, sources, status, next_action, and next_action_date.
-        Use status new, contacted, replied, qualified, meeting, customer,
-        closed, or opted_out. Use an empty next_action_date when none is due.
-        sources is a list of full page URLs. Include introduction_path as text. Leave unknown email empty.
-        messages contains one entry per email not yet resolved in the CRM: id, contact_id, and
-        resolution. Leave contact_id empty for an unresolved sender.
-        tasks contains contact_id, action, due_date, reason, and draft.
-        research_notes must be one JSON string. Combine multiple notes into
-        paragraphs within that string. Use an empty string when there are no
-        notes. Do not return a list or an object for research_notes.
-        In draft and research_notes strings, encode paragraph breaks as JSON
-        newline escapes that decode to line breaks, not literal backslash-n text.
+        Open https://happenstance.ai and ask:
+        "Find people in my network who fit this customer description: {{customer}}
+        I offer {{offer}} Show their current roles, companies, profile links,
+        and how I can reach them or get an introduction."
+        Choose up to {{limit}} people from the results who fit the description and are not in contacts.
+        Copy their details as Happenstance shows them. Leave email empty when it is not shown.
+        If no one fits, return no prospects. If you cannot search, set status to blocked and say why in notes.
     out:
-      plan:
-        type: text
-        description: JSON object with contacts, messages, and tasks lists, and research_notes as one string.
-    check:
-      kind: run
-      runtime: python
-      entrypoint: check_plan.py
+      prospects:
+        type: list
+        fields: {name: text, email: text, company: text, role: text, profile_url: text, introduction_path: text}
+        description: New people who fit the target customer.
+      prospect_search:
+        type: record
+        fields: {status: text, notes: text}
+        description: complete or blocked, and what limited the search.
+    check: {kind: run, runtime: python, entrypoint: check_sources.py, args: [prospects]}
     reading:
-      check: Checks contact identities and sources, resolves each new message once, preserves customers and opt-outs, and requires unique due tasks for active contacts and text research notes.
+      check_name: Check search access
+      check: Requires a complete Happenstance search. A complete search may find no prospects.
+
+  enrich:
+    name: Check each prospect's pages
+    no_effect_reason: Reads company and LinkedIn pages in the browser; sends no messages or connection requests.
+    changes: [environment.browser]
+    after: find_prospects
+    each: {prospect: prospects}
+    in:
+      offer: target.offer
+    do:
+      kind: agent
+      model: default
+      browser: environment.browser
+      prompt: |
+        Open the website of {{prospect.company}} and the LinkedIn profile of {{prospect.name}} ({{prospect.profile_url}}; search LinkedIn when this is empty).
+        Record each page you read with its URL and the facts you read there.
+        From those facts, give the current role and one sentence on why this offer fits: {{offer}}
+        Give an email address only when a page shows it; otherwise leave email empty.
+        In notes, name each page that you could not open.
+    out:
+      enrichment:
+        type: record
+        fields:
+          email: text
+          role: text
+          fit: text
+          sources: {type: list, fields: {url: text, facts: text}}
+          notes: text
+        description: What the prospect's pages show.
+    check: {kind: run, runtime: python, entrypoint: check_sources.py, args: [enrichment]}
+    reading:
+      check_name: Check page records
+      check: Requires at least one source, each with an https link and the facts read there.
+
+  update_contacts:
+    name: Update contacts
+    in:
+      contacts: contacts
+      resolved: resolved
+      messages: messages
+      prospects: prospects
+      enrichment: enrichment
+    do:
+      kind: call
+      model: default
+      prompt: |
+        Return each contact that the new messages or the new prospects add or change.
+        Skip messages whose id is in resolved. Match each other message to a contact by contact_id or exact email.
+        Give each message a short resolution, such as "Asked for pricing". When no contact matches, leave contact_id empty and say what a person must check.
+        Set the contact's status, next_action, and next_action_date from its messages. Status is new, contacted, replied, qualified, meeting, customer, closed, or opted_out.
+        Never change a customer or opted_out status. Leave next_action_date empty when nothing is due.
+        Add each prospect with status new. The enrichment at the same position gives its role, fit, email, and sources (the page URLs).
+        Use email:<address> as a new contact's id, or its profile_url when the email is unknown. Leave an unknown email empty.
+    out:
+      updated_contacts:
+        type: list
+        fields:
+          id: text
+          name: text
+          email: text
+          company: text
+          role: text
+          fit: text
+          sources: {type: list, items: text}
+          status: text
+          next_action: text
+          next_action_date: text
+          introduction_path: text
+        description: New and changed contacts.
+      resolutions:
+        type: list
+        fields: {id: text, contact_id: text, resolution: text}
+        description: One entry for each new message.
+    check: {kind: run, runtime: python, entrypoint: check_plan.py, args: [contacts]}
+    reading:
+      check_name: Check contacts
+      check: Requires unique contacts with a valid status and date, collected sources and a fit for new prospects, one contact per email, unchanged customer and opt-out status, and one resolution per new message whose contact matches by ID or exact email.
+
+  draft_tasks:
+    name: Draft today's tasks
+    in:
+      day: inputs.day
+      offer: target.offer
+      contacts: contacts
+      updated_contacts: updated_contacts
+      enrichment: enrichment
+    do:
+      kind: call
+      model: default
+      prompt: |
+        Write the outreach tasks due on {{day}}. A contact in updated_contacts replaces the contact with the same id in contacts.
+        Make one task for each contact whose next_action_date is {{day}} or earlier, and one for each contact with status new.
+        Skip contacts whose status is customer, closed, or opted_out.
+        Set action to the next action, due_date to next_action_date or {{day}} when it is empty, and reason to one sentence.
+        Write a short draft email that uses the contact's facts and this offer: {{offer}} Leave draft empty when the task is not an email, such as a meeting.
+    out:
+      day_tasks:
+        type: list
+        fields: {contact_id: text, action: text, due_date: text, reason: text, draft: text}
+        description: Tasks and outreach drafts for review.
+    check: {kind: run, runtime: python, entrypoint: check_plan.py, args: [tasks]}
+    reading:
+      check_name: Check tasks
+      check: Requires unique tasks with an action and a reason, due by the planned day, for known contacts that are not customers, closed, or opted out.
+
   save_day:
     name: Update the CRM and save today's tasks
-    changes:
-      - state.crm
+    purpose: Repeats the contact and task checks, then rejects a changed CRM unless this plan is already saved. Saves new and changed contacts with their owner notes kept, message resolutions, today's tasks, and research notes made from the search and page notes. Returns the replacement for state.crm, the task list, and a receipt. Repeating the same plan reuses its state update and rewrites the same local result files.
+    changes: [state.crm]
     in:
       crm: state.crm
-      context: context
-      plan: plan
-      observations: observations
-    do:
-      kind: run
-      runtime: python
-      entrypoint: save_day.py
+      crm_sha256: crm_sha256
+      day: inputs.day
+      contacts: contacts
+      resolved: resolved
+      messages: messages
+      email_search: email_search
+      prospect_search: prospect_search
+      enrichment: enrichment
+      updated_contacts: updated_contacts
+      resolutions: resolutions
+      day_tasks: day_tasks
+    do: {kind: run, runtime: python, entrypoint: save_day.py}
     out:
       tasks:
         type: file
@@ -169,9 +270,7 @@ steps:
       receipt:
         type: file
         description: Saved CRM hash, contact count, and message count.
-    check:
-      file: tasks
-    purpose: Validates the plan and rejects a changed CRM unless this plan is already saved. Returns updated CRM state, daily tasks, and a receipt. Repeating the same plan reuses its state update and rewrites the same local result files.
+    check: {file: tasks}
 result:
   tasks: tasks
   receipt: receipt
@@ -197,7 +296,7 @@ print(json.dumps(read(json.load(sys.stdin))))
 ## crm.py
 
 ```python
-"""Read, check, and commit a daily outbound plan."""
+"""Read the CRM, check each step's records, and save the day's plan."""
 import datetime
 import hashlib
 import json
@@ -205,147 +304,151 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
+STATUSES = ('new', 'contacted', 'replied', 'qualified', 'meeting', 'customer', 'closed', 'opted_out')
+FIELDS = ('id', 'name', 'email', 'company', 'role', 'fit', 'sources', 'status',
+    'next_action', 'next_action_date', 'introduction_path')
+
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
 def read(args):
-    datetime.date.fromisoformat(args['day'])
-    raw = args['crm'].encode()
-    crm = json.loads(raw)
-    datetime.date.fromisoformat(args['from_date'])
-    if args['from_date'] > args['day']:
+    if datetime.date.fromisoformat(args['from_date']) > datetime.date.fromisoformat(args['day']):
         raise ValueError('Email start date is after the run date')
-    return {'context': json.dumps({'day': args['day'], 'from_date': args['from_date'],
-        'sha256': digest(raw), 'crm': crm})}
+    crm = json.loads(args['crm'])
+    return {'target': crm['target'], 'contacts': crm['contacts'],
+        'resolved': [m['id'] for m in crm['messages'] if m['contact_id']],
+        'crm_sha256': digest(args['crm'].encode())}
 
 
-def sources(observations):
-    data = json.loads(observations)
-    for name in ['email', 'happenstance', 'enrichment']:
-        if data['searches'][name]['status'] != 'complete':
-            raise ValueError('Source access is incomplete: ' + name)
+def check_search(search, name):
+    if search['status'] != 'complete':
+        raise ValueError('Source access is incomplete: ' + name)
+
+
+def check_email(search, messages):
+    check_search(search, 'email')
     ids = set()
-    for message in data['messages']:
-        if not message['id'] or message['id'] in ids:
+    for m in messages:
+        if not m['id'] or m['id'] in ids:
             raise ValueError('Duplicate or empty email ID')
-        ids.add(message['id'])
-        if message['direction'] not in ['received', 'sent'] or not message['text']:
+        ids.add(m['id'])
+        if m['direction'] not in ('received', 'sent') or not m['text']:
             raise ValueError('Invalid email record')
-        datetime.datetime.fromisoformat(message['at'].replace('Z', '+00:00'))
-        if urlparse(message['url']).scheme != 'https':
+        datetime.datetime.fromisoformat(m['at'].replace('Z', '+00:00'))
+        if urlparse(m['url']).scheme != 'https':
             raise ValueError('Email needs a source link')
-    for prospect in data['prospects']:
-        if not prospect['sources']:
-            raise ValueError('Prospect needs enrichment sources')
-        for source in prospect['sources']:
-            if urlparse(source['url']).scheme != 'https' or not source['facts']:
-                raise ValueError('Enrichment needs a page link and facts')
-    return data
 
 
-def checked(context, plan, observations):
-    ctx, plan = json.loads(context), json.loads(plan)
-    evidence = sources(observations)
-    done = {m['id'] for m in ctx['crm']['messages'] if m['contact_id']}
-    ctx['messages'] = [m for m in evidence['messages'] if m['id'] not in done]
-    contacts = {c['id']: dict(c) for c in ctx['crm']['contacts']}
-    old = dict(contacts)
-    source_urls = {m['url'] for m in evidence['messages']}
-    source_urls.update(s['url'] for p in evidence['prospects'] for s in p['sources'])
-    source_urls.update(u for c in contacts.values() for u in c['sources'])
-    seen = set()
-    emails = {c['email'].lower(): c['id'] for c in contacts.values() if c['email']}
-    for c in plan['contacts']:
-        fields = ('id', 'name', 'email', 'company', 'role', 'fit', 'status', 'next_action', 'next_action_date', 'introduction_path')
-        if any(not isinstance(c[k], str) for k in fields) or not c['id'] or c['id'] in seen:
+def check_enrichment(enrichment):
+    if not enrichment['sources']:
+        raise ValueError('Prospect needs enrichment sources')
+    for source in enrichment['sources']:
+        if urlparse(source['url']).scheme != 'https' or not source['facts']:
+            raise ValueError('Enrichment needs a page link and facts')
+
+
+def check_contacts(contacts, resolved, messages, enrichment, updated, resolutions):
+    """Return all contacts by ID after the updates, keeping owner notes."""
+    old = {c['id']: c for c in contacts}
+    collected = {m['url'] for m in messages} | {s['url'] for e in enrichment for s in e['sources']}
+    collected |= {u for c in contacts for u in c['sources']}
+    emails = {c['email'].lower(): c['id'] for c in contacts if c['email']}
+    merged, seen = dict(old), set()
+    for c in updated:
+        if not c['id'] or c['id'] in seen:
             raise ValueError('Invalid or duplicate contact')
         seen.add(c['id'])
-        if c['status'] not in ['new', 'contacted', 'replied', 'qualified', 'meeting', 'customer', 'closed', 'opted_out']:
+        if c['status'] not in STATUSES:
             raise ValueError('Invalid contact status')
         if c['next_action_date']:
             datetime.date.fromisoformat(c['next_action_date'])
-        if not isinstance(c['sources'], list) or any(urlparse(u).scheme not in ['https', 'http'] or not urlparse(u).netloc for u in c['sources']):
-            raise ValueError('Invalid source URL')
-        if any(url not in source_urls for url in c['sources']):
+        if any(url not in collected for url in c['sources']):
             raise ValueError('Contact source was not collected')
         if c['id'] not in old and (not c['sources'] or not c['fit']):
             raise ValueError('New prospects need sources and a reason they fit')
         if c['email']:
-            email = c['email'].lower()
-            if email in emails and emails[email] != c['id']:
+            if emails.setdefault(c['email'].lower(), c['id']) != c['id']:
                 raise ValueError('Email belongs to an existing contact')
-            emails[email] = c['id']
-        if c['id'] in old and old[c['id']]['status'] in ['customer', 'opted_out'] and c['status'] != old[c['id']]['status']:
+        before = old.get(c['id'], {})
+        if before.get('status') in ('customer', 'opted_out') and c['status'] != before['status']:
             raise ValueError('Keep customer and opt-out status')
-        contacts[c['id']] = {**old.get(c['id'], {}), **{k: c[k] for k in (*fields, 'sources')},
-            'manual_notes': old.get(c['id'], {}).get('manual_notes', '')}
-    incoming = {m['id']: m for m in ctx['messages']}
-    resolutions = plan['messages']
-    if len(resolutions) != len(incoming) or {m['id'] for m in resolutions} != set(incoming):
+        merged[c['id']] = {**before, **{k: c[k] for k in FIELDS}, 'manual_notes': before.get('manual_notes', '')}
+    incoming = {m['id']: m for m in messages if m['id'] not in resolved}
+    if len(resolutions) != len(incoming) or {r['id'] for r in resolutions} != set(incoming):
         raise ValueError('Resolve each new message once')
-    for m in resolutions:
-        if not isinstance(m['resolution'], str) or not m['resolution']:
+    for r in resolutions:
+        if not r['resolution']:
             raise ValueError('Each message needs a resolution')
-        if m['contact_id']:
-            if m['contact_id'] not in contacts:
+        if r['contact_id']:
+            if r['contact_id'] not in merged:
                 raise ValueError('Message refers to an unknown contact')
-            source, contact = incoming[m['id']], contacts[m['contact_id']]
-            if source.get('contact_id') != contact['id'] and not (source.get('email') and source['email'].lower() == contact['email'].lower()):
+            message, contact = incoming[r['id']], merged[r['contact_id']]
+            if message['contact_id'] != contact['id'] and not (message['email'] and message['email'].lower() == contact['email'].lower()):
                 raise ValueError('Message identity is not established')
-    task_ids = set()
-    for task in plan['tasks']:
-        if any(not isinstance(task[k], str) for k in ['contact_id', 'action', 'due_date', 'reason', 'draft']):
-            raise ValueError('Invalid task')
-        contact = contacts[task['contact_id']]
-        if contact['status'] in ['customer', 'opted_out', 'closed']:
+    return merged
+
+
+def check_tasks(day, contacts, tasks):
+    keys = set()
+    for task in tasks:
+        contact = contacts.get(task['contact_id'])
+        if not contact:
+            raise ValueError('Task refers to an unknown contact')
+        if contact['status'] in ('customer', 'opted_out', 'closed'):
             raise ValueError('Task targets an inactive contact')
-        if datetime.date.fromisoformat(task['due_date']) > datetime.date.fromisoformat(ctx['day']):
+        if datetime.date.fromisoformat(task['due_date']) > datetime.date.fromisoformat(day):
             raise ValueError('Daily task is not due yet')
         key = (task['contact_id'], task['action'])
-        if key in task_ids or not task['action'] or not task['reason']:
+        if key in keys or not task['action'] or not task['reason']:
             raise ValueError('Empty or duplicate task')
-        task_ids.add(key)
-    if not isinstance(plan['research_notes'], str):
-        raise ValueError('Research notes must be text')
-    return ctx, plan, contacts
+        keys.add(key)
+
+
+def research_notes(args):
+    notes = [('Email', args['email_search']['notes']), ('Happenstance', args['prospect_search']['notes'])]
+    notes += [('Pages', e['notes']) for e in args['enrichment']]
+    return '\n\n'.join(f'{name}: {text}' for name, text in notes if text)
 
 
 def save(args):
-    ctx, plan, contacts = checked(args['context'], args['plan'], args['observations'])
-    current = args['crm'].encode()
-    plan_id = digest((ctx['day'] + args['context'] + args['plan']).encode())
+    contacts = check_contacts(args['contacts'], args['resolved'], args['messages'], args['enrichment'],
+        args['updated_contacts'], args['resolutions'])
+    check_tasks(args['day'], contacts, args['day_tasks'])
+    notes = research_notes(args)
+    plan_id = digest(json.dumps({k: v for k, v in args.items() if k != 'crm'}, sort_keys=True).encode())
+    current = args['crm']
     state = json.loads(current)
     if state.get('last_plan') != plan_id:
-        if digest(current) != ctx['sha256']:
+        if digest(current.encode()) != args['crm_sha256']:
             raise ValueError('CRM changed after it was read; start a new run')
-        messages = {m['id']: m for m in state['messages']}
-        incoming = {m['id']: m for m in ctx['messages']}
-        for m in plan['messages']:
-            messages[m['id']] = {**incoming[m['id']], **m}
-        state.update(contacts=list(contacts.values()), messages=list(messages.values()), last_plan=plan_id)
-        state.setdefault('days', {})[ctx['day']] = {'tasks': plan['tasks'], 'research_notes': plan['research_notes']}
-        current = (json.dumps(state, indent=2) + '\n').encode()
-    lines = ['# Outbound tasks — ' + ctx['day'], '']
-    for task in plan['tasks']:
+        saved = {m['id']: m for m in state['messages']}
+        incoming = {m['id']: m for m in args['messages']}
+        for r in args['resolutions']:
+            saved[r['id']] = {**incoming[r['id']], **r}
+        state.update(contacts=list(contacts.values()), messages=list(saved.values()), last_plan=plan_id)
+        state.setdefault('days', {})[args['day']] = {'tasks': args['day_tasks'], 'research_notes': notes}
+        current = json.dumps(state, indent=2) + '\n'
+    lines = ['# Outbound tasks — ' + args['day'], '']
+    for task in args['day_tasks']:
         contact = contacts[task['contact_id']]
         lines += [f"## {task['action']}: {contact['name']} · {contact['company']}",
             'Due: ' + task['due_date'], '', task['reason'], '', task['draft'], '']
-    if not plan['tasks']:
+    if not args['day_tasks']:
         lines += ['No outreach tasks are due today.', '']
     unresolved = [m for m in state['messages'] if not m['contact_id']]
     lines += ['## Messages to review', ''] + [m['id'] + ': ' + m['resolution'] for m in unresolved]
-    lines += ['', '## Research notes', '', plan['research_notes']]
+    lines += ['', '## Research notes', '', notes]
     output = Path(os.environ['METHOD_OUTPUT_DIR'])
     output.mkdir(parents=True, exist_ok=True)
     def artifact(name, data):
         (output / name).write_bytes(data)
         return {'path': name, 'sha256': digest(data)}
     return {'tasks': artifact('tasks.md', ('\n'.join(lines) + '\n').encode()),
-        'receipt': artifact('receipt.json', json.dumps({'day': ctx['day'], 'crm_sha256': digest(current),
+        'receipt': artifact('receipt.json', json.dumps({'day': args['day'], 'crm_sha256': digest(current.encode()),
             'contacts': len(state['contacts']), 'messages': len(state['messages'])}).encode()),
-        'state': {'crm': current.decode()}}
+        'state': {'crm': current}}
 ```
 
 ## check_sources.py
@@ -353,11 +456,15 @@ def save(args):
 ```python
 import json
 import sys
-from crm import sources
+from crm import check_email, check_enrichment, check_search
 args = json.load(sys.stdin)
+out = args['outputs']
+checks = {'email': lambda: check_email(out['email_search'], out['messages']),
+    'prospects': lambda: check_search(out['prospect_search'], 'happenstance'),
+    'enrichment': lambda: check_enrichment(out['enrichment'])}
 try:
-    sources(args['outputs']['observations'])
-    result = {'status': 'pass', 'reason': 'Source searches completed; email links and enrichment records are present.', 'evidence': []}
+    checks[sys.argv[1]]()
+    result = {'status': 'pass', 'reason': 'Source records are complete.', 'evidence': []}
 except (ValueError, KeyError, TypeError) as error:
     result = {'status': 'fail', 'reason': str(error), 'evidence': []}
 print(json.dumps(result))
@@ -368,11 +475,17 @@ print(json.dumps(result))
 ```python
 import json
 import sys
-from crm import checked
+from crm import check_contacts, check_tasks
 args = json.load(sys.stdin)
+given, out = args['inputs'], args['outputs']
 try:
-    checked(args['inputs']['context'], args['outputs']['plan'], args['inputs']['observations'])
-    result = {'status': 'pass', 'reason': 'Contact identities, message coverage, sources, and daily tasks are valid.', 'evidence': []}
+    if sys.argv[1] == 'contacts':
+        check_contacts(given['contacts'], given['resolved'], given['messages'], given['enrichment'],
+            out['updated_contacts'], out['resolutions'])
+    else:
+        contacts = {c['id']: c for c in given['contacts'] + given['updated_contacts']}
+        check_tasks(given['day'], contacts, out['day_tasks'])
+    result = {'status': 'pass', 'reason': 'The ' + sys.argv[1] + ' are valid.', 'evidence': []}
 except (ValueError, KeyError, TypeError) as error:
     result = {'status': 'fail', 'reason': str(error), 'evidence': []}
 print(json.dumps(result))
@@ -484,48 +597,16 @@ print(json.dumps(save(json.load(sys.stdin))))
 
 ```json
 {
-  "messages": [
-    {
-      "id": "m1",
-      "contact_id": "c1",
-      "email": "alex@north.example",
-      "at": "2026-09-17T09:00:00-04:00",
-      "direction": "received",
-      "text": "Can you send pricing today?",
-      "url": "https://mail.google.com/mail/u/0/#inbox/m1"
-    },
-    {
-      "id": "m2",
-      "contact_id": "c3",
-      "email": "sam@east.example",
-      "at": "2026-09-17T10:00:00-04:00",
-      "direction": "received",
-      "text": "Please stop contacting me.",
-      "url": "https://mail.google.com/mail/u/0/#inbox/m2"
-    },
-    {
-      "id": "m3",
-      "at": "2026-09-17T11:00:00-04:00",
-      "direction": "received",
-      "text": "Alex: send the contract. Sender address was not captured.",
-      "url": "https://mail.google.com/mail/u/0/#inbox/m3"
-    }
-  ],
+  "email_search": {
+    "status": "complete",
+    "notes": ""
+  },
   "prospects": [],
-  "searches": {
-    "email": {
-      "status": "complete",
-      "notes": "Fixture"
-    },
-    "happenstance": {
-      "status": "complete",
-      "notes": "Fixture"
-    },
-    "enrichment": {
-      "status": "complete",
-      "notes": "Fixture"
-    }
-  }
+  "prospect_search": {
+    "status": "complete",
+    "notes": "No new prospects in this state test."
+  },
+  "enrichment": []
 }
 ```
 
@@ -533,7 +614,7 @@ print(json.dumps(save(json.load(sys.stdin))))
 
 ```json
 {
-  "contacts": [
+  "updated_contacts": [
     {
       "id": "c1",
       "name": "Alex Kim",
@@ -545,7 +626,6 @@ print(json.dumps(save(json.load(sys.stdin))))
       "status": "replied",
       "next_action": "Send pricing",
       "next_action_date": "2026-09-17",
-      "manual_notes": "Keep this owner note.",
       "introduction_path": ""
     },
     {
@@ -559,7 +639,6 @@ print(json.dumps(save(json.load(sys.stdin))))
       "status": "customer",
       "next_action": "",
       "next_action_date": "",
-      "manual_notes": "Keep this owner note.",
       "introduction_path": ""
     },
     {
@@ -573,11 +652,10 @@ print(json.dumps(save(json.load(sys.stdin))))
       "status": "opted_out",
       "next_action": "",
       "next_action_date": "",
-      "manual_notes": "Keep this owner note.",
       "introduction_path": ""
     }
   ],
-  "messages": [
+  "resolutions": [
     {
       "id": "m1",
       "contact_id": "c1",
@@ -594,7 +672,7 @@ print(json.dumps(save(json.load(sys.stdin))))
       "resolution": "Review sender"
     }
   ],
-  "tasks": [
+  "day_tasks": [
     {
       "contact_id": "c1",
       "action": "Send pricing",
@@ -602,8 +680,7 @@ print(json.dumps(save(json.load(sys.stdin))))
       "reason": "Requested by Alex",
       "draft": "Hello Alex, let us review your needs."
     }
-  ],
-  "research_notes": "No new prospects in this state test."
+  ]
 }
 ```
 
@@ -625,13 +702,13 @@ m3: Review sender
 
 ## Research notes
 
-No new prospects in this state test.
+Happenstance: No new prospects in this state test.
 ```
 
 ## fixtures/receipt.json
 
 ```json
-{"day": "2026-09-17", "crm_sha256": "3db1de85d1289245898ac840bfb4434c529fb45ab342d04f2ee120f7e1c30be8", "contacts": 3, "messages": 3}
+{"day": "2026-09-17", "crm_sha256": "71a30d38fb2fcffb773ab3071367a239af0c01abca0394daef1d66a58fde9635", "contacts": 3, "messages": 3}
 ```
 
 ## fixtures/state.json
@@ -691,30 +768,31 @@ No new prospects in this state test.
   "messages": [
     {
       "id": "m1",
-      "contact_id": "c1",
+      "url": "https://mail.google.com/mail/u/0/#inbox/m1",
       "email": "alex@north.example",
       "at": "2026-09-17T09:00:00-04:00",
       "direction": "received",
       "text": "Can you send pricing today?",
-      "url": "https://mail.google.com/mail/u/0/#inbox/m1",
+      "contact_id": "c1",
       "resolution": "Recorded reply"
     },
     {
       "id": "m2",
-      "contact_id": "c3",
+      "url": "https://mail.google.com/mail/u/0/#inbox/m2",
       "email": "sam@east.example",
       "at": "2026-09-17T10:00:00-04:00",
       "direction": "received",
       "text": "Please stop contacting me.",
-      "url": "https://mail.google.com/mail/u/0/#inbox/m2",
+      "contact_id": "c3",
       "resolution": "Recorded reply"
     },
     {
       "id": "m3",
+      "url": "https://mail.google.com/mail/u/0/#inbox/m3",
+      "email": "",
       "at": "2026-09-17T11:00:00-04:00",
       "direction": "received",
       "text": "Alex: send the contract. Sender address was not captured.",
-      "url": "https://mail.google.com/mail/u/0/#inbox/m3",
       "contact_id": "",
       "resolution": "Review sender"
     }
@@ -730,10 +808,10 @@ No new prospects in this state test.
           "draft": "Hello Alex, let us review your needs."
         }
       ],
-      "research_notes": "No new prospects in this state test."
+      "research_notes": "Happenstance: No new prospects in this state test."
     }
   },
-  "last_plan": "08a1cbcb3f30c7c867d61b314cec9be1ef1dc186b125c3417bbb63e5b30f69da"
+  "last_plan": "f3052a54726c6e2b793368cd8138303959e788fe23adee2f2975fdf4303737f4"
 }
 ```
 
@@ -746,6 +824,22 @@ Each run reads email, finds prospects in Happenstance, checks their company and
 LinkedIn pages, updates the CRM, and writes today's tasks with outreach drafts.
 Messages stay unsent until you review and act on the tasks.
 
+## Steps
+
+| Step | Type | Output |
+| --- | --- | --- |
+| `read_crm` | run | target settings, contacts, resolved message IDs, CRM hash |
+| `read_email` | agent, browser | `messages`, `email_search` |
+| `find_prospects` | agent, browser | `prospects`, `prospect_search` |
+| `enrich` | agent, browser, `each` prospect | `enrichment` for each prospect |
+| `update_contacts` | call | `updated_contacts`, `resolutions` |
+| `draft_tasks` | call | `day_tasks` |
+| `save_day` | run, changes `state.crm` | `tasks.md`, `receipt.json` |
+
+Each model step does one task. The shape of each output is declared in `out`, so
+the prompts say only what to do and what to leave empty when a source does not
+have the answer.
+
 ## Sources
 
 - **Email:** opens your mailbox in the browser and reads received and sent
@@ -757,9 +851,10 @@ Messages stay unsent until you review and act on the tasks.
   reason your offer fits. Saves page links and the facts read there. This uses
   the existing browser and does not require a separate enrichment subscription.
 
-The source check stops the run if the agent reports blocked access. A completed
-search may return no matches. Checks require source records; they do not prove
-that the agent found every email or that every source is accurate.
+Each browser step has a check. It stops the run if the agent reports blocked
+access or returns a record without its link. A complete search may return no
+matches. Checks require source records; they do not prove that the agent found
+every email or that every source is accurate.
 
 ## Set up and run
 
@@ -804,10 +899,9 @@ checks so local and deployed runs use one current CRM. If the CRM changed during
 research, the save stops. Repeating the same save does not repeat its updates.
 The receipt records the saved state hash. Keep shared state enabled for normal use.
 
-The plan uses lists for `contacts`, `messages`, and `tasks`. Its `research_notes`
-field is one text string, with paragraph breaks between notes or an empty string
-when there are none. The plan check rejects lists and objects in that field before
-the CRM is changed.
+`update_contacts` and `draft_tasks` each have a check that `save_day` runs again
+before it changes the CRM. The research notes for the day are the notes from the
+email search, the Happenstance search, and the pages that could not be opened.
 
 ## Deploy
 
@@ -819,8 +913,9 @@ Deployment prepares the runner; it does not schedule or send outreach.
 
 ## Files and checks
 
-- `outbound.method`: read CRM, gather sources, plan and check, save.
-- `crm.py` and entry scripts: state reads, source and plan checks, state replacements.
+- `outbound.method`: read CRM, read email, find and enrich prospects, update contacts, draft tasks, save.
+- `crm.py` and entry scripts: state reads, source checks (`check_sources.py email|prospects|enrichment`),
+  contact and task checks (`check_plan.py contacts|tasks`), state replacements.
 - `runtime.json`: Python setup; no third-party Python libraries.
 - `starter/crm.json`: empty CRM with editable target settings.
 - `inputs.json`: email date range and date to plan.
@@ -831,8 +926,10 @@ repeated saves, stale writes, owner notes, opt-outs, unclear senders, and blocke
 sources. A live run is still needed to check signed-in access and research quality.
 
 Run the state tests offline with `python3 -m unittest crm_test.py`.
-`fixtures/tasks.md`, `fixtures/receipt.json`, and `fixtures/state.json` are recorded
-outputs from the fictional first-day fixture, not a live account run.
+`fixtures/observations.json` and `fixtures/plan.json` hold step outputs for the
+fictional first day. `fixtures/tasks.md`, `fixtures/receipt.json`, and
+`fixtures/state.json` are the outputs that `save_day` makes from them, not a live
+account run. A test checks that they are current.
 ````
 
 ## Installed files

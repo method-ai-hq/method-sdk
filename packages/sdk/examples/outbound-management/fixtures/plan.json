@@ -1,5 +1,5 @@
 {
-  "contacts": [
+  "updated_contacts": [
     {
       "id": "c1",
       "name": "Alex Kim",
@@ -11,7 +11,6 @@
       "status": "replied",
       "next_action": "Send pricing",
       "next_action_date": "2026-09-17",
-      "manual_notes": "Keep this owner note.",
       "introduction_path": ""
     },
     {
@@ -25,7 +24,6 @@
       "status": "customer",
       "next_action": "",
       "next_action_date": "",
-      "manual_notes": "Keep this owner note.",
       "introduction_path": ""
     },
     {
@@ -39,11 +37,10 @@
       "status": "opted_out",
       "next_action": "",
       "next_action_date": "",
-      "manual_notes": "Keep this owner note.",
       "introduction_path": ""
     }
   ],
-  "messages": [
+  "resolutions": [
     {
       "id": "m1",
       "contact_id": "c1",
@@ -60,7 +57,7 @@
       "resolution": "Review sender"
     }
   ],
-  "tasks": [
+  "day_tasks": [
     {
       "contact_id": "c1",
       "action": "Send pricing",
@@ -68,6 +65,5 @@
       "reason": "Requested by Alex",
       "draft": "Hello Alex, let us review your needs."
     }
-  ],
-  "research_notes": "No new prospects in this state test."
+  ]
 }

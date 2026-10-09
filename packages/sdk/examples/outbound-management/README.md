@@ -4,6 +4,22 @@ Each run reads email, finds prospects in Happenstance, checks their company and
 LinkedIn pages, updates the CRM, and writes today's tasks with outreach drafts.
 Messages stay unsent until you review and act on the tasks.
 
+## Steps
+
+| Step | Type | Output |
+| --- | --- | --- |
+| `read_crm` | run | target settings, contacts, resolved message IDs, CRM hash |
+| `read_email` | agent, browser | `messages`, `email_search` |
+| `find_prospects` | agent, browser | `prospects`, `prospect_search` |
+| `enrich` | agent, browser, `each` prospect | `enrichment` for each prospect |
+| `update_contacts` | call | `updated_contacts`, `resolutions` |
+| `draft_tasks` | call | `day_tasks` |
+| `save_day` | run, changes `state.crm` | `tasks.md`, `receipt.json` |
+
+Each model step does one task. The shape of each output is declared in `out`, so
+the prompts say only what to do and what to leave empty when a source does not
+have the answer.
+
 ## Sources
 
 - **Email:** opens your mailbox in the browser and reads received and sent
@@ -15,9 +31,10 @@ Messages stay unsent until you review and act on the tasks.
   reason your offer fits. Saves page links and the facts read there. This uses
   the existing browser and does not require a separate enrichment subscription.
 
-The source check stops the run if the agent reports blocked access. A completed
-search may return no matches. Checks require source records; they do not prove
-that the agent found every email or that every source is accurate.
+Each browser step has a check. It stops the run if the agent reports blocked
+access or returns a record without its link. A complete search may return no
+matches. Checks require source records; they do not prove that the agent found
+every email or that every source is accurate.
 
 ## Set up and run
 
@@ -62,10 +79,9 @@ checks so local and deployed runs use one current CRM. If the CRM changed during
 research, the save stops. Repeating the same save does not repeat its updates.
 The receipt records the saved state hash. Keep shared state enabled for normal use.
 
-The plan uses lists for `contacts`, `messages`, and `tasks`. Its `research_notes`
-field is one text string, with paragraph breaks between notes or an empty string
-when there are none. The plan check rejects lists and objects in that field before
-the CRM is changed.
+`update_contacts` and `draft_tasks` each have a check that `save_day` runs again
+before it changes the CRM. The research notes for the day are the notes from the
+email search, the Happenstance search, and the pages that could not be opened.
 
 ## Deploy
 
@@ -77,8 +93,9 @@ Deployment prepares the runner; it does not schedule or send outreach.
 
 ## Files and checks
 
-- `outbound.method`: read CRM, gather sources, plan and check, save.
-- `crm.py` and entry scripts: state reads, source and plan checks, state replacements.
+- `outbound.method`: read CRM, read email, find and enrich prospects, update contacts, draft tasks, save.
+- `crm.py` and entry scripts: state reads, source checks (`check_sources.py email|prospects|enrichment`),
+  contact and task checks (`check_plan.py contacts|tasks`), state replacements.
 - `runtime.json`: Python setup; no third-party Python libraries.
 - `starter/crm.json`: empty CRM with editable target settings.
 - `inputs.json`: email date range and date to plan.
@@ -89,5 +106,7 @@ repeated saves, stale writes, owner notes, opt-outs, unclear senders, and blocke
 sources. A live run is still needed to check signed-in access and research quality.
 
 Run the state tests offline with `python3 -m unittest crm_test.py`.
-`fixtures/tasks.md`, `fixtures/receipt.json`, and `fixtures/state.json` are recorded
-outputs from the fictional first-day fixture, not a live account run.
+`fixtures/observations.json` and `fixtures/plan.json` hold step outputs for the
+fictional first day. `fixtures/tasks.md`, `fixtures/receipt.json`, and
+`fixtures/state.json` are the outputs that `save_day` makes from them, not a live
+account run. A test checks that they are current.

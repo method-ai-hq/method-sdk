@@ -7,13 +7,39 @@
 3. **Show the design, then build it in the same turn.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Do not wait for approval unless the user asked to approve first. Ask only for information that you cannot find and that would change the design.
 4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. `--rerun STEP` runs a step again anyway; `--fresh` runs every step.
 5. **Keep the inputs of the existing code.** If the code takes an ID and looks up the record, the Method takes the same ID and looks it up the same way.
-6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: {backend: method, model: "provider/model"}}` to runtime.json and use `model: writer` in the steps; it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. Say these defaults in one line and continue.
+6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: {backend: method, model: "provider/model"}}` to runtime.json and use `model: writer` in the steps; it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. `run_data: device` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running; ask only if the user says that no data may leave this computer. Say these defaults in one line and continue.
 7. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose. Look for the key where the project keeps its keys: the README, `.env` files, and the code. Name the file to the user, ask once, then run `method secret import FILE NAME...` for the declared names only. Only when you find no file, ask the user to run `method secret set NAME`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
-9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again.
+9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand. If you cannot run, say so.
 10. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
 
 When a run fails, read its `fix` and `diagnostics`, change the step, and run again.
+
+# Write each prompt
+
+- **One task per prompt.** If a prompt says "then" or has several jobs, make several steps.
+- **Say what to do.** Leave out background that does not change the output.
+- **Show 1 to 3 examples of good output.** Take them from the user's work: examples in an existing prompt, a past output that the user approved, or the first run that the user accepts. Pass a long example as an input, not as text in the prompt.
+- **Put the output shape in `out`**, not in the prompt.
+- **Say what to do when the input does not have the answer**, for example "leave due empty". For classify, add an option such as `unclear`.
+
+Before:
+
+```text
+You are an expert support analyst with years of experience. Our company values clear
+communication. Read the tickets, decide which ones are urgent, write a summary, and
+return JSON with a "summary" key. Make it good.
+```
+
+After (urgency is a classify step before this one; the shape is in `out`):
+
+```text
+Write a five-sentence summary of this week's support tickets for the team.
+Start with the high-urgency tickets. Quote no customer names.
+Write it in the style of this summary from an earlier week:
+
+{{example}}
+```
 
 # A complete small Method
 
@@ -25,6 +51,9 @@ inputs:
   week:
     type: text
     description: Monday of the week to summarize, as YYYY-MM-DD.
+  example:
+    type: text
+    description: A past summary that the team liked. The summary step copies its style.
 secrets:
   HELPDESK_TOKEN: Read-only token for the help desk export.
 steps:
@@ -46,20 +75,37 @@ steps:
         high: High - a customer cannot work, or data is at risk.
         normal: Normal - a problem with a workaround.
         low: Low - a question or a request.
+        unclear: Unclear - the ticket does not say enough to tell.
     out: urgency
-  summary:
+  join:
+    name: Join tickets and scores
+    purpose: Gives each ticket its urgency. Marks a ticket unsure when the choice is unclear or its probability is below 0.7. Changes nothing.
     in: {tickets: tickets, urgency: urgency}
+    do: {kind: run, runtime: python, entrypoint: join_scores.py}
+    out:
+      scored: {type: list, fields: {id: text, text: text, urgency: text, unsure: boolean}, description: Each ticket with its urgency.}
+  summary:
+    in: {scored: scored, example: inputs.example}
     do:
       kind: call
       model: default
       prompt: |
         Write a five-sentence summary of this week's support tickets for the team.
         Start with the high-urgency tickets. Quote no customer names.
-        The inputs hold the tickets and their urgency, in the same order.
+        End with "Check these:" and the ids of the unsure tickets, or "Check these: none".
+        Write it in the style of this summary from an earlier week:
+
+        {{example}}
     out:
       summary: {type: text, description: The summary for the team.}
 result: summary
 ```
+
+What this example shows:
+- **One task per step.** The classifier only scores urgency. The script applies the 0.7 rule. The call only writes.
+- **An example output.** The `example` input is a past summary that the team liked. One real example makes the style clear in fewer words than a description of it.
+- **A way to say "I do not know".** The `unclear` option and the 0.7 rule mark tickets for a person to check, so a guess is not hidden.
+- **The output shape is in `out`**, not in the prompt.
 
 `read_tickets.py` reads HELPDESK_TOKEN from its environment. The classify and call steps use the Method account, so they need no key.
 
@@ -67,8 +113,15 @@ result: summary
 method validate tickets.method
 method run tickets.method --inputs inputs.json   # prints the version and dashboard links
 # change the summary prompt, then:
-method run tickets.method --inputs inputs.json   # reuses read and urgency; runs summary
+method run tickets.method --inputs inputs.json   # reuses read, urgency and join; runs summary
 ```
+
+# Watch it
+
+- Look at failed and unconfirmed runs on the dashboard. A run that needs attention says which step failed and why.
+- For classify, watch how often the choice is `unclear` or below your threshold. A rise means the inputs changed.
+- `method publish` runs the Method's cases before it marks a version published.
+- For slow effects such as email delivery, schedule `method observe --pending`.
 
 # Field reference
 
@@ -116,54 +169,19 @@ runtime.json beside the Method (optional)
 
 # Choose the design
 
-Identify the supplied inputs, required result, constraints, and external changes. Use information already provided. Ask only for missing information that would materially change the design.
-
-Choose each operation's execution type from its requirements:
-
-| Requirement | Execution type |
+| Requirement | Step type |
 | --- | --- |
-| Fixed rules, calculations, file transformations, or a known API operation that is not a model | run |
-| A structured model response from supplied information | call |
+| Fixed rules, calculations, file changes, or an API that is not a model | run |
+| A structured model answer from supplied information | call |
 | Model-directed investigation or tool use | agent |
-| Selection from named options with probabilities | classify |
+| A choice from named options, with probabilities | classify |
 | An answer or decision that must come from the user | ask |
 
-For browser work, declare a browser environment and select it with do.browser: environment.NAME. Method supplies the browser controls. Put the research task, limits, and required results in the prompt. Read method authoring example social-briefing for a complete example.
+For browser work, declare a browser environment and select it with do.browser: environment.NAME; see method authoring example social-briefing.
 
-Default to no additional task check. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
+Add a check only when it catches a failure that matters to the result. Local file writes need no check. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back. When you convert existing code, do not keep its checks and tests only because they exist. The rules are in method authoring concepts.
 
-Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
-
-When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. Local file writes need no check: the runtime observes files connections itself. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back, because a receipt or a 200 status shows only that the request was accepted. Use a built-in observer (http, sqlite, file) when one fits. When a change cannot or need not be observed, such as a browser step that only reads, write no_effect_reason instead.
-
-Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
-
-Use when for conditions, each for collections (add concurrency: N to run read-only items at once), repeat for bounded iteration, and after for required order without a data dependency.
-
-Split operations when an intermediate check, independent retry, human decision, or external change requires a boundary. A separate reasoning stage does not by itself require a separate agent.
-
-Check the model configuration before describing execution cost. A call with a direct API backend uses one request without tools. A coding-agent backend can start an agent process and use tools. Do not claim fewer agent processes from the step type alone.
-
-# Contrasting design outlines
-
-These are design outlines, not runnable Method files.
-
-| Request | Design | Explanation |
-| --- | --- | --- |
-| Summarize supplied text | call → return summary | The model receives all source text. No additional task check is needed by default. Add a save step only if a saved file is requested. Use an agent if it must find or inspect additional sources. |
-| Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. A planning step does not require a task check merely because it returns structured data. When the user requires that the findings say only what the sources say, add an agent check on the assess step (method authoring recipes). |
-| Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action with an effect if the Method must send or change anything. |
-| Send a daily summary email | call to write → run to send, with an effect | The send script puts METHOD_OPERATION_ID in the Message-ID. A mail.delivery effect searches the bounce mailbox through its own read-only connection until a 5-day horizon. A bounce fails the run; no bounce by the horizon is unrefuted, not proven. |
-
-# First design proposal
-
-In the first design proposal, state the intended result and material assumptions. List each step's execution type, purpose, and output. When the user has existing prompts, rubrics, or code that calls a model, list each one and the step that holds it. Explain any additional check you choose to add. Explain boundaries added for checks, retries, human decisions, or external changes.
-
-State the expected model requests and agent processes when the configuration makes those counts known. Mark unknown counts as unknown.
-
-Explain why tool-free model work uses call or why it requires an agent. Keep intermediate checks only when they serve a concrete task requirement.
-
-Follow the user's requested approval process. A proposal does not create an additional approval requirement when implementation is already authorized.
+Use when for conditions, each for collections, repeat for bounded iteration, and after for order without a data dependency. Split steps for a check, a retry, a human decision, or an external change.
 
 
 Use method schema for field definitions, method authoring concepts for the format, method authoring execution for setup, and method COMMAND --help for command arguments.
@@ -180,6 +198,31 @@ After choosing the execution types and step boundaries, read complete examples t
 
 
 # Method concepts
+
+Check the model configuration before describing execution cost. A call with a direct API backend uses one request without tools. A coding-agent backend can start an agent process and use tools. Do not claim fewer agent processes from the step type alone. State the expected model requests and agent processes when the configuration makes those counts known; mark unknown counts as unknown.
+
+# Checks
+
+Default to no additional task check. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
+
+Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
+
+When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. Local file writes need no check: the runtime observes files connections itself. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back, because a receipt or a 200 status shows only that the request was accepted. Use a built-in observer (http, sqlite, file) when one fits. When a change cannot or need not be observed, such as a browser step that only reads, write no_effect_reason instead.
+
+Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
+
+
+# Contrasting design outlines
+
+These are design outlines, not runnable Method files.
+
+| Request | Design | Explanation |
+| --- | --- | --- |
+| Summarize supplied text | call → return summary | The model receives all source text. No additional task check is needed by default. Add a save step only if a saved file is requested. Use an agent if it must find or inspect additional sources. |
+| Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. A planning step does not require a task check merely because it returns structured data. When the user requires that the findings say only what the sources say, add an agent check on the assess step (method authoring recipes). |
+| Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action with an effect if the Method must send or change anything. |
+| Send a daily summary email | call to write → run to send, with an effect | The send script puts METHOD_OPERATION_ID in the Message-ID. A mail.delivery effect searches the bounce mailbox through its own read-only connection until a 5-day horizon. A bounce fails the run; no bounce by the horizon is unrefuted, not proven. |
+
 
 A method has format, name, goal, steps, result, and optional inputs, state, environment, and files.
 Each step uses do or ask. The do kinds are run, call, agent, and classify. Script actions require name and purpose; script checks require reading.check. A classify action takes bound inputs, a question, and options, and returns a named choice with probabilities. Use a script to apply business rules to that result.
