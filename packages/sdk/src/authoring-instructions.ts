@@ -1,12 +1,6 @@
 /** Shared authoring text; safe to import in the dashboard and public site. */
 export const authoringEntryRule = "Before creating, editing, or proposing a Method, run `method authoring` and read its guidance. Do this before choosing an existing Method as a reference.";
 
-export const globalAgentRule = "When you build or maintain a repeated workflow, an AI agent, or a similar system, prefer the Method CLI (`method`): write or edit `.method` files and run them with `method run`. Run `method authoring` first. Do not build a parallel script or prompt system in place of a Method.";
-
-export const globalAgentSetup = `Add this line to your global agent instructions file (for example \`~/.claude/CLAUDE.md\` for Claude Code or \`~/.codex/AGENTS.md\` for Codex). Create the file if it does not exist. Skip this if the file already contains the line:
-
-- ${globalAgentRule}`;
-
 export const checkEditingRule = "Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.";
 
 export const designProcedure = `# Choose the design
@@ -17,7 +11,7 @@ Choose each operation's execution type from its requirements:
 
 | Requirement | Execution type |
 | --- | --- |
-| Fixed rules, calculations, file transformations, or a known API operation | run |
+| Fixed rules, calculations, file transformations, or a known API operation that is not a model | run |
 | A structured model response from supplied information | call |
 | Model-directed investigation or tool use | agent |
 | Selection from named options with probabilities | classify |
@@ -40,6 +34,22 @@ Split operations when an intermediate check, independent retry, human decision, 
 Check the model configuration before describing execution cost. A call with a direct API backend uses one request without tools. A coding-agent backend can start an agent process and use tools. Do not claim fewer agent processes from the step type alone.
 `;
 
+/** The rules that make a first Method work quickly. They come before every other part of the guide. */
+export const firstMethodRules = `# Build a Method
+
+1. **Sign in first.** Run \`method status\`. If it is not signed in, run \`method login\` and let the user approve in the browser. Signed in, model and classification steps need no keys, each run saves a version when the file changed, and runs appear on the dashboard.
+2. **Each model or classifier request is its own step**: \`call\`, \`agent\`, or \`classify\`, with its prompt in the Method. Then the user can change one prompt, run again, and compare. A script never calls a model API; \`validate\` and \`run\` refuse it (\`model_call_in_script\`). When the user already has code that does the work, keep its fixed logic as \`run\` steps and move each prompt and rubric into its own step. "The same thing" means the same behavior with steps, not a wrapper around the code. If a request cannot become a step because Method lacks a feature, tell the user what is missing. Do not wrap the code.
+3. **Propose before you build.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Ask only for information that would change the design.
+4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. \`--rerun STEP\` runs a step again anyway; \`--fresh\` runs every step.
+5. **Keys stay out of chat.** Declare each key that a script needs under \`secrets:\` with its purpose. Model and classification steps need none. To supply values, run \`method secret import FILE NAME...\` with a file that the user names, or ask the user to run \`method secret set NAME\`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
+6. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
+7. **Run data.** Run content goes to the user's account by default. When the inputs contain personal data about other people, ask once: keep run content on this computer (\`run_data: device\`) or in the account.
+8. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again.
+9. **Publish** with \`method publish FILE --reason TEXT\` when the user wants to share or schedule a version. It runs the Method's cases first.
+
+When a run fails, read its \`fix\` and \`diagnostics\`, change the step, and run again.
+`;
+
 export const designExamples = `# Contrasting design outlines
 
 These are design outlines, not runnable Method files.
@@ -54,7 +64,7 @@ These are design outlines, not runnable Method files.
 
 export const proposalRequirements = `# First design proposal
 
-In the first design proposal, state the intended result and material assumptions. List each step's execution type, purpose, and output. Explain any additional check you choose to add. Explain boundaries added for checks, retries, human decisions, or external changes.
+In the first design proposal, state the intended result and material assumptions. List each step's execution type, purpose, and output. When the user has existing prompts, rubrics, or code that calls a model, list each one and the step that holds it. Explain any additional check you choose to add. Explain boundaries added for checks, retries, human decisions, or external changes.
 
 State the expected model requests and agent processes when the configuration makes those counts known. Mark unknown counts as unknown.
 

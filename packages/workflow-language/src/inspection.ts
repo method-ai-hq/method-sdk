@@ -18,6 +18,8 @@ export const RunEventSchema = z.strictObject({
 export const InspectionSchema = z.strictObject({
   started_at: z.string().optional(), device_name: z.string().optional(),
   local_run_directory: z.string().optional(),
+  // run_data: device. The run's content stays on the device that ran it.
+  content: z.literal("device").optional(),
   schema: z.literal("workflow-inspection/2"), workflow: WorkflowSchema, run_id: z.string(), status: z.string(), error: z.string().optional(), failure: FailureSchema.optional(),
   inputs: z.record(JsonSchema), state: z.record(JsonSchema).optional(), resources: z.record(z.strictObject({ description: z.string(), setup: z.string().optional(), path: z.string().optional() })),
   environment: z.record(z.object({ result: z.enum(["pass", "fail", "ambiguous"]), summary: z.string(), evidence: z.array(z.string()) })).optional(),

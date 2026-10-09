@@ -1,3 +1,17 @@
+# 0.14.0
+
+A first Method needs fewer steps, no keys, and no extra commands (runtime 0.12.0).
+
+- **Claude Code plugin.** `/plugin marketplace add method-ai-hq/method-sdk` then `/plugin install method@method`. It installs the CLI on first use and starts the guide when the user asks for repeated work.
+- **Sign in first; hosted models.** Signed in, `call` and `agent` steps without a configured profile use a hosted model through the Method account, with no key and no local agent. Each account has a model credit. Not signed in, runs use a local agent as before.
+- **Each prompt is a step.** `validate` and `run` refuse a script that calls a model API (`model_call_in_script`).
+- **Keys stay on this computer.** Declare `secrets:` with names and purposes. `method secret import FILE NAME...` copies values from a file; `method secret set NAME` opens a private form in the browser; `method secret list` shows where each one is found. A missing secret stops the run before its first step. Replaces `runtimes.*.env`.
+- **Versions save themselves; `method publish` replaces `save`.** A signed-in run of a local file saves a version when the file changed and sends the run to the dashboard. `publish` runs the cases and marks a version published. `create`, `save`, and `update` are removed.
+- **Unchanged steps are reused.** A new run reuses each iteration whose definition, inputs, and executed files match an earlier accepted run on this computer. `--rerun STEP` and `--fresh` run steps again. `--from-run` and `--reuse` are removed.
+- **`run_data: device`** keeps run content on this computer; the dashboard shows the run's steps and timing.
+- **Clearer failures.** A failed run reports `failed_step`, `iteration`, `diagnostics`, and `fix`, also when it fails before its first step. A classification that the service briefly cannot answer gets three attempts. Saving a version waits up to two minutes.
+- The default `method authoring` guide is short and starts with the rules for a first Method. The installer adds the CLI to PATH. `METHOD_SERVER` selects another server.
+
 # 0.13.1
 
 - Fix items that run at once: they wrote `state.json` through one shared temporary file, so a run could fail under load (runtime 0.11.1).

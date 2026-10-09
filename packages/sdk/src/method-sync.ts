@@ -36,6 +36,8 @@ export class MethodSync {
     workflowId: string,
     versionId: string,
     runId?: string,
+    // run_data: device. The account receives the run's shape and timing; its content stays on this computer.
+    readonly device = false,
   ) {
     const path = join(directory, "method-sync.json");
     this.state = existsSync(path)
@@ -60,6 +62,7 @@ export class MethodSync {
     writePrivateJson(join(this.directory, "method-sync.json"), this.state);
   }
   private async upload(inspection: RunInspection) {
+    if (this.device) inspection = deviceOnly(inspection);
     const payload = {
       workflow_id: this.state.workflow_id,
       version_id: this.state.version_id,
@@ -229,4 +232,20 @@ async function retryTransfer<T>(send:()=>Promise<T>):Promise<T> {
     if(attempt>=2||/\b4\d\d:/.test(String(error))&&!String(error).includes('429:'))throw error;
     await new Promise(r=>setTimeout(r,500*2**attempt));
   }
+}
+
+/** Keep step status, kinds, names, and timing. Remove inputs, outputs, prompts, files, and free text. */
+export function deviceOnly(inspection: RunInspection): RunInspection {
+  const event = ({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }: any) =>
+    Object.fromEntries(Object.entries({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }).filter(([, value]) => value !== undefined)) as any;
+  return {
+    schema: inspection.schema, content: 'device', workflow: inspection.workflow, run_id: inspection.run_id, status: inspection.status,
+    ...(inspection.started_at ? { started_at: inspection.started_at } : {}), ...(inspection.device_name ? { device_name: inspection.device_name } : {}),
+    inputs: {}, resources: Object.fromEntries(Object.entries(inspection.resources).map(([name, value]) => [name, { description: value.description }])),
+    ...(inspection.events ? { events: inspection.events.map(event) } : {}),
+    invocations: Object.fromEntries(Object.entries(inspection.invocations).map(([id, value]) => [id, {
+      step_id: value.step_id, status: value.status, ...(value.verification ? { verification: value.verification } : {}),
+      checks: value.checks.map(check => ({ id: check.id, result: check.result, summary: '', evidence: [], method: check.method })), changes: {}, events: value.events.map(event),
+    }])),
+  } as RunInspection;
 }

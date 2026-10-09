@@ -1,4 +1,4 @@
-import { checkEditingRule, authoringEntryRule, designProcedure, designExamples, proposalRequirements } from "./authoring-instructions.js";
+import { checkEditingRule, authoringEntryRule, designProcedure, designExamples, proposalRequirements, firstMethodRules } from "./authoring-instructions.js";
 export { exampleSelection } from "./authoring-instructions.js";
 import { exampleCatalog, renderExample } from "./authoring-example.js";
 
@@ -33,10 +33,9 @@ export const commandHelp: Record<string, Command> = {
   validate: { usage: "method validate FILE [--config FILE] [--workspace DIR]", purpose: "Check the definition and local setup without running the work.", arguments: "Checks data, names, dependencies, templates, declared files, executables, environment variables, runtime profiles and tool bindings. Defaults to runtime.json beside the Method. --workspace selects the helper folder and default config folder. Relative paths in config resolve from the config folder.", result: "JSON reports definition, local_setup, executed:false, and valid. Invalid definitions or missing declared files exit 1. Managed setup is reported separately as needs_preparation; run prepares it.", errors: "The error identifies the invalid field or reference.", example: "method validate task.method" },
   diff: { usage: "method diff FILE OTHER_FILE", purpose: "Compare two documents.", arguments: "Both files required. Values are compared after parsing YAML or JSON.", result: "JSON array of {path,before?,after?}. Empty means equal; exit 0 either way.", errors: "Both file paths are required.", example: "method diff original.method task.method" },
   schema: { usage: "method schema [method|config|step|data|environment|check]", purpose: "Read the machine-readable grammar.", arguments: "Default: method. Use authoring concepts for meaning and authoring recipes for examples.", result: "JSON Schema for tooling. Data declarations in methods use the six simple types.", errors: "Unknown schema name.", example: "method schema step" },
-  create: { usage: "method create --file FILE [--request-id UUID] [--server URL]", purpose: "Save a complete local draft as a new online method.", arguments: "--file required. Request ID defaults to a new UUID and is saved before upload. The draft must not already belong to an online method. Validation runs before upload.", result: "JSON with workflow_id, version_id, version_number, server and url. Writes FILE.method.json.", errors: "Invalid method; linked draft; conflicting request ID; pending save with changed contents. See recovery for an uncertain upload.", example: "method create --file message.method", remote: true },
   get: { usage: "method get WORKFLOW_ID [--version VERSION_ID] [--out FILE] [--server URL]", purpose: "Read an online method; optionally make a local draft for editing.", arguments: "Default: latest version. --out must name a new file with no existing .method.json. Use a version ID to read an exact saved version.", result: "Without --out: {workflow_id,version_id,version_number,workflow}. With --out: {workflow_id,version_id,version_number,file}; writes the workflow and FILE.method.json.", errors: "Missing method or version; output file or sidecar already exists.", example: "method get wf_example --out edit.method", remote: true },
-  save: { usage: "method save FILE [--reason TEXT] [--request-id UUID] [--server URL]", purpose: "Save a draft as one online version.", arguments: "Before saving, the Method's cases run; a version that breaks an approved case is refused. To save anyway, add --accept-failing-case ID[,ID] with --reason; the version records it. New draft: creates a method. Linked draft: --reason required, base version and destination read from FILE.method.json. --request-id is used for first creation; retained pending ID wins on retry. Default server comes from the sidecar, then the online default.", result: "JSON with workflow_id, version_id, server, url, confirmed:true and document_sha256 after reading back the exact saved version; confirmed saves also include version_number. Updates FILE.method.json. Unchanged draft: unchanged:true, no new version.", errors: "Invalid method; missing reason; pending changed payload; wrong server; stale base (409). See recovery before retrying.", example: "method save edit.method --reason 'Give each output a clear description.'", remote: true },
-  update: { usage: "method update WORKFLOW_ID --file FILE --base-version VERSION_ID --reason TEXT [--server URL]", purpose: "Save a full method against an explicit base version.", arguments: "All listed non-server arguments required. Prefer get --out and save for normal editing. This lower-level command does not read or update the local sidecar. It validates the whole document.", result: "JSON {version_id,version_number}. Creates an online version. After success, use get --out NEW_FILE for further edits.", errors: "Stale base (409); invalid method; missing reason. A repeated update returns the saved version only when parent, contents and reason still match the latest version.", example: "method update wf_example --file edit.method --base-version version_example --reason 'Clarify the query.'", remote: true },
+  publish: { usage: "method publish FILE [--reason TEXT] [--accept-failing-case ID[,ID]] [--server URL]", purpose: "Mark a version as published, for sharing, schedules, and deploys.", arguments: "Runs the Method's cases first; a version that breaks an approved case is refused unless --accept-failing-case names it, and the version records that. Saves a version when the file changed since its last run, then marks it published with the reason (default: Published.). The first publish of a new file creates the Method.", result: "JSON with workflow_id, version_id, url, published_at, and the cases line.", errors: "Invalid method, failing case, conflicting saved version, or no network.", example: "method publish task.method --reason 'Shorter introduction'", remote: true },
+  secret: { usage: "method secret import FILE NAME...\nmethod secret set NAME\nmethod secret list [NAME...]", purpose: "Give this computer the values of a Method's declared secrets.", arguments: "import copies the named values from a KEY=VALUE file that the user names, without printing them. set opens a private form on 127.0.0.1 in the browser for one value. list shows names and where each value is found (shell, this computer, or missing), never values. Values are kept in ~/.config/method/secrets.json (mode 0600) and are never sent to Method. A value exported in the shell is used first.", result: "JSON with the saved names, or the list.", errors: "A name is missing from the file, or no value was entered.", example: "method secret import ../service/.env ARCHIVE_TOKEN" },
   status: { usage: "method status [--server URL]", purpose: "Check installation and sign-in without listing Methods or starting login.", arguments: "No required arguments. Checks the selected server with the current credential when one exists.", result: "JSON {installed:true,server,signed_in}. A missing or expired credential returns signed_in:false. Does not print account details.", errors: "Network and server errors exit 1; they are not reported as signed out.", example: "method status", remote: true },
   list: { usage: "method list [--server URL]", purpose: "Find your online methods.", arguments: "No required arguments.", result: "Server JSON containing methods. No changes.", errors: "", example: "method list", remote: true },
   steps: { usage: "method steps WORKFLOW_ID [--version VERSION_ID] [--server URL]", purpose: "Read all complete step definitions in a saved method.", arguments: "Default: latest version. Use step with two IDs to read one saved step.", result: "JSON {version_id,steps}. No changes.", errors: "Missing method or version.", example: "method steps wf_example", remote: true },
@@ -48,13 +47,14 @@ export const commandHelp: Record<string, Command> = {
   runs: { usage: "method runs [--method WORKFLOW_ID] [--server URL]", purpose: "Read saved run summaries.", arguments: "Default: all methods. --method filters the list.", result: "Server JSON containing runs. No changes.", errors: "", example: "method runs --method wf_example", remote: true },
   logs: { usage: "method logs RUN_ID [--server URL]", purpose: "Read saved run evidence before a repair.", arguments: "Use a run ID from method runs. Saved logs may be incomplete if upload failed.", result: "Server JSON containing the run, inputs, outputs, checks and events. No execution or changes.", errors: "Missing run.", example: "method logs run_example > run.json", remote: true },
   sync: { usage: "method sync RUN_DIRECTORY [--server URL]", purpose: "Retry upload of records from an existing local run.", arguments: "Directory must contain method-sync.json. Default destination is the saved run's server. Do not use a new business run to repair an upload.", result: "Upload status text. Updates dashboard records and local sync metadata. Does not execute steps.", errors: "Missing run/sync records; access or network error. Keep the original run directory and retry.", example: "method sync .method-runs/wf_example/saved-run", remote: true },
-  run: { usage: "method run FILE.method [OPTIONS]\nmethod run WORKFLOW_ID [--version VERSION_ID] [--server URL] [OPTIONS]", purpose: "Run a local .method file, or a saved Method by ID. A local file run keeps its records in .method-runs and uploads nothing. A saved Method's run uploads its records to the dashboard.", arguments: `Current methods optionally use runtime.json beside a local file, or in the current folder for a saved ID. --workspace selects a different folder. --config FILE overrides the config. See method authoring execution. Optional --state FILE initializes state for a new run. Resume with --resume --run-dir DIR; authorize unfinished work with --retry STEP:ITERATION.
+  run: { usage: "method run FILE.method [OPTIONS]\nmethod run WORKFLOW_ID [--version VERSION_ID] [--server URL] [OPTIONS]", purpose: "Run a local .method file, or a saved Method by ID. When this computer is signed in, a run of a local file saves a version when the file changed and sends the run's records to the dashboard; without sign-in the records stay in .method-runs. Steps whose definition and inputs match an earlier accepted run on this computer are reused.", arguments: `Current methods optionally use runtime.json beside a local file, or in the current folder for a saved ID. --workspace selects a different folder. --config FILE overrides the config. See method authoring execution. Optional --state FILE initializes state for a new run. Resume with --resume --run-dir DIR; authorize unfinished work with --retry STEP:ITERATION.
 
 --inputs FILE: JSON input values.
 --run-dir DIR: the folder for this run's records (new runs too; default .method-runs/ID).
 --agent codex|claude: select an agent for unconfigured profiles in a new run.
 --resume: continue the same saved run with its saved agent.
---from-run DIR --reuse STEP[,STEP]: start a new run that reuses accepted steps of a stopped or completed run. Use it after a fix to steps that were not accepted. See method authoring recovery.
+--rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
+--fresh: run every step; reuse nothing.
 --human FILE: saved human answers for the current runtime.
 --verbose: print runtime events.
 Use method doctor to check the installed Node and configured tools.`, result: "Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, 2 when human input is needed, and 3 when an observer could not confirm an external change (unconfirmed).", errors: "Missing inputs/access, failed check, timeout, unsafe resume/version mismatch, upload failure. See recovery. Never retry a business write without inspecting its saved changes.", example: "method run wf_example --version version_example --config runtime.json --workspace . --inputs inputs.json", remote: true },
@@ -79,17 +79,68 @@ export function renderCommand(name: string, includeCommon = true): string {
   return `## ${name}\n\n${entry.purpose}\n\nUsage:\n\n\`\`\`sh\n${entry.usage}\n\`\`\`\n\nArguments and defaults:\n${entry.arguments}\n\nResult and changes:\n${entry.result}${entry.errors ? `\n\nErrors:\n${entry.errors}` : ""}\n\nExample:\n\n\`\`\`sh\n${entry.example}\n\`\`\`\n` + (includeCommon ? `\n${entry.remote ? serverHelp + "\n" : ""}${exitHelp}\n\nCommon errors:\n${commonErrors}\n` : "");
 }
 
-const start = `# Author with Method
+const firstExample = `# A complete small Method
 
-Build a Method for the user's repeated work.
+\`\`\`yaml
+format: method/3.3
+name: Weekly ticket summary
+goal: Score this week's support tickets by urgency and write a short summary for the team.
+inputs:
+  week:
+    type: text
+    description: Monday of the week to summarize, as YYYY-MM-DD.
+secrets:
+  HELPDESK_TOKEN: Read-only token for the help desk export.
+steps:
+  read:
+    name: Read the tickets
+    purpose: Downloads the week's tickets from the help desk export and returns each ticket's id and text. Changes nothing.
+    in: {week: inputs.week}
+    do: {kind: run, runtime: python, entrypoint: read_tickets.py}
+    out:
+      tickets: {type: list, fields: {id: text, text: text}, description: The week's tickets.}
+  urgency:
+    name: Score urgency
+    each: {ticket: tickets}
+    concurrency: 8
+    do:
+      kind: classify
+      question: How urgent is this support ticket?
+      options:
+        high: High - a customer cannot work, or data is at risk.
+        normal: Normal - a problem with a workaround.
+        low: Low - a question or a request.
+    out: urgency
+  summary:
+    in: {tickets: tickets, urgency: urgency}
+    do:
+      kind: call
+      model: default
+      prompt: |
+        Write a five-sentence summary of this week's support tickets for the team.
+        Start with the high-urgency tickets. Quote no customer names.
+        The inputs hold the tickets and their urgency, in the same order.
+    out:
+      summary: {type: text, description: The summary for the team.}
+result: summary
+\`\`\`
 
+\`read_tickets.py\` reads HELPDESK_TOKEN from its environment. The classify and call steps use the Method account, so they need no key.
+
+\`\`\`sh
+method validate tickets.method
+method run tickets.method --inputs inputs.json   # prints the version and dashboard links
+# change the summary prompt, then:
+method run tickets.method --inputs inputs.json   # reuses read and urgency; runs summary
+\`\`\`
+`;
+const start = `${firstMethodRules}
+${firstExample}
 ${designProcedure}
 ${designExamples}
 ${proposalRequirements}
 
-Validate with method validate task.method, then run it with method run task.method and inspect the result. A local run uploads nothing. Save it online with method save task.method only when the user wants to share or schedule it.
-
-Use method schema for field definitions, method authoring execution for setup, and method COMMAND --help for command arguments.
+Use method schema for field definitions, method authoring concepts for the format, method authoring execution for setup, and method COMMAND --help for command arguments.
 `;
 const concepts = `# Method concepts
 
@@ -174,12 +225,12 @@ Classification uses the Method account. A classifier-only Method needs sign-in a
 
 Classification sends the step's declared inputs to Method and its classification provider. Method currently covers the cost within service limits. Saved runs contain the declared inputs and results.
 
-Explicit named model profiles keep their settings. For an unconfigured profile, Method uses --agent, the configured default, the identified calling agent, or the sole available supported agent. If a choice is needed, use --agent codex or --agent claude. Both use normal sign-in. The selected provider stays fixed on resume.
+Explicit named model profiles keep their settings. For an unconfigured profile, Method uses --agent, the configured default, the account's hosted model when this computer is signed in, the identified calling agent, or the sole available supported agent. A hosted model needs no key and no local agent; each account has a model credit, and the run summary reports usage.cost_usd. If a choice is needed, use --agent codex or --agent claude. The selected provider stays fixed on resume.
 A simple local-agent Method needs no runtime.json. When needed, put runtime.json beside the Method. New saved versions carry their helpers and runtime.json. Older versions without saved files still need --workspace DIR. --config overrides that file. Relative files-environment paths and executable paths in configuration resolve from the config folder. A bare executable name is found on PATH.
 Environment declarations name required connections. An agent with browser: environment.NAME receives the standard direct browser-use controls. Codex or Claude chooses the browser actions. Method opens the selected browser, retains its sign-ins privately, and reuses the session across steps. On macOS, Method copies your last-used Chrome profile and runs headless. Sign in through Chrome before running the Method. Run headless by default. If a task requires a visible browser, show it only for that task, then return to headless mode. Use method browser connect --cdp URL to attach to a Chrome session that permits control. Validation does not open a browser. Each run has a separate profile; resume reads the current page, not a saved web snapshot.
 Operator config supplies runtimes, tools, environment, and run limits. Optional models.PROFILE: {backend: codex, model: MODEL} selects a model; omit model to use the Codex default. command can select the Codex executable and reasoning_effort can override its setting.
 A models.PROFILE with backend: openai-responses, anthropic-messages, or openrouter-chat calls that provider's API directly, without an agent process. It requires model, api_key_env, and max_output_tokens; optional reasoning_effort (openai-responses, openrouter-chat) or effort (anthropic-messages). Use a direct profile for call steps and for agent steps with script tools. Keep key values out of the config; api_key_env names an existing environment variable, for example ANTHROPIC_API_KEY or OPENROUTER_API_KEY.
-runtimes.PROFILE uses command, version, optional args and env variable names. Scripts and Codex require allow_local_processes: true. They are trusted local processes.
+runtimes.PROFILE uses command, version, and optional args. Scripts and Codex require allow_local_processes: true. They are trusted local processes. A script receives the Method's declared secrets as environment variables; declare them under secrets: and supply values with method secret import or method secret set. A missing value stops the run before its first step.
 Custom script tools declare description, in, out, run, and effects. List custom tools in the step and config. Browser controls are supplied automatically; interactive controls require changes: [environment.NAME]. Check tools cannot declare external effects.
 Defaults: one hour per run, ten minutes per step, 100 model requests, 100 step invocations, 200 tool calls, 16 MiB for input and output, and 8 concurrent items per step. Step defaults allow 32 agent turns/model requests. Override run limits with timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_output_bytes, max_request_bytes, max_concurrency. Method enforces the Codex process timeout, prompt/output size, and declared Method tool-call limit. max_model_requests governs direct API and classification requests; max_agent_turns governs the direct API agent loop; Codex manages its own internal requests and built-in tools. Codex usage and process logs are saved separately.
 Declared tools are exposed to each Codex or Claude step through a temporary local MCP connection. It uses the same script execution and checks as the API path. Codex also retains the user's installed tools. Method does not sandbox these processes. No persistent Codex configuration is edited.
@@ -206,12 +257,12 @@ When the user says a result was wrong:
 1. Read the run (result.json, events.jsonl) and fix the Method. Run it again and show the user the new result.
 2. If the user wants the fix to stay, ask once: "Keep this as a rule: <the rule in plain words>?"
 3. On yes, record it: method case new FILE --id ID --run BAD_RUN --passing-run NEW_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names the output to judge (default: the Method's result; a path to a file that the run saved is judged by that file's contents). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
-4. Run method test FILE. Every case must pass. method save refuses a version that breaks a case.
+4. Run method test FILE. Every case must pass. method publish refuses a version that breaks a case.
 For a one-time preference, edit and run again; a case is not needed.
 
 ## Checked on every run, or on every new version
 
-A case checks future versions of the Method: method test and method save run it. A check on a step checks every run, and a failed check stops the run before later steps (for example before the save), with the check's reason in the error. When the user wants something "checked every time", add a step check; when they also want the rule kept for future edits, add a case too. A check that the output says only what the sources say:
+A case checks future versions of the Method: method test and method publish run it. A check on a step checks every run, and a failed check stops the run before later steps (for example before the save), with the check's reason in the error. When the user wants something "checked every time", add a step check; when they also want the rule kept for future edits, add a case too. A check that the output says only what the sources say:
   check:
     kind: agent
     model: default
@@ -236,11 +287,11 @@ const recovery = `# Recovery
 
 For a stopped run, read summary.json, events.jsonl, and checkpoint.json. Resume with the original method, config, --run-dir DIR, and --resume. Accepted steps and iterations are reused.
 An unfinished action needs --retry STEP:ITERATION after inspection of its external effects. A retry consumes the remaining run budget. Budgets do not reset on resume. Resume always uses the run's saved bundle, so a code fix needs a new run.
-When a fix changes only steps that were not accepted, start a fork: method run FILE --from-run DIR --reuse STEP[,STEP]. List the accepted steps to keep and every step they depend on; the failure summary names them. The fork has a new bundle and reuses a listed step only if its definition, referenced inputs and environment, model profile, tools, entrypoint files, and runtime are unchanged. Otherwise it stops with fork_mismatch. It copies declared file outputs and records forked_from with the parent run and the changed files. It does not trace helper files that an entrypoint imports: if you changed a helper that a reused step imports, do not reuse that step.
+To fix a failed or wrong step, change it and run the Method again. The new run reuses every iteration whose step definition, inputs, model profile, tools, runtime, and (for script steps) bundle files match an earlier accepted run on this computer, and copies their declared file outputs. Steps with ask or effects, steps that change state or a service, and tools with effects are never reused. Use --rerun STEP to run a step again anyway, or --fresh to reuse nothing.
 For ask, supply --human FILE containing {steps: {"STEP:ITERATION": {outputs: {NAME: VALUE}}}}. Use the user's actual answer. Checks still run.
 For a stale .lock, first confirm the process has stopped. Never remove an active process lock.
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
-For a save conflict, get the latest version and apply the change there. For an uncertain upload, retry the same file and command with its sidecar unchanged.
+For a version conflict, get the latest version and apply the change there. For an uncertain upload, retry the same file and command with its sidecar unchanged.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
 New Methods use format method/3.3. Existing method/3.1 and method/3.2 documents retain their validation rules.
 After a failed action with effects, the failure lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
@@ -251,13 +302,13 @@ export function authoringGuide(topic = "start", exampleId?: string): string {
   if (exampleId && topic !== 'example') throw Error('Use method authoring example EXAMPLE_ID.');
   const catalog = () => exampleCatalog();
   const topics: Record<string, () => string> = {
-    start: () => start + '\n' + concepts + '\n' + catalog(), concepts: () => concepts,
+    start: () => start + '\n' + catalog(), concepts: () => concepts,
     execution: () => execution, examples: catalog,
     example: () => exampleId ? renderExample(exampleId) : catalog(),
     recipes: () => recipes, recovery: () => recovery,
-    commands: () => '# Command reference\n\nLocal authoring commands edit draft files. create, save and update publish Method versions. run executes a saved version.\n\n' + serverHelp + '\n' + exitHelp + '\n\nCommon errors:\n' + commonErrors + '\n\n' + Object.keys(commandHelp).map(name => renderCommand(name, false)).join('\n'),
+    commands: () => '# Command reference\n\nLocal authoring commands edit draft files. A signed-in run saves a version when the file changed. publish marks a version for sharing. run also executes a saved version by ID.\n\n' + serverHelp + '\n' + exitHelp + '\n\nCommon errors:\n' + commonErrors + '\n\n' + Object.keys(commandHelp).map(name => renderCommand(name, false)).join('\n'),
   };
-  if (topic === 'all') return ['start','execution','recipes','recovery','commands'].map(key => topics[key]!()).join('\n\n');
+  if (topic === 'all') return ['start','concepts','execution','recipes','recovery','commands'].map(key => topics[key]!()).join('\n\n');
   if (!topics[topic]) throw Error(`Unknown authoring topic '${topic}'. Choose ${guideTopics.join(', ')}, or all.`);
   return topics[topic]!();
 }
@@ -274,14 +325,15 @@ Learn: method authoring                 Start the installed guide.
 
 Local drafts: init, show, set, remove, step add/update/remove/move,
               check set/remove, validate, diff.
-Online documents: list, get, steps, step, create, save, update.
+Online documents: list, get, steps, step, publish.
+Keys for scripts: secret import, secret set, secret list.
 Execution and evidence: run, run-status, wait, cancel, runs, logs, sync, observe.
 Effects and corrections: effect add/list, case new/retire/list, test.
 Inputs and shared state: bind, state.
 Browser and runner setup: browser connect, deploy.
 Account access: status, login, logout, devices, revoke.
 
-Read the authoring guide, choose the execution types and boundaries, consult relevant examples, write the files, validate, and run it locally. Save it online only when the user wants to share or schedule it.
+Sign in with method login first. Read the authoring guide, give each prompt its own step, write the files, validate, and run. Each signed-in run saves a version when the file changed. Publish a version when the user wants to share or schedule it.
 Use method run task.method to run with runtime.json beside the Method.
 Online server: https://app.withmethod.ai. Use --server only to select another
 server. Sign-in uses browser approval. Never send credentials in chat.

@@ -113,7 +113,7 @@ export async function caseGate(file: string, accept: string[] = [], reason?: str
   process.stderr.write(`Cases checked in ${Math.round(t.duration_ms / 1000)} s: ${t.live_model_steps} live model step${t.live_model_steps === 1 ? "" : "s"}, ${t.judge_calls} judge call${t.judge_calls === 1 ? "" : "s"}.\n`);
   const failing = report.cases.filter((c: any) => !["pass", "fixed"].includes(c.verdict));
   const unaccepted = failing.filter((c: any) => !accept.includes(c.id));
-  if (unaccepted.length) throw Object.assign(Error(`This version breaks ${unaccepted.length} approved case${unaccepted.length === 1 ? "" : "s"}: ${unaccepted.map((c: any) => `${c.id} (${c.verdict}: ${c.note})`).join("; ")}. Fix the Method and run method test, or retire a case whose rule no longer applies with method case retire. To save anyway, add --accept-failing-case ${unaccepted.map((c: any) => c.id).join(",")} with --reason.`), { code: "cases_failed" });
+  if (unaccepted.length) throw Object.assign(Error(`This version breaks ${unaccepted.length} approved case${unaccepted.length === 1 ? "" : "s"}: ${unaccepted.map((c: any) => `${c.id} (${c.verdict}: ${c.note})`).join("; ")}. Fix the Method and run method test, or retire a case whose rule no longer applies with method case retire. To publish anyway, add --accept-failing-case ${unaccepted.map((c: any) => c.id).join(",")} with --reason.`), { code: "cases_failed" });
   if (failing.length && !reason) throw Error("Give --reason for accepting a failing case.");
   return { report, line: failing.length ? `Cases: ${report.cases.length - failing.length} of ${report.cases.length} passed; accepted failing ${failing.map((c: any) => c.id).join(", ")}.` : `Cases: ${report.cases.length} of ${report.cases.length} passed.` };
 }

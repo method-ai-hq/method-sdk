@@ -1,15 +1,9 @@
-import { authoringEntryRule, globalAgentSetup } from "./authoring-instructions.js";
+/** The prompt for agents without the Method plugin. The installed guide holds the rules; this prompt only starts them. */
+export const authoringPrompt = `Help me turn repeated work into a Method with the Method CLI.
 
-export const authoringPrompt = `I want to turn some repeated work into a method using the Method CLI. Can you help me do that?
+The work: [describe the task, its inputs, and the result you want]
 
-First, check that the CLI is installed with \`which method\`. If needed, follow the setup instructions at https://withmethod.ai/docs/quickstart.md to install the CLI.
-
-${globalAgentSetup}
-
-${authoringEntryRule}
-
-Use the task and requirements I have already provided. Ask only for missing information that would materially change the design.
-
-Follow the design procedure and proposal requirements in the guide. Apply the Script steps rules and keep descriptions consistent with behavior.
-
-Help me write the method and its files and validate them. Before saving the method to my account, check sign-in with \`method status\` and follow any browser sign-in instructions. Let me approve sign-in in the browser. Run an agreed sample of the saved version and inspect the actual result. Use a test destination for external changes, or ask before making a live change. Return the Method and run links with the test result.`;
+1. If \`which method\` finds nothing, install Method. I approve this installer: \`curl -fsSL https://app.withmethod.ai/install.sh | sh\`
+2. Run \`method login\` and let me approve sign-in in the browser.
+3. Run \`method authoring\` and follow it. Make each prompt its own step, so that I can improve it.
+4. Run it on a sample, show me the result and the dashboard link, then ask me what to change.`;

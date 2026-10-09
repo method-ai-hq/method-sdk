@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
 import { startMethodTools } from '@withmethod/runtime/codex.js';
 import { validateConfig } from '@withmethod/runtime/validate.js';
@@ -80,7 +80,8 @@ it('reports the Codex failure message and does not accept an output from a faile
 it('defaults an unconfigured writer to the Codex CLI on PATH', async () => {
   const f=fixture(client+`fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({text:'default'}));`);
   (f.config as any).models = {};
-  vi.stubEnv('PATH', f.root + ':' + process.env.PATH);
+  // Only the fake Codex is installed, and no calling agent is identified.
+  vi.stubEnv('PATH', [f.root, dirname(process.execPath), '/usr/bin', '/bin'].join(':')); vi.stubEnv('CLAUDECODE', '');
   expect((await f.run()).status).toBe('completed');
 });
 it('keeps explicit Responses profiles on the API path', async () => {

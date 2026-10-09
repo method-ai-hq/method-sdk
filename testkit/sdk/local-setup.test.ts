@@ -50,14 +50,15 @@ it('status does not list Methods, reveal account details, or start login',async(
  client.request.mockRejectedValue(Error('401: expired'));s.stdout.mockClear();await methodMain(['status'],()=>client);expect(s.result().signed_in).toBe(false);
  client.request.mockRejectedValue(Error('503: unavailable'));await expect(methodMain(['status'],()=>client)).rejects.toThrow('503');
 });
-it('leaves a pending save for retry when readback fails or differs, then confirms exact preserved content',async()=>{
+it('leaves a pending version for retry when readback fails or differs, then confirms exact preserved content',async()=>{
  const s=setup();const workflow=JSON.parse(JSON.stringify((await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(exampleWorkflow)));
  workflow.run_prompt='\nRead the saved result.\n';writeFileSync(s.file,JSON.stringify(workflow));
  let bad=true;let pack:any;
  const client:any={server:'https://example.test',token:()=> 'test-token',transfer:vi.fn(),request:vi.fn(async (path:string,verb:string,body:any)=>{if(path==='/api/cli/files/check')return {present:[]};if(verb==='POST'){pack=body.package;return {workflow_id:'wf_test',version_id:'v_test',version_number:1};}return {version_id:'v_test',package:pack,workflow:{...workflow,...(bad?{name:'wrong'}:{})}};})};
- await expect(methodMain(['save',s.file],()=>client)).rejects.toThrow('does not match');
+ const {saveVersion}=await import('../../packages/sdk/src/versions.js');
+ await expect(saveVersion(client,s.file)).rejects.toThrow('does not match');
  const pending=JSON.parse(readFileSync(s.file+'.method.json','utf8'));expect(pending.pending.request_id).toBeTruthy();
- bad=false;s.stdout.mockClear();await methodMain(['save',s.file],()=>client);expect(s.result()).toMatchObject({confirmed:true,version_id:'v_test'});expect(s.result().document_sha256).toMatch(/^[a-f0-9]{64}$/);
+ bad=false;expect(await saveVersion(client,s.file)).toMatchObject({unchanged:false,version_id:'v_test',workflow_id:'wf_test'});
  expect(JSON.parse(readFileSync(s.file+'.method.json','utf8')).pending).toBeUndefined();
  expect(client.request.mock.calls.filter((c:any[])=>c[1]==='POST'&&c[0]!=='/api/cli/files/check')[1][2].request_id).toBe(pending.pending.request_id);
 });
@@ -70,8 +71,8 @@ it('treats harmless whitespace consistently after checking out an older saved do
  Object.assign(stored,{package:await collectPackage(s.file,(await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(stored.workflow),client)});
  const checkout=join(s.dir,'checkout.method');await methodMain(['get','wf_test','--out',checkout],()=>client);
  writeFileSync(checkout,readFileSync(checkout,'utf8').replace('Read the report.', 'Read the report.'));
- s.stdout.mockClear();await methodMain(['save',checkout],()=>client);
- expect(s.result()).toMatchObject({confirmed:true,unchanged:true,version_id:'v_test'});
+ const {saveVersion}=await import('../../packages/sdk/src/versions.js');
+ expect(await saveVersion(client,checkout)).toMatchObject({unchanged:true,version_id:'v_test'});
  expect(client.request.mock.calls.filter((c:any[])=>c[0]!=='/api/cli/files/check').every((c:any[])=>c[1]===undefined)).toBe(true);
 });
 

@@ -9,7 +9,6 @@ import {authoringExamples,renderExample} from "../../packages/sdk/src/authoring-
 import {exampleScript,exampleWorkflow} from '../fixtures/copy-message-example.js';
 const approvedReport = readFileSync(resolve('packages/sdk/examples/daily-briefing/approved-report.md'),'utf8');
 import { authoringGuide, commandHelp, guideTopics } from "../../packages/sdk/src/method-help.js";
-import { globalAgentRule } from "../../packages/sdk/src/authoring-instructions.js";
 import { methodMain } from "../../packages/sdk/src/method.js";
 import { loadWorkflow } from "../../packages/workflow-language/src/validate.js";
 import { runMethod } from "../../packages/sdk/src/run-method.js";
@@ -25,10 +24,6 @@ function shell(dir: string, script: string) {
   return execFileSync("/bin/sh", ["-c", `set -eu\n${script}`], { cwd: dir, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: "utf8" });
 }
 
-it("keeps the global-instructions rule in setup, not in the authoring guide", () => {
-  expect(authoringGuide()).not.toContain(`- ${globalAgentRule}`);
-  expect(readFileSync(resolve("scripts/install-method.sh"), "utf8")).toContain(`- ${globalAgentRule}`);
-});
 
 it("provides offline command-specific help and rejects unknown topics before creating a client", async () => {
   const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -64,7 +59,7 @@ it("executes the copy-message editing fixture without adding it to the authoring
 
 it("keeps the repository manual equal to the guide shipped in the CLI", () => {
   const text = readFileSync(resolve("docs/method-authoring.md"), "utf8");
-  expect(text.slice(text.indexOf("# Author with Method"))).toBe(authoringGuide("all"));
+  expect(text.slice(text.indexOf("# Build a Method"))).toBe(authoringGuide("all"));
 });
 
 

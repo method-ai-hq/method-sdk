@@ -1,0 +1,9 @@
+{
+  "name": "method",
+  "version": "0.14.0",
+  "description": "Turn repeated work into a Method: installs the Method CLI and teaches Claude to build, run, and improve Methods one step per prompt.",
+  "author": { "name": "Method", "url": "https://withmethod.ai" },
+  "homepage": "https://withmethod.ai",
+  "repository": "https://github.com/method-ai-hq/method-sdk",
+  "license": "MIT"
+}

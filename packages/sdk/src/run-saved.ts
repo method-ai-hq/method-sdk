@@ -13,7 +13,7 @@ import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
 
 // Older versions are listed only after their saved-package tests pass.
-const supportedPackageRuntimes = new Set([runtimeVersion, '0.11.0', '0.10.0', '0.9.5', '0.9.4', '0.9.3', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
+const supportedPackageRuntimes = new Set([runtimeVersion, '0.11.1', '0.11.0', '0.10.0', '0.9.5', '0.9.4', '0.9.3', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
 
 /** A run whose steps all finished: completed, or unconfirmed (an external change could not be confirmed). */
 export const finishedRun = (status: string) => status === 'completed' || status === 'unconfirmed';

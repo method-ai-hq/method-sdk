@@ -8,7 +8,8 @@ import { z } from "zod";
 import { sha256 } from "../../contracts/src/identity.js";
 import { writePrivateJson } from "./files.js";
 
-export const DEFAULT_SERVER = "https://app.withmethod.ai";
+// METHOD_SERVER selects another server (staging, or a local server in tests) for every command.
+export const DEFAULT_SERVER = process.env.METHOD_SERVER || "https://app.withmethod.ai";
 export function serverOrigin(value: string) {
   const url = new URL(value);
   if (
@@ -182,7 +183,7 @@ export class MethodClient {
     rmSync(`${this.credentialFile}.pending`, { force: true });
   }
 }
-function openUrl(url: string) {
+export function openUrl(url: string) {
   const command =
     process.platform === "darwin"
       ? "open"

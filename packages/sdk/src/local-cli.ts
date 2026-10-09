@@ -10,12 +10,19 @@ import { writePrivateJson } from "./files.js";
 import { isWorkflowLink, saveWorkflowLink } from "./link.js";
 import { inspectRun } from "./inspect.js";
 import type { MethodSync } from "./method-sync.js";
-import { checkConfiguration, resolveAgentProfiles } from './capabilities.js';
+import { accountNeeds, checkConfiguration, resolveAgentProfiles } from './capabilities.js';
+import { MethodClient } from "./method-client.js";
+import { MethodSync as Sync } from "./method-sync.js";
+import { saveVersion } from "./versions.js";
+import { localSetup } from "./local-setup.js";
+import { readDocument } from "./authoring.js";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 const help = "Use method run, check, steps, prompt, inspect, or doctor. See method help.";
 export function parse(args: string[]) {
   return parseArgs({ args, allowPositionals: true, options: {
     server: {type:"string"}, agent: {type:"string"}, background: {type:"boolean"}, config: {type:"string"}, state: {type:"string"}, out: {type:"string"}, inputs: {type:"string"}, workspace: {type:"string"},
-    "run-dir": {type:"string"}, "from-run": {type:"string"}, reuse: {type:"string",multiple:true}, resume: {type:"boolean"}, human: {type:"string"}, retry: {type:"string",multiple:true},
+    "run-dir": {type:"string"}, fresh: {type:"boolean"}, rerun: {type:"string",multiple:true}, resume: {type:"boolean"}, human: {type:"string"}, retry: {type:"string",multiple:true},
     "include-files": {type:"boolean"}, verbose: {type:"boolean"}, help: {type:"boolean"}
   }});
 }
@@ -24,7 +31,34 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
   loadWorkflow(readFileSync(path, "utf8"));
   const notice = await (await import("./quality.js")).casesNotice(path);
   if (notice) process.stderr.write(notice + "\n");
-  await runCurrentFile(path, flags, syncFactory);
+  flags = { ...flags, "run-dir": flags["run-dir"] ?? join(process.cwd(), ".method-runs", randomUUID()) };
+  await runCurrentFile(path, flags, syncFactory ?? await accountSync(path, flags));
+}
+
+/**
+ * When this computer is signed in, each run of a local file belongs to a saved version: the version is saved when the
+ * file changed, and the run's records go to the account. A run that needs the account starts sign-in first.
+ */
+async function accountSync(path: string, flags: ReturnType<typeof parse>["values"]) {
+  const client = new MethodClient(flags.server);
+  const runDir = resolve(flags["run-dir"]!), linked = join(runDir, "method-sync.json");
+  if (flags.resume) {
+    if (!existsSync(linked)) return undefined;
+    const state = JSON.parse(readFileSync(linked, "utf8"));
+    return () => new Sync(client, runDir, state.workflow_id, state.version_id, state.id, readDocument(path).run_data === "device");
+  }
+  const method = readDocument(path);
+  const needs = accountNeeds(method, (await localSetup(path, flags)).config, flags.agent);
+  if (needs.classification && !client.token()) await client.login();
+  if (!client.token()) { process.stderr.write(`Sign in to keep versions and runs in your account${needs.models ? " and to use hosted models" : ""}: method login\n`); return undefined; }
+  try {
+    const saved = await saveVersion(client, path);
+    process.stderr.write(`Version: ${saved.url}${saved.unchanged ? " (unchanged)" : ""}\n`);
+    return () => new Sync(client, runDir, saved.workflow_id, saved.version_id, undefined, method.run_data === "device");
+  } catch (error) {
+    process.stderr.write(`Not saved to your Method account: ${(error as Error).message} The run continues on this computer.\n`);
+    return undefined;
+  }
 }
 export async function localMain(args = process.argv.slice(2)) {
   const parsed = parse(args);

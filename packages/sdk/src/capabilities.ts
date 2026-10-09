@@ -15,13 +15,22 @@ export async function checkAgents(profiles:Record<string,any>){
  }
 }
 
-export async function resolveAgentProfiles(method: any, config: any, agent?: string) {
-  return resolveModels(method, config, {agent});
+export async function resolveAgentProfiles(method: any, config: any, agent?: string, hostedModel?: string) {
+  return resolveModels(method, config, {agent, hostedModel});
+}
+/** What a run needs from the Method account: hosted models for unconfigured call and agent steps, and classification. */
+export function accountNeeds(method: any, config: any, agent?: string) {
+  const steps = Object.values(method.steps ?? {}) as any[];
+  const execs = steps.flatMap(step => [step.do, step.check]).filter(exec => exec?.kind);
+  return {
+    models: !agent && !config.models?.default && execs.some(exec => ['call', 'agent'].includes(exec.kind) && !config.models?.[exec.model]),
+    classification: execs.some(exec => exec.kind === 'classify') && !config.classification?.api_key_env,
+  };
 }
 export async function checkConfiguration(config: any) {
   for (const profile of Object.values(config.runtimes ?? {}) as any[]) await executable(profile.command);
   for (const profile of Object.values(config.models ?? {}) as any[]) {
-    if (directBackends.includes(profile.backend) && !process.env[profile.api_key_env]) throw Error(`Missing environment variable: ${profile.api_key_env}`);
+    if (directBackends.includes(profile.backend) && profile.backend !== 'method' && !process.env[profile.api_key_env]) throw Error(`Missing environment variable: ${profile.api_key_env}`);
     if (['codex','claude'].includes(profile.backend)) await executable(profile.command ?? profile.backend);
   }
   await checkAgents(config.models ?? {});

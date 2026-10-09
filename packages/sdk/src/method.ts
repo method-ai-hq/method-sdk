@@ -3,16 +3,17 @@ import packageInfo from '../package.json' with { type: 'json' };
 import runtimeInfo from '@withmethod/runtime/package.json' with { type: 'json' };
 import { startRunWorker, waitForRun, cancelRun, workerAlive } from './run-worker.js';
 import { methodCache } from './prepare.js';
-import { collectPackage, restorePackage } from './method-files.js';
+import { restorePackage } from './method-files.js';
+import { publish } from './versions.js';
 import { runSaved } from './run-saved.js';
 import { bindInput, bindConnection } from './bindings.js';
-import { existsSync, readFileSync, realpathSync, openSync, closeSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { localAuthoring, authoringPath, readDocument, writeDocument } from "./authoring.js";
-import { semanticDigest, workflowDocumentDigest } from "../../contracts/src/identity.js";
+import { workflowDocumentDigest } from "../../contracts/src/identity.js";
 import { MethodClient, DEFAULT_SERVER } from "./method-client.js";
 import { MethodSync } from "./method-sync.js";
 import { progressMain } from "./progress.js";
@@ -21,7 +22,16 @@ import { writePrivateJson } from "./files.js";
 import { loadWorkflow } from "../../workflow-language/src/validate.js";
 
 import { methodHelp, overviewHelp as help } from "./method-help.js";
+import { fixFor } from "@withmethod/runtime/runner.js";
 
+/** The next step for a failure before the first step. */
+export function setupFix(error: any) {
+  if (error.code === 'missing_secret') {
+    const names = (error.missing ?? []).join(' ');
+    return `No step ran. Copy the values from a file the user names with method secret import FILE ${names}, or ask the user to enter each one with method secret set NAME (a private form in their browser). Never ask for a value in chat.`;
+  }
+  return fixFor(error);
+}
 function safePath(path: string) {
   return authoringPath(path);
 }
@@ -52,7 +62,12 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     const file = args[1]!; const directory=resolve(file,'..');
     writePrivateJson(join(directory,'worker.json'),{status:'running',pid:process.pid});
     try { await methodMain(JSON.parse(readFileSync(file,'utf8')).args,clientFactory); }
-    catch(error:any){process.stderr.write(error.message+'\n');process.exitCode=error.code==='needs_input'?2:1;}
+    catch(error:any){
+      // A run that fails before its first step still prints one result that says why and what to do.
+      const failed={status:error.code==='needs_input'?'needs_input':'failed',run_dir:directory,code:error.code??'setup_failed',error:error.message,...(error.missing?{missing:error.missing}:{}),fix:setupFix(error)};
+      if(!existsSync(join(directory,'summary.json')))writePrivateJson(join(directory,'summary.json'),failed);
+      process.stdout.write(JSON.stringify(failed,null,2)+'\n');process.exitCode=error.code==='needs_input'?2:1;
+    }
     finally {writePrivateJson(join(directory,'worker.json'),{status:'finished',pid:process.pid,exit_code:Number(process.exitCode??0)});}
     return;
   }
@@ -62,6 +77,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     const result=args[0]==='wait'?await waitForRun(directory):args[0]==='cancel'?cancelRun(directory):{running:workerAlive(directory),...(existsSync(join(directory,'worker.json'))?readDocument(join(directory,'worker.json')):{})};
     process.stdout.write(JSON.stringify(result)+'\n');return;
   }
+  if (args[0] === 'secret') return (await import('./secrets.js')).secretCommand(args.slice(1));
   if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.3\n`); return; }
   if (["observe", "test", "case", "effect"].includes(args[0] ?? "") && !args.includes("--help")) {
     const quality = await import("./quality.js");
@@ -95,10 +111,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     "server",
     "version",
     "file",
-    "base-version",
     "reason",
     "method",
-    "request-id",
     "connection",
     "accept-failing-case",
   ]);
@@ -126,12 +140,10 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     );
     return;
   }
-  const authorFile = command === "save" ? target : command === "create" ? values.file : undefined;
+  const authorFile = command === "publish" ? target : undefined;
   const metaFile = authorFile ? safePath(`${authorFile}.method.json`) : undefined;
   const meta = metaFile && existsSync(metaFile) ? readDocument(metaFile) : {};
-  if (authorFile && meta.server && values.server && meta.server !== values.server.replace(/\/$/, ""))
-    throw Error("This draft belongs to another server. Use method get from the intended server into a new file.");
-  if (!["status","login","logout","devices","revoke","list","get","steps","step","update","run","runs","logs","create","save","bind","state"].includes(command)) throw Error(help);
+  if (!["status","login","logout","devices","revoke","list","get","steps","step","run","runs","logs","publish","bind","state"].includes(command)) throw Error(help);
   const client = clientFactory(values.server ?? meta.server ?? DEFAULT_SERVER);
   if (command === "login") {
     await client.login();
@@ -203,58 +215,13 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     else print(await client.request(path));
     return;
   }
-  if (command === "create" || command === "save") {
-    if (!authorFile || !metaFile) throw Error("Use method create --file FILE or method save FILE --reason TEXT.");
-    if (command === "create" && meta.workflow_id) throw Error("This draft is already saved. Use method save to create a new version.");
-    const lock = safePath(`${authorFile}.lock`);
-    let fd: number;
-    try { fd = openSync(lock, "wx", 0o600); } catch { throw Error("The draft is locked. Wait for the other command."); }
-    try {
-      const workflow = loadWorkflow(readDocument(authorFile));
-      // A version that breaks an approved case is not saved, unless each failing case is accepted with a reason.
-      const accepted = (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean);
-      const gate = await (await import("./quality.js")).caseGate(safePath(authorFile), accepted, meta.pending?.reason ?? values.reason);
-      const latest = existsSync(metaFile) ? readDocument(metaFile) : {};
-      if (JSON.stringify(latest) !== JSON.stringify(meta)) throw Error("The draft was saved by another process. Retry.");
-      const pack = await collectPackage(authorFile, workflow, client);
-      const digest = workflowDocumentDigest(workflow);
-      const confirm = async (id: string, version: string) => {
-        const stored = await client.request<any>(`/api/cli/methods/${encodeURIComponent(id)}?version=${encodeURIComponent(version)}`);
-        if (stored.version_id !== version || workflowDocumentDigest(loadWorkflow(stored.workflow)) !== digest || stored.package?.digest !== pack?.digest) throw Error("The saved version does not match this draft. Keep the draft and its sidecar; retry the save before making changes.");
-      };
-      if (!meta.pending && meta.digest === digest && meta.package_digest === pack?.digest && meta.workflow_id) { await confirm(meta.workflow_id, meta.base_version); print({ confirmed: true, document_sha256: digest, unchanged: true, workflow_id: meta.workflow_id, version_id: meta.base_version, url: `${client.server}/methods/${meta.workflow_id}?version=${meta.base_version}` }); return; }
-      if (meta.pending && ((meta.pending.digest !== digest && (meta.digest_format || meta.pending.digest !== semanticDigest(workflow))) || meta.pending.package_digest !== pack?.digest)) throw Error("A previous save has no confirmed response. Restore that draft and retry before changing it.");
-      const reason = meta.pending?.reason ?? (values.reason && gate.line ? `${values.reason} ${gate.line}` : values.reason);
-      if (meta.workflow_id && !reason) throw Error("Supply --reason for the new version.");
-      const requestId = meta.pending?.request_id ?? values["request-id"] ?? randomUUID();
-      const pending = { ...meta, digest_format: "document/1", server: client.server, pending: { digest, package_digest:pack?.digest, request_id: requestId, reason } };
-      writePrivateJson(metaFile, pending);
-      const saved = meta.workflow_id
-        ? await client.request<any>(`/api/cli/methods/${encodeURIComponent(meta.workflow_id)}`, "POST", { workflow, package:pack, base_version: meta.base_version, reason })
-        : await client.request<any>("/api/cli/methods", "POST", { workflow, package:pack, request_id: requestId });
-      const workflowId = meta.workflow_id ?? saved.workflow_id;
-      await confirm(workflowId, saved.version_id);
-      writePrivateJson(metaFile, { server: client.server, workflow_id: workflowId, base_version: saved.version_id, digest, package_digest:pack?.digest, digest_format: "document/1" });
-      print({ ...saved, confirmed: true, document_sha256: digest, ...(gate.line ? { cases: gate.line } : {}), ...(pack?{package_sha256:pack.digest,runtime:pack.runtime,files:pack.files.map(f=>f.path)}:{}), workflow_id: workflowId, server: client.server, url: `${client.server}/methods/${workflowId}?version=${saved.version_id}` });
-    } finally { closeSync(fd); unlinkSync(lock); }
+  if (command === "publish") {
+    if (!authorFile) throw Error("Use method publish FILE [--reason TEXT].");
+    print(await publish(client, safePath(authorFile), values.reason, (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean)));
     return;
   }
   if (!target) throw Error(help);
   const path = `/api/cli/methods/${encodeURIComponent(target)}`;
-  if (command === "update") {
-    if (!values.file || !values["base-version"] || !values.reason)
-      throw Error(
-        "Supply --file, --base-version, and --reason. Use method get to read the current version first.",
-      );
-    const workflow = loadWorkflow(readFileSync(safePath(values.file), "utf8"));
-    const gate = await (await import("./quality.js")).caseGate(safePath(values.file), (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean), values.reason);
-    const pack = await collectPackage(values.file, workflow, client);
-    const updated=await client.request<any>(path,"POST",{workflow,package:pack,base_version:values["base-version"],reason:gate.line?`${values.reason} ${gate.line}`:values.reason});
-    const confirmed=await client.request<any>(path+`?version=${encodeURIComponent(updated.version_id)}`);
-    if(workflowDocumentDigest(loadWorkflow(confirmed.workflow))!==workflowDocumentDigest(workflow)||confirmed.package?.digest!==pack?.digest)throw Error('Saved version readback does not match the complete package.');
-    print({...updated,confirmed:true,...(pack?{package_sha256:pack.digest,runtime:pack.runtime,files:pack.files.map(f=>f.path)}:{})});
-    return;
-  }
   if (!["get", "steps", "step", "run"].includes(command)) throw Error(help);
   const saved = await client.request<{
     workflow_id: string;

@@ -1,8 +1,73 @@
 <!-- Generated from packages/sdk/src/method-help.ts. -->
 
-# Author with Method
+# Build a Method
 
-Build a Method for the user's repeated work.
+1. **Sign in first.** Run `method status`. If it is not signed in, run `method login` and let the user approve in the browser. Signed in, model and classification steps need no keys, each run saves a version when the file changed, and runs appear on the dashboard.
+2. **Each model or classifier request is its own step**: `call`, `agent`, or `classify`, with its prompt in the Method. Then the user can change one prompt, run again, and compare. A script never calls a model API; `validate` and `run` refuse it (`model_call_in_script`). When the user already has code that does the work, keep its fixed logic as `run` steps and move each prompt and rubric into its own step. "The same thing" means the same behavior with steps, not a wrapper around the code. If a request cannot become a step because Method lacks a feature, tell the user what is missing. Do not wrap the code.
+3. **Propose before you build.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Ask only for information that would change the design.
+4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. `--rerun STEP` runs a step again anyway; `--fresh` runs every step.
+5. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose. Model and classification steps need none. To supply values, run `method secret import FILE NAME...` with a file that the user names, or ask the user to run `method secret set NAME`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
+6. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
+7. **Run data.** Run content goes to the user's account by default. When the inputs contain personal data about other people, ask once: keep run content on this computer (`run_data: device`) or in the account.
+8. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again.
+9. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
+
+When a run fails, read its `fix` and `diagnostics`, change the step, and run again.
+
+# A complete small Method
+
+```yaml
+format: method/3.3
+name: Weekly ticket summary
+goal: Score this week's support tickets by urgency and write a short summary for the team.
+inputs:
+  week:
+    type: text
+    description: Monday of the week to summarize, as YYYY-MM-DD.
+secrets:
+  HELPDESK_TOKEN: Read-only token for the help desk export.
+steps:
+  read:
+    name: Read the tickets
+    purpose: Downloads the week's tickets from the help desk export and returns each ticket's id and text. Changes nothing.
+    in: {week: inputs.week}
+    do: {kind: run, runtime: python, entrypoint: read_tickets.py}
+    out:
+      tickets: {type: list, fields: {id: text, text: text}, description: The week's tickets.}
+  urgency:
+    name: Score urgency
+    each: {ticket: tickets}
+    concurrency: 8
+    do:
+      kind: classify
+      question: How urgent is this support ticket?
+      options:
+        high: High - a customer cannot work, or data is at risk.
+        normal: Normal - a problem with a workaround.
+        low: Low - a question or a request.
+    out: urgency
+  summary:
+    in: {tickets: tickets, urgency: urgency}
+    do:
+      kind: call
+      model: default
+      prompt: |
+        Write a five-sentence summary of this week's support tickets for the team.
+        Start with the high-urgency tickets. Quote no customer names.
+        The inputs hold the tickets and their urgency, in the same order.
+    out:
+      summary: {type: text, description: The summary for the team.}
+result: summary
+```
+
+`read_tickets.py` reads HELPDESK_TOKEN from its environment. The classify and call steps use the Method account, so they need no key.
+
+```sh
+method validate tickets.method
+method run tickets.method --inputs inputs.json   # prints the version and dashboard links
+# change the summary prompt, then:
+method run tickets.method --inputs inputs.json   # reuses read and urgency; runs summary
+```
 
 # Choose the design
 
@@ -12,7 +77,7 @@ Choose each operation's execution type from its requirements:
 
 | Requirement | Execution type |
 | --- | --- |
-| Fixed rules, calculations, file transformations, or a known API operation | run |
+| Fixed rules, calculations, file transformations, or a known API operation that is not a model | run |
 | A structured model response from supplied information | call |
 | Model-directed investigation or tool use | agent |
 | Selection from named options with probabilities | classify |
@@ -47,7 +112,7 @@ These are design outlines, not runnable Method files.
 
 # First design proposal
 
-In the first design proposal, state the intended result and material assumptions. List each step's execution type, purpose, and output. Explain any additional check you choose to add. Explain boundaries added for checks, retries, human decisions, or external changes.
+In the first design proposal, state the intended result and material assumptions. List each step's execution type, purpose, and output. When the user has existing prompts, rubrics, or code that calls a model, list each one and the step that holds it. Explain any additional check you choose to add. Explain boundaries added for checks, retries, human decisions, or external changes.
 
 State the expected model requests and agent processes when the configuration makes those counts known. Mark unknown counts as unknown.
 
@@ -56,9 +121,18 @@ Explain why tool-free model work uses call or why it requires an agent. Keep int
 Follow the user's requested approval process. A proposal does not create an additional approval requirement when implementation is already authorized.
 
 
-Validate with method validate task.method, then run it with method run task.method and inspect the result. A local run uploads nothing. Save it online with method save task.method only when the user wants to share or schedule it.
+Use method schema for field definitions, method authoring concepts for the format, method authoring execution for setup, and method COMMAND --help for command arguments.
 
-Use method schema for field definitions, method authoring execution for setup, and method COMMAND --help for command arguments.
+# Example catalog
+
+- [notes-summary](examples/notes-summary.md): The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call, and saves a summary file. The folder is observed automatically.
+- [daily-briefing](examples/daily-briefing.md): Turns prepared records into a cited briefing website using an approved writing example, a source check, and rendering scripts.
+- [social-briefing](examples/social-briefing.md): Researches a topic through Grok, alphaXiv, and LinkedIn in the browser, then writes a briefing with quotes and source links.
+- [outbound-management](examples/outbound-management.md): Reads email and prospect sources, updates persistent CRM state, and saves daily tasks and outreach drafts for review.
+- [message-routing](examples/message-routing.md): Classifies a customer message with Jev, then applies a script rule to choose a support destination.
+
+After choosing the execution types and step boundaries, read complete examples that help implement the design with `method authoring example EXAMPLE_ID`. Read additional examples when needed. Use their syntax and relevant implementation details. Choose the steps for the current task independently.
+
 
 # Method concepts
 
@@ -134,16 +208,6 @@ probability is at least 90%. Otherwise chooses Manual review. Returns the
 destination and the rule used.”
 
 
-# Example catalog
-
-- [notes-summary](examples/notes-summary.md): The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call, and saves a summary file. The folder is observed automatically.
-- [daily-briefing](examples/daily-briefing.md): Turns prepared records into a cited briefing website using an approved writing example, a source check, and rendering scripts.
-- [social-briefing](examples/social-briefing.md): Researches a topic through Grok, alphaXiv, and LinkedIn in the browser, then writes a briefing with quotes and source links.
-- [outbound-management](examples/outbound-management.md): Reads email and prospect sources, updates persistent CRM state, and saves daily tasks and outreach drafts for review.
-- [message-routing](examples/message-routing.md): Classifies a customer message with Jev, then applies a script rule to choose a support destination.
-
-After choosing the execution types and step boundaries, read complete examples that help implement the design with `method authoring example EXAMPLE_ID`. Read additional examples when needed. Use their syntax and relevant implementation details. Choose the steps for the current task independently.
-
 
 
 # Execution setup
@@ -154,12 +218,12 @@ Classification uses the Method account. A classifier-only Method needs sign-in a
 
 Classification sends the step's declared inputs to Method and its classification provider. Method currently covers the cost within service limits. Saved runs contain the declared inputs and results.
 
-Explicit named model profiles keep their settings. For an unconfigured profile, Method uses --agent, the configured default, the identified calling agent, or the sole available supported agent. If a choice is needed, use --agent codex or --agent claude. Both use normal sign-in. The selected provider stays fixed on resume.
+Explicit named model profiles keep their settings. For an unconfigured profile, Method uses --agent, the configured default, the account's hosted model when this computer is signed in, the identified calling agent, or the sole available supported agent. A hosted model needs no key and no local agent; each account has a model credit, and the run summary reports usage.cost_usd. If a choice is needed, use --agent codex or --agent claude. The selected provider stays fixed on resume.
 A simple local-agent Method needs no runtime.json. When needed, put runtime.json beside the Method. New saved versions carry their helpers and runtime.json. Older versions without saved files still need --workspace DIR. --config overrides that file. Relative files-environment paths and executable paths in configuration resolve from the config folder. A bare executable name is found on PATH.
 Environment declarations name required connections. An agent with browser: environment.NAME receives the standard direct browser-use controls. Codex or Claude chooses the browser actions. Method opens the selected browser, retains its sign-ins privately, and reuses the session across steps. On macOS, Method copies your last-used Chrome profile and runs headless. Sign in through Chrome before running the Method. Run headless by default. If a task requires a visible browser, show it only for that task, then return to headless mode. Use method browser connect --cdp URL to attach to a Chrome session that permits control. Validation does not open a browser. Each run has a separate profile; resume reads the current page, not a saved web snapshot.
 Operator config supplies runtimes, tools, environment, and run limits. Optional models.PROFILE: {backend: codex, model: MODEL} selects a model; omit model to use the Codex default. command can select the Codex executable and reasoning_effort can override its setting.
 A models.PROFILE with backend: openai-responses, anthropic-messages, or openrouter-chat calls that provider's API directly, without an agent process. It requires model, api_key_env, and max_output_tokens; optional reasoning_effort (openai-responses, openrouter-chat) or effort (anthropic-messages). Use a direct profile for call steps and for agent steps with script tools. Keep key values out of the config; api_key_env names an existing environment variable, for example ANTHROPIC_API_KEY or OPENROUTER_API_KEY.
-runtimes.PROFILE uses command, version, optional args and env variable names. Scripts and Codex require allow_local_processes: true. They are trusted local processes.
+runtimes.PROFILE uses command, version, and optional args. Scripts and Codex require allow_local_processes: true. They are trusted local processes. A script receives the Method's declared secrets as environment variables; declare them under secrets: and supply values with method secret import or method secret set. A missing value stops the run before its first step.
 Custom script tools declare description, in, out, run, and effects. List custom tools in the step and config. Browser controls are supplied automatically; interactive controls require changes: [environment.NAME]. Check tools cannot declare external effects.
 Defaults: one hour per run, ten minutes per step, 100 model requests, 100 step invocations, 200 tool calls, 16 MiB for input and output, and 8 concurrent items per step. Step defaults allow 32 agent turns/model requests. Override run limits with timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_output_bytes, max_request_bytes, max_concurrency. Method enforces the Codex process timeout, prompt/output size, and declared Method tool-call limit. max_model_requests governs direct API and classification requests; max_agent_turns governs the direct API agent loop; Codex manages its own internal requests and built-in tools. Codex usage and process logs are saved separately.
 Declared tools are exposed to each Codex or Claude step through a temporary local MCP connection. It uses the same script execution and checks as the API path. Codex also retains the user's installed tools. Method does not sandbox these processes. No persistent Codex configuration is edited.
@@ -187,12 +251,12 @@ When the user says a result was wrong:
 1. Read the run (result.json, events.jsonl) and fix the Method. Run it again and show the user the new result.
 2. If the user wants the fix to stay, ask once: "Keep this as a rule: <the rule in plain words>?"
 3. On yes, record it: method case new FILE --id ID --run BAD_RUN --passing-run NEW_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names the output to judge (default: the Method's result; a path to a file that the run saved is judged by that file's contents). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
-4. Run method test FILE. Every case must pass. method save refuses a version that breaks a case.
+4. Run method test FILE. Every case must pass. method publish refuses a version that breaks a case.
 For a one-time preference, edit and run again; a case is not needed.
 
 ## Checked on every run, or on every new version
 
-A case checks future versions of the Method: method test and method save run it. A check on a step checks every run, and a failed check stops the run before later steps (for example before the save), with the check's reason in the error. When the user wants something "checked every time", add a step check; when they also want the rule kept for future edits, add a case too. A check that the output says only what the sources say:
+A case checks future versions of the Method: method test and method publish run it. A check on a step checks every run, and a failed check stops the run before later steps (for example before the save), with the check's reason in the error. When the user wants something "checked every time", add a step check; when they also want the rule kept for future edits, add a case too. A check that the output says only what the sources say:
   check:
     kind: agent
     model: default
@@ -218,11 +282,11 @@ To edit a failed method, read its exact saved version and logs, compare the curr
 
 For a stopped run, read summary.json, events.jsonl, and checkpoint.json. Resume with the original method, config, --run-dir DIR, and --resume. Accepted steps and iterations are reused.
 An unfinished action needs --retry STEP:ITERATION after inspection of its external effects. A retry consumes the remaining run budget. Budgets do not reset on resume. Resume always uses the run's saved bundle, so a code fix needs a new run.
-When a fix changes only steps that were not accepted, start a fork: method run FILE --from-run DIR --reuse STEP[,STEP]. List the accepted steps to keep and every step they depend on; the failure summary names them. The fork has a new bundle and reuses a listed step only if its definition, referenced inputs and environment, model profile, tools, entrypoint files, and runtime are unchanged. Otherwise it stops with fork_mismatch. It copies declared file outputs and records forked_from with the parent run and the changed files. It does not trace helper files that an entrypoint imports: if you changed a helper that a reused step imports, do not reuse that step.
+To fix a failed or wrong step, change it and run the Method again. The new run reuses every iteration whose step definition, inputs, model profile, tools, runtime, and (for script steps) bundle files match an earlier accepted run on this computer, and copies their declared file outputs. Steps with ask or effects, steps that change state or a service, and tools with effects are never reused. Use --rerun STEP to run a step again anyway, or --fresh to reuse nothing.
 For ask, supply --human FILE containing {steps: {"STEP:ITERATION": {outputs: {NAME: VALUE}}}}. Use the user's actual answer. Checks still run.
 For a stale .lock, first confirm the process has stopped. Never remove an active process lock.
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
-For a save conflict, get the latest version and apply the change there. For an uncertain upload, retry the same file and command with its sidecar unchanged.
+For a version conflict, get the latest version and apply the change there. For an uncertain upload, retry the same file and command with its sidecar unchanged.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
 New Methods use format method/3.3. Existing method/3.1 and method/3.2 documents retain their validation rules.
 After a failed action with effects, the failure lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
@@ -230,7 +294,7 @@ After a failed action with effects, the failure lists what the observers saw. A 
 
 # Command reference
 
-Local authoring commands edit draft files. create, save and update publish Method versions. run executes a saved version.
+Local authoring commands edit draft files. A signed-in run saves a version when the file changed. publish marks a version for sharing. run also executes a saved version by ID.
 
 Server: https://app.withmethod.ai by default. --server selects another server and its login.
 Success exits 0. Errors exit 1 with text on stderr, unless the command specifies another result.
@@ -893,31 +957,6 @@ Example:
 method schema step
 ```
 
-## create
-
-Save a complete local draft as a new online method.
-
-Usage:
-
-```sh
-method create --file FILE [--request-id UUID] [--server URL]
-```
-
-Arguments and defaults:
---file required. Request ID defaults to a new UUID and is saved before upload. The draft must not already belong to an online method. Validation runs before upload.
-
-Result and changes:
-JSON with workflow_id, version_id, version_number, server and url. Writes FILE.method.json.
-
-Errors:
-Invalid method; linked draft; conflicting request ID; pending save with changed contents. See recovery for an uncertain upload.
-
-Example:
-
-```sh
-method create --file message.method
-```
-
 ## get
 
 Read an online method; optionally make a local draft for editing.
@@ -943,54 +982,56 @@ Example:
 method get wf_example --out edit.method
 ```
 
-## save
+## publish
 
-Save a draft as one online version.
-
-Usage:
-
-```sh
-method save FILE [--reason TEXT] [--request-id UUID] [--server URL]
-```
-
-Arguments and defaults:
-Before saving, the Method's cases run; a version that breaks an approved case is refused. To save anyway, add --accept-failing-case ID[,ID] with --reason; the version records it. New draft: creates a method. Linked draft: --reason required, base version and destination read from FILE.method.json. --request-id is used for first creation; retained pending ID wins on retry. Default server comes from the sidecar, then the online default.
-
-Result and changes:
-JSON with workflow_id, version_id, server, url, confirmed:true and document_sha256 after reading back the exact saved version; confirmed saves also include version_number. Updates FILE.method.json. Unchanged draft: unchanged:true, no new version.
-
-Errors:
-Invalid method; missing reason; pending changed payload; wrong server; stale base (409). See recovery before retrying.
-
-Example:
-
-```sh
-method save edit.method --reason 'Give each output a clear description.'
-```
-
-## update
-
-Save a full method against an explicit base version.
+Mark a version as published, for sharing, schedules, and deploys.
 
 Usage:
 
 ```sh
-method update WORKFLOW_ID --file FILE --base-version VERSION_ID --reason TEXT [--server URL]
+method publish FILE [--reason TEXT] [--accept-failing-case ID[,ID]] [--server URL]
 ```
 
 Arguments and defaults:
-All listed non-server arguments required. Prefer get --out and save for normal editing. This lower-level command does not read or update the local sidecar. It validates the whole document.
+Runs the Method's cases first; a version that breaks an approved case is refused unless --accept-failing-case names it, and the version records that. Saves a version when the file changed since its last run, then marks it published with the reason (default: Published.). The first publish of a new file creates the Method.
 
 Result and changes:
-JSON {version_id,version_number}. Creates an online version. After success, use get --out NEW_FILE for further edits.
+JSON with workflow_id, version_id, url, published_at, and the cases line.
 
 Errors:
-Stale base (409); invalid method; missing reason. A repeated update returns the saved version only when parent, contents and reason still match the latest version.
+Invalid method, failing case, conflicting saved version, or no network.
 
 Example:
 
 ```sh
-method update wf_example --file edit.method --base-version version_example --reason 'Clarify the query.'
+method publish task.method --reason 'Shorter introduction'
+```
+
+## secret
+
+Give this computer the values of a Method's declared secrets.
+
+Usage:
+
+```sh
+method secret import FILE NAME...
+method secret set NAME
+method secret list [NAME...]
+```
+
+Arguments and defaults:
+import copies the named values from a KEY=VALUE file that the user names, without printing them. set opens a private form on 127.0.0.1 in the browser for one value. list shows names and where each value is found (shell, this computer, or missing), never values. Values are kept in ~/.config/method/secrets.json (mode 0600) and are never sent to Method. A value exported in the shell is used first.
+
+Result and changes:
+JSON with the saved names, or the list.
+
+Errors:
+A name is missing from the file, or no value was entered.
+
+Example:
+
+```sh
+method secret import ../service/.env ARCHIVE_TOKEN
 ```
 
 ## status
@@ -1261,7 +1302,7 @@ method sync .method-runs/wf_example/saved-run
 
 ## run
 
-Run a local .method file, or a saved Method by ID. A local file run keeps its records in .method-runs and uploads nothing. A saved Method's run uploads its records to the dashboard.
+Run a local .method file, or a saved Method by ID. When this computer is signed in, a run of a local file saves a version when the file changed and sends the run's records to the dashboard; without sign-in the records stay in .method-runs. Steps whose definition and inputs match an earlier accepted run on this computer are reused.
 
 Usage:
 
@@ -1277,7 +1318,8 @@ Current methods optionally use runtime.json beside a local file, or in the curre
 --run-dir DIR: the folder for this run's records (new runs too; default .method-runs/ID).
 --agent codex|claude: select an agent for unconfigured profiles in a new run.
 --resume: continue the same saved run with its saved agent.
---from-run DIR --reuse STEP[,STEP]: start a new run that reuses accepted steps of a stopped or completed run. Use it after a fix to steps that were not accepted. See method authoring recovery.
+--rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
+--fresh: run every step; reuse nothing.
 --human FILE: saved human answers for the current runtime.
 --verbose: print runtime events.
 Use method doctor to check the installed Node and configured tools.

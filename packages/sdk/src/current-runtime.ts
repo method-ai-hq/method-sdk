@@ -2,12 +2,14 @@ import { managedClassification } from './classification-client.js';
 import { MethodClient } from './method-client.js';
 import {recordDeploymentSource,finishDeploymentSource} from './deployment-source.js';
 import {openBrowser} from './browser.js';
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname } from 'node:path';
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { join, dirname, resolve } from 'node:path';
+import { managedModels } from './hosted-models.js';
+import { resolveSecrets } from './secrets.js';
 import { randomUUID } from 'node:crypto';
 import { assertCheckpointExecutor } from '@withmethod/runtime/executor-version.js';
-import { checkAgents, resolveAgentProfiles } from './capabilities.js';
-import { prepareRuntime } from './prepare.js';
+import { accountNeeds, checkAgents, resolveAgentProfiles } from './capabilities.js';
+import { prepareRuntime, methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
 import { runMethod as executeMethod } from "@withmethod/runtime/runner.js";
 import { localSetup } from "./local-setup.js";
@@ -16,6 +18,22 @@ import type { MethodSync } from "./method-sync.js";
 import type { parse } from "./local-cli.js";
 
 export { executeMethod as runCurrentMethod };
+
+/** Recent run folders on this computer, newest first. The runtime reuses only iterations whose key matches. */
+export function recentRuns(exclude: string, limit = 20) {
+  const roots = [join(methodCache(), 'runs'), join(process.cwd(), '.method-runs'), dirname(resolve(exclude))];
+  const found = new Map<string, number>();
+  for (const root of new Set(roots.map(path => resolve(path)))) {
+    let names: string[] = [];
+    try { names = readdirSync(root); } catch { continue; }
+    for (const name of names) {
+      const dir = join(root, name);
+      if (dir === resolve(exclude)) continue;
+      try { found.set(dir, statSync(join(dir, 'checkpoint.json')).mtimeMs); } catch { /* not a run */ }
+    }
+  }
+  return [...found].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([dir]) => dir);
+}
 export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server)) {
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
@@ -36,7 +54,9 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     sync = syncFactory?.();
     await sync?.start(method, json(flags.inputs) ?? {}, {});
     // A run with its own Typesafe key (config.classification.api_key_env) needs no Method sign-in for classification.
-    const classification = Object.values(method.steps).some((step: any) => step.do?.kind === 'classify') && !config.classification?.api_key_env ? managedClassification(client) : undefined;
+    const needs = accountNeeds(method, config, flags.agent);
+    const classification = needs.classification ? managedClassification(client) : undefined;
+    // Classification uses the Method account. Hosted models are used when this computer is signed in.
     if (classification && !client.token()) await client.login();
     const resolvedFile = flags['run-dir'] ? join(authoringPath(flags['run-dir']), 'runtime.resolved.json') : undefined;
     const priorCheckpoint = !!flags.resume && !!resolvedFile && !existsSync(resolvedFile)
@@ -48,7 +68,12 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     } else {
       if (flags.resume && resolvedFile && existsSync(resolvedFile)) config = JSON.parse(readFileSync(resolvedFile,'utf8'));
       else {
-        config.models = await resolveAgentProfiles(method, config, flags.agent);
+        let hostedModel: string | undefined;
+        if (needs.models && client.token()) {
+          try { hostedModel = await managedModels(client).model(); }
+          catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}). Using a local agent.\n`); }
+        }
+        config.models = await resolveAgentProfiles(method, config, flags.agent, hostedModel);
         if (classification) config.classification = await classification.resolve(controller.signal);
       }
       await checkAgents(config.models);
@@ -59,10 +84,13 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     }
     if(!flags.resume)recordDeploymentSource(authoringPath(flags['run-dir']!),sourceRoot,authoringPath(file),method,config);
     browser = await openBrowser(method,config,flags['run-dir']!,controller.signal);
+    const hostedModels = Object.values(config.models ?? {}).some((profile: any) => profile.backend === 'method') ? managedModels(client) : undefined;
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
       agent: flags.agent as 'codex' | 'claude' | undefined, inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
-      fromRun: flags['from-run'] ? authoringPath(flags['from-run']) : undefined, reuse: flags.reuse?.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean),
+      cacheFrom: flags.resume ? [] : recentRuns(authoringPath(flags['run-dir']!)),
+      fresh: flags.fresh ? true : flags.rerun?.length ? flags.rerun.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean) : undefined,
+      secrets: resolveSecrets(Object.keys(method.secrets ?? {})), ...(hostedModels ? { hostedModels } : {}),
       human: json(flags.human), signal: controller.signal,
       ...(browser ? {connections:browser.connections} : {}),
       sourceRoot, ...(classification ? {classification} : {}),
