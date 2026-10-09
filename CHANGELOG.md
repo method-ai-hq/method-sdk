@@ -1,3 +1,7 @@
+# 0.13.1
+
+- Fix items that run at once: they wrote `state.json` through one shared temporary file, so a run could fail under load (runtime 0.11.1).
+
 # 0.13.0
 
 - **Run items at once.** Add `concurrency: N` (1–32) to an `each` step to run up to N items at the same time, for example a classify or `call` over many records. The operator limit `max_concurrency` (default 8) caps it. The step cannot use `ask`, `changes`, or `effects`. Outputs keep item order. The first failure stops the other items; resume runs only the items that did not finish (runtime 0.11.0).
