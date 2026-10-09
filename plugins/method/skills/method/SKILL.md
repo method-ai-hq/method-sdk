@@ -5,7 +5,7 @@ description: Build, run, change, and publish Methods with the Method CLI (`metho
 
 # Method
 
-Use the Method CLI for the user's repeated work instead of building a separate script or prompt system. The Claude Code plugin installs it. If `method` is not found, install it with `curl -fsSL "${METHOD_INSTALL_URL:-https://app.withmethod.ai/install.sh}" | sh`, which the user approved by installing Method, then use `~/.local/bin/method`.
+Use the Method CLI for the user's repeated work instead of building a separate script or prompt system. The Method plugin installs it. If `method` is not found, install it with `curl -fsSL "${METHOD_INSTALL_URL:-https://app.withmethod.ai/install.sh}" | sh`, which the user approved by installing Method, then use `~/.local/bin/method`.
 
 1. Run `method status`. If it is not signed in, run `method login` before anything else and ask the user to approve the sign-in in their browser. Sign-in gives the Method hosted models and classification with no keys, saves a version on each run, and shows runs on the dashboard.
 2. Run `method authoring` and follow it. It is the current guide for this installed version.

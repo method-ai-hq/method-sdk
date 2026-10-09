@@ -80,7 +80,9 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     return v.json !== undefined ? JSON.parse(v.json) : v["value-file"] ? readDocument(v["value-file"]) : v.text !== undefined ? v.text : readFileSync(authoringPath(v["text-file"]!), "utf8");
   };
   if (command === "schema") {
-    if (!p[0] || ["method", "config"].includes(p[0])) { print(p[0] === "config" ? configSchema : methodSchema); return true; }
+    // The short reference is enough to write a Method; the JSON schemas are for tools.
+    if (!p[0]) { process.stdout.write((await import("./authoring-instructions.js")).fieldReference); return true; }
+    if (["method", "config"].includes(p[0])) { print(p[0] === "config" ? configSchema : methodSchema); return true; }
     const schemas: Record<string, unknown> = {method: methodSchema, config: configSchema,
       ...Object.fromEntries(["step", "check", "data"].map(name => [name, { $schema: methodSchema.$schema, $defs: methodSchema.$defs, $ref: `#/$defs/${name}` }])),
       environment: { ...methodSchema.properties.environment.additionalProperties }};
@@ -117,7 +119,22 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
         const classification = signedIn && missingSetup.some((item: string) => item.startsWith("Classification needs Method sign-in"));
         const needed = [...new Set(missingSetup.filter((item: string) => !automatic.includes(item) && !item.startsWith("Prepare browser:") && !item.startsWith("Connect tool: browser_") && !(classification && item.startsWith("Classification needs Method sign-in"))))];
         const prepared = [...automatic.map((item: string) => item.slice(8, -17)), ...(browser ? ["the browser"] : []), ...(classification ? ["classification with your Method sign-in"] : [])];
-        print({ valid: true, definition, local_setup: needed.length ? "needs_action" : "valid", ...(needed.length ? {missing_setup:needed} : {}), ...(prepared.length ? {note:`method run prepares ${prepared.join(" and ")} on the first run.`} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps: Object.keys(workflow.steps).length, executed: false });
+        // What each step executes, and what it still needs on this computer.
+        const missingSecrets = Object.keys((workflow as any).secrets ?? {}).filter(name => !secrets[name]);
+        const login = "method login";
+        const steps = Object.entries(workflow.steps).map(([id, step]: [string, any]) => {
+          const exec = step.do, profile = config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
+          const runs = step.ask ? "asks the user"
+            : exec.kind === "run" ? `${exec.runtime} ${exec.entrypoint}`
+            : exec.kind === "classify" ? (config.classification?.api_key_env ? "Typesafe with your own key" : "Method's classifier")
+            : profile?.backend === "method" ? `the hosted model ${profile.model}`
+            : profile ? `${profile.backend}${profile.model ? ` ${profile.model}` : ""}`
+            : signedIn ? "the account's hosted model" : "a local Codex or Claude agent";
+          const needs = [...(exec?.kind === "run" ? missingSecrets.map(name => `secret ${name}`) : []),
+            ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env || ["call", "agent"].includes(exec?.kind) && !profile) ? [`${login} (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
+          return { id, runs, ...(needs.length ? { needs } : {}) };
+        });
+        print({ valid: true, definition, local_setup: needed.length ? "needs_action" : "valid", ...(needed.length ? {missing_setup:needed} : {}), ...(prepared.length ? {note:`method run prepares ${prepared.join(" and ")} on the first run.`} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps, executed: false });
       }
     } catch (error) { print({ valid: false, definition, local_setup: definition === "valid" ? "invalid" : "not_checked", executed: false, error: error instanceof Error ? error.message : String(error) }); process.exitCode = 1; }
     return true;

@@ -6,11 +6,12 @@
 2. **Each model or classifier request is its own step**: `call`, `agent`, or `classify`, with its prompt in the Method. Then the user can change one prompt, run again, and compare. A script never calls a model API; `validate` and `run` refuse it (`model_call_in_script`). When the user already has code that does the work, keep its fixed logic as `run` steps and move each prompt and rubric into its own step. "The same thing" means the same behavior with steps, not a wrapper around the code. If a request cannot become a step because Method lacks a feature, tell the user what is missing. Do not wrap the code.
 3. **Show the design, then build it in the same turn.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Do not wait for approval unless the user asked to approve first. Ask only for information that you cannot find and that would change the design.
 4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. `--rerun STEP` runs a step again anyway; `--fresh` runs every step.
-5. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: {backend: method, model: "provider/model"}}` to runtime.json and use `model: writer` in the steps; it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. Say these defaults in one line and continue.
-6. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose. To supply values, run `method secret import FILE NAME...` with a file that the user names, or ask the user to run `method secret set NAME`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
-7. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
-8. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again.
-9. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
+5. **Keep the inputs of the existing code.** If the code takes an ID and looks up the record, the Method takes the same ID and looks it up the same way.
+6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: {backend: method, model: "provider/model"}}` to runtime.json and use `model: writer` in the steps; it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. Say these defaults in one line and continue.
+7. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose. Look for the key where the project keeps its keys: the README, `.env` files, and the code. Name the file to the user, ask once, then run `method secret import FILE NAME...` for the declared names only. Only when you find no file, ask the user to run `method secret set NAME`, which opens a private form in their browser. Values stay on this computer. Never ask for a value in chat and never print one.
+8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
+9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again.
+10. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
 
 When a run fails, read its `fix` and `diagnostics`, change the step, and run again.
 
@@ -68,6 +69,50 @@ method run tickets.method --inputs inputs.json   # prints the version and dashbo
 # change the summary prompt, then:
 method run tickets.method --inputs inputs.json   # reuses read and urgency; runs summary
 ```
+
+# Field reference
+
+```text
+format: method/3.3
+name, goal          text
+inputs              {NAME: DATA}           values the run receives (--inputs FILE)
+secrets             {NAME: purpose}        keys that scripts receive as environment variables
+environment         {NAME: {type: files | service | browser | desktop | tool, description}}
+files               [PATH]                 helper files that scripts import or read
+steps               {ID: STEP}
+result              REF, or {NAME: REF}
+run_data            account (default) | device
+
+DATA   {type: text | number | boolean | record | list | file, description,
+        fields: {NAME: TYPE}   (a record, or a list of records)
+        items: TYPE            (a list of one type)
+        default: VALUE}        A bare type such as text works inside fields and items.
+REF    inputs.NAME | an output NAME | NAME.field | state.NAME | environment.NAME
+
+STEP   name, purpose          a run step needs both: its rules, result, and external changes
+       in: {ALIAS: REF}       the values that the step receives
+       each: {ITEM: LIST_REF} run once per item; ITEM is given to the step, so do not repeat it in in
+       concurrency: 1-32      items at once, for an each step that changes nothing
+       when: BOOLEAN_REF      after: ID or [ID]      repeat: {max_iterations, until: BOOLEAN_OUTPUT}
+       do: one of
+         {kind: run, runtime: python | node, entrypoint: FILE, args: [...]}
+             reads one JSON object (its in) on stdin, prints one JSON object (its out); files go under $METHOD_OUTPUT_DIR
+         {kind: call, model: PROFILE, prompt: TEXT}
+             the step's in go to the model as JSON; {{ALIAS}} puts a text, number, or boolean value into the prompt
+         {kind: agent, model: PROFILE, prompt: TEXT, tools: [TOOL]}
+         {kind: classify, question: TEXT, options: {ID: description}}
+             out: NAME; the value has choice and probabilities
+       ask: TEXT              in place of do: a question for the user
+       out: {NAME: DATA}      (classify: out: NAME)
+       changes: [state.NAME | environment.NAME]; a service change needs effects or no_effect_reason
+       check, limits: {timeout_ms, max_model_requests, max_agent_turns}
+
+runtime.json beside the Method (optional)
+  models: {PROFILE: {backend: method, model: provider/model}}   a hosted model; no key. Steps without a profile use default.
+  environment: {NAME: path}   limits: {...}   allow_local_processes: true
+```
+
+`method schema method` prints the complete JSON schema.
 
 # Choose the design
 
@@ -934,7 +979,7 @@ method diff original.method task.method
 
 ## schema
 
-Read the machine-readable grammar.
+Read the format.
 
 Usage:
 
@@ -943,10 +988,10 @@ method schema [method|config|step|data|environment|check]
 ```
 
 Arguments and defaults:
-Default: method. Use authoring concepts for meaning and authoring recipes for examples.
+Without a name: a short field reference, enough to write a Method. With a name: that JSON schema, for tools.
 
 Result and changes:
-JSON Schema for tooling. Data declarations in methods use the six simple types.
+Text, or JSON Schema.
 
 Errors:
 Unknown schema name.
@@ -954,7 +999,7 @@ Unknown schema name.
 Example:
 
 ```sh
-method schema step
+method schema
 ```
 
 ## get

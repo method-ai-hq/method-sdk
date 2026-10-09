@@ -5,13 +5,13 @@
     "url": "https://withmethod.ai"
   },
   "metadata": {
-    "description": "The Method plugin for Claude Code."
+    "description": "The Method plugin for Claude Code and Codex."
   },
   "plugins": [
     {
       "name": "method",
-      "source": "./plugins/claude-code",
-      "description": "Turn repeated work into a Method: installs the Method CLI and teaches Claude to build, run, and improve Methods one step per prompt."
+      "source": "./plugins/method",
+      "description": "Turn repeated work into a Method: installs the Method CLI and teaches the agent to build, run, and improve Methods one step per prompt."
     }
   ]
 }

@@ -31,6 +31,8 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
   loadWorkflow(readFileSync(path, "utf8"));
   const notice = await (await import("./quality.js")).casesNotice(path);
   if (notice) process.stderr.write(notice + "\n");
+  const update = await (await import("./update.js")).updateNotice();
+  if (update) process.stderr.write(update + "\n");
   flags = { ...flags, "run-dir": flags["run-dir"] ?? join(process.cwd(), ".method-runs", randomUUID()) };
   await runCurrentFile(path, flags, syncFactory ?? await accountSync(path, flags));
 }

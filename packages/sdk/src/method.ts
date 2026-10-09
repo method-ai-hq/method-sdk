@@ -160,7 +160,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       try { await client.request("/api/cli/me"); signedIn = true; }
       catch (error) { if (!/^401:/.test(String((error as Error).message))) throw error; }
     }
-    process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn, ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : {}) }, null, 2) + "\n");
+    const update = await (await import("./update.js")).updateNotice();
+    process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn, ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : {}), ...(update ? { update } : {}) }, null, 2) + "\n");
     return;
   }
   // The first real command starts browser approval if no credential is saved.

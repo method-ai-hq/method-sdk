@@ -45,4 +45,14 @@ case ":$PATH:" in *":$bin_root:"*) ;; *)
   if ! grep -qsF "$line" "$profile"; then printf '\n# Method CLI\n%s\n' "$line" >> "$profile"; printf 'Added %s to PATH in %s.\n' "$bin_root" "$profile"; fi
   printf 'In this shell, run: %s\n' "$line";;
 esac
+# Add the Method plugin to each coding agent on this computer, so later sessions know Method. Failures are not errors.
+if [ -z "${METHOD_SKIP_PLUGIN:-}" ]; then
+  source=${METHOD_PLUGIN_SOURCE:-method-ai-hq/method-sdk}
+  if command -v claude >/dev/null 2>&1; then
+    { claude plugin marketplace add "$source"; claude plugin install method@method; } >/dev/null 2>&1 && printf 'Added the Method plugin to Claude Code.\n' || true
+  fi
+  if command -v codex >/dev/null 2>&1; then
+    { codex plugin marketplace add "$source"; codex plugin add method@method; } >/dev/null 2>&1 && printf 'Added the Method plugin to Codex.\n' || true
+  fi
+fi
 printf 'Next: method login\n'

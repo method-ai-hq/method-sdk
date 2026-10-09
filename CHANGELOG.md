@@ -2,7 +2,7 @@
 
 A first Method needs fewer steps, no keys, and no extra commands (runtime 0.12.0).
 
-- **Claude Code plugin.** `/plugin marketplace add method-ai-hq/method-sdk` then `/plugin install method@method`. It installs the CLI on first use and starts the guide when the user asks for repeated work.
+- **Method plugin for Claude Code and Codex.** The installer adds it to each of these agents that it finds, so later sessions know Method. By hand: `claude plugin marketplace add method-ai-hq/method-sdk && claude plugin install method@method`, or `codex plugin marketplace add method-ai-hq/method-sdk && codex plugin add method@method`. It installs the CLI on first use and starts the guide when the user asks for repeated work.
 - **Sign in first; hosted models.** Signed in, `call` and `agent` steps without a configured profile use a hosted model through the Method account, with no key and no local agent. Each account has a model credit. Not signed in, runs use a local agent as before.
 - **Each prompt is a step.** `validate` and `run` refuse a script that calls a model API (`model_call_in_script`).
 - **Keys stay on this computer.** Declare `secrets:` with names and purposes. `method secret import FILE NAME...` copies values from a file; `method secret set NAME` opens a private form in the browser; `method secret list` shows where each one is found. A missing secret stops the run before its first step. Replaces `runtimes.*.env`.
@@ -10,7 +10,8 @@ A first Method needs fewer steps, no keys, and no extra commands (runtime 0.12.0
 - **Unchanged steps are reused.** A new run reuses each iteration whose definition, inputs, and executed files match an earlier accepted run on this computer. `--rerun STEP` and `--fresh` run steps again. `--from-run` and `--reuse` are removed.
 - **`run_data: device`** keeps run content on this computer; the dashboard shows the run's steps and timing.
 - **Clearer failures.** A failed run reports `failed_step`, `iteration`, `diagnostics`, and `fix`, also when it fails before its first step. A classification that the service briefly cannot answer gets three attempts. Saving a version waits up to two minutes.
-- The default `method authoring` guide is short and starts with the rules for a first Method. The installer adds the CLI to PATH. `METHOD_SERVER` selects another server.
+- The default `method authoring` guide is short and starts with the rules for a first Method, with a field reference; `method schema` without a name prints the same reference. `method validate` lists each step with its runner and the secrets it needs. An `each` step whose `in` repeats the item names the fix. The installer adds the CLI to PATH. `METHOD_SERVER` selects another server.
+- `method status` and `method run` name a newer release, checked once a day.
 
 # 0.13.1
 

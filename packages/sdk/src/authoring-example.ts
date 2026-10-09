@@ -1,5 +1,5 @@
 import {exampleSelection} from "./authoring-instructions.js";
-import {readFileSync} from 'node:fs';
+import {readFileSync, existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
 export const authoringExamples = [
@@ -32,7 +32,9 @@ export function renderExample(id: string, installedPaths = true) {
   const files = JSON.parse(readFileSync(new URL('../examples/files.json',import.meta.url),'utf8')) as string[];
   const location = (name:string) => installedPaths ? directory+name : `${example.directory}/${name}`;
   let result = `# Worked example: ${example.id}\n\n${example.description}\n\n`;
-  for(const name of example.lessonFiles) {
+  // The configuration and sample inputs show how the example runs.
+  const lessons: string[] = [...example.lessonFiles];
+  for(const name of [...lessons, ...['runtime.json','inputs.json'].filter(name=>!lessons.includes(name)&&existsSync(directory+name))]) {
     const content=readFileSync(directory+name,'utf8');
     const language=name.endsWith('.method')?'yaml':name.endsWith('.json')?'json':name.endsWith('.py')?'python':/\.(mjs|js)$/.test(name)?'javascript':name.endsWith('.css')?'css':'markdown';
     const runs=content.match(/`+/g)??[]; const fence='`'.repeat(Math.max(3,...runs.map(run=>run.length+1)));
