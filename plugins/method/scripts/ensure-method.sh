@@ -11,6 +11,6 @@ version=$(PATH="$bin:$PATH" method --version 2>/dev/null)
 # A project with Methods: a change to what the project does may belong in a Method, so the skill comes first.
 found=$(find "${CLAUDE_PROJECT_DIR:-$PWD}" -maxdepth 4 -type f -name '*.method' -not -path '*/node_modules/*' -not -path '*/.method-runs/*' 2>/dev/null | head -1)
 project=""
-[ -n "$found" ] && project=" This project has Methods (.method files). Load the method skill before you change what the project or its app does, such as its results or a person's approval: that change may belong in a Method."
+[ -n "$found" ] && project=" This project has Methods (.method files). Load the method skill before you change what the project or its app does: that change may belong in a Method."
 printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The Method CLI is installed at %s/method (%s). If `method` is not on PATH, use that path.%s"}}\n' "$bin" "$version" "$project"
 exit 0

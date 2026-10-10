@@ -156,7 +156,7 @@ export const watchRules = `# Watch it
 export const afterRules = `# After it works
 
 - **Put it in an app:** \`method connect APP_FOLDER\` publishes it and prints the code to add.
-- **Improve the results:** for a correction or a request to make the results better, \`method improve FILE --note TEXT\` makes a proposal from the recent runs; \`method apply FILE\` merges it.
+- **Improve the results:** when the user wants the results changed, \`method improve FILE --note TEXT\` makes a proposal from the recent runs; \`method apply FILE\` merges it.
 - **Explain the scripts:** \`method explain FILE\` writes a card for each script step.
 `;
 
