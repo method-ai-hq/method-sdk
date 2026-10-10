@@ -1,11 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { accountNeeds, resolveAgentProfiles } from '../../packages/sdk/src/capabilities.js';
 import { configCommand } from '../../packages/sdk/src/computer-settings.js';
 import { modelKeyCommand, ownKeyName } from '../../packages/sdk/src/own-model-key.js';
 import { hostedModelsFor } from '../../packages/sdk/src/hosted-models.js';
+import { resolveSecrets } from '../../packages/sdk/src/secrets.js';
 import { MethodClient } from '../../packages/sdk/src/method-client.js';
 
 const roots: string[] = [];
@@ -16,6 +17,8 @@ function computer() {
   vi.stubEnv('HOME', root); vi.stubEnv('METHOD_CONFIG_DIR', join(root, 'config')); vi.stubEnv(ownKeyName, '');
   vi.stubEnv('CLAUDECODE', ''); vi.stubEnv('CODEX_THREAD_ID', '');
   vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  // Key files are searched near the working folder: keep the search inside this computer's folder.
+  vi.spyOn(process, 'cwd').mockReturnValue(join(root, 'work'));
   return root;
 }
 const settings = (root: string) => JSON.parse(readFileSync(join(root, 'config', 'computer.json'), 'utf8'));
@@ -73,4 +76,12 @@ it('a missing key value stops the run with the command that sets it', async () =
   computer();
   await modelKeyCommand([], async () => {});
   await expect(resolveAgentProfiles(method, {}, undefined, 'openai/gpt-6-luna')).rejects.toThrow(/method config model-key/);
+});
+
+it('method config model-key imports the key from a nearby key file before it opens the form', async () => {
+  const root = computer(), asked: string[] = [];
+  mkdirSync(join(root, 'work')); writeFileSync(join(root, '.env'), `${ownKeyName}=sk-or-nearby\n`);
+  await modelKeyCommand([], async name => { asked.push(name); });
+  expect(asked).toEqual([]);
+  expect(resolveSecrets([ownKeyName])[ownKeyName]).toBe('sk-or-nearby');
 });

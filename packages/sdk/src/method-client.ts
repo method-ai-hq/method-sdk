@@ -127,8 +127,10 @@ export class MethodClient {
   private async send(path: string, method: string, options: {body?: Uint8Array | string; type?: string; token: string | null; signal?: AbortSignal; stallMs?: number; maxResponseBytes?: number; onProgress?: (sent: number) => void}) {
     const stallMs = options.stallMs ?? 15_000, controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // stallMs 0: no watchdog, for a server that sends nothing until its answer is complete (a model request).
     const touch = () => {
       clearTimeout(timer);
+      if (stallMs === 0) return;
       timer = setTimeout(() => controller.abort(Object.assign(new Error(`No data moved for ${Math.round(stallMs / 1000)} s (${method} ${path}).`), { name: 'TimeoutError', code: 'stalled' })), stallMs);
     };
     const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;

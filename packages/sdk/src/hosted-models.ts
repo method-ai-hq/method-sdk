@@ -24,7 +24,8 @@ export function managedModels(client: MethodClient): HostedModels & { model(): P
       const request = { request_id: randomUUID(), request: body };
       for (let attempt = 1; ; attempt++) {
         try {
-          return await client.request('/api/cli/models/respond', 'POST', request, true, { signal, stallMs: 180_000, maxResponseBytes: 4 * 1024 * 1024 });
+          // No time limit: the server sends nothing until the model has answered, which can take minutes.
+          return await client.request('/api/cli/models/respond', 'POST', request, true, { signal, stallMs: 0, maxResponseBytes: 4 * 1024 * 1024 });
         } catch (error: any) {
           if (attempt >= attempts || signal.aborted || !(error.status === 503 || error.status === 429) || error.code === 'model_credit_used') throw error;
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));

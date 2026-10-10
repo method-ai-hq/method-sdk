@@ -9,7 +9,7 @@ it("asks before a key file is opened, and lets Method's own commands and other f
   expect(bash("cat ../community-archive/.env")).toBeDefined();
   expect(bash("cat ~/.config/method/secrets.json")).toBeDefined();
   expect(bash('cd "/p/cuties lite" && method secret import ../community-archive/.env ARCHIVE_TOKEN')).toBeUndefined();
-  expect(bash("method secret import .env A && cat .env")).toBeDefined();
+  expect(bash('(METHOD=~/.local/bin/method; [ -x "$METHOD" ] || METHOD=method; $METHOD secret import "../a/.env" ARCHIVE_TOKEN)')).toBeUndefined();
   expect(bash('find . -iname "*.env*"', "look for the community-archive .env file")).toBeUndefined();
   expect(keyFileReason({ tool_name: "Read", tool_input: { file_path: "/p/.env.example" } })).toBeUndefined();
   expect(keyFileReason({ tool_name: "Read", tool_input: { file_path: "/p/src/env.ts" } })).toBeUndefined();

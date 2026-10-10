@@ -10,17 +10,16 @@ const keyFile = (path: string) => {
   return /^\.env(\.[\w-]+)?$/.test(name) && !/^\.env\.(example|sample|template)$/.test(name)
     || name === "secrets.env" || /(^|\/)\.config\/method\/secrets\.json$/.test(path);
 };
-// One shell segment: `cd DIR`, or a run of Method's own CLI.
-const ownCommand = (segment: string) => /^(cd\s+\S.*|(\S*\/)?method(\s.*)?)$/.test(segment.trim());
-
 export function keyFileReason(input: { tool_name?: string; tool_input?: Record<string, unknown> }): string | undefined {
   const tool = input.tool_input ?? {};
-  const reason = "This opens a key file, so its values would go into the chat. To give a key to a Method, run method secret import FILE NAME as its own command.";
+  const reason = "This opens a key file, so its values would go into the chat. To give a key to a Method, run method secret import FILE NAME.";
   if (input.tool_name === "Bash") {
+    // A command that runs Method passes, however it is written (Method reads key files without showing values).
     const command = String(tool.command ?? "");
-    const segments = command.split(/&&|\|\||[;|\n]/);
-    if (segments.every(ownCommand)) return undefined;
-    return segments.some(segment => segment.split(/\s+/).some(word => word && keyFile(word))) ? reason : undefined;
+    // No Method command names Method's own secret store; reading it is reading keys.
+    if (/\.config\/method\/secrets\.json/.test(command)) return reason;
+    if (/\bmethod\b/i.test(command)) return undefined;
+    return command.split(/[\s;&|()<>]+/).some(word => word && keyFile(word)) ? reason : undefined;
   }
   const path = String(tool.file_path ?? tool.path ?? "");
   return path && keyFile(path) ? reason : undefined;
