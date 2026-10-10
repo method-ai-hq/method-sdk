@@ -6,6 +6,7 @@ import {runSaved,finishedRun} from '../../packages/sdk/src/run-saved.js';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
 import {runtimeVersion} from '../../packages/sdk/src/method-files.js';
 import {packageDigest} from '../../packages/contracts/src/method-package.js';
+import {bindConnectionValue} from '../../packages/sdk/src/computer-settings.js';
 
 const roots:string[]=[];
 afterEach(()=>{vi.restoreAllMocks();vi.unstubAllEnvs();process.exitCode=0;for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
@@ -13,8 +14,9 @@ function fixture(version='0.7.0',keep=false) {
  const original=JSON.parse(readFileSync(new URL(`../fixtures/runtime-upgrades/${version}.json`,import.meta.url),'utf8'));
  const root=mkdtempSync(join(tmpdir(),'method-upgrade-'));roots.push(root);
  const records=join(root,'records');mkdirSync(records);writeFileSync(join(records,'message.txt'),'Hello from a local binding\n');
- const config=join(root,'config.json');writeFileSync(config,JSON.stringify({allow_local_processes:true,environment:{records}}));
- vi.stubEnv('METHOD_CACHE_DIR',join(root,'cache'));
+ vi.stubEnv('METHOD_CACHE_DIR',join(root,'cache'));vi.stubEnv('METHOD_CONFIG_DIR',join(root,'config'));
+ // The input folder is a binding of this computer.
+ bindConnectionValue(original.saved.workflow_id,'records',records);
  vi.spyOn(process.stdout,'write').mockImplementation(()=>true);vi.spyOn(process.stderr,'write').mockImplementation(()=>true);
  const client:any={server:'https://example.test',credentialFile:join(root,'credentials.json'),request:vi.fn(async(path:string)=>{
   if(path==='/api/cli/me')return {user:{id:'user'},organization:{keep_run_content_on_devices:keep}};
@@ -24,7 +26,7 @@ function fixture(version='0.7.0',keep=false) {
   if(path.startsWith('/api/workspace/runs/'))return {run:{status:'running'}};
   throw Error(`Unexpected API request: ${path}`);
  }),transfer:vi.fn(async(path:string)=>Buffer.from(original.blobs[path.split('/').at(-1)!.split('?')[0]!],'base64'))};
- const flags={config,'run-dir':join(root,'run')};
+ const flags={'run-dir':join(root,'run')};
  return {root,records,client,flags,saved:original.saved};
 }
 for(const version of ['0.7.0','0.7.1','0.7.2','0.8.0','0.8.1','0.8.2'])it(`runs a package collected by the published ${version} runtime without saving a new version`,async()=>{
@@ -47,7 +49,7 @@ it('rejects an unsupported package before restoring files, resolving connections
  await expect(runSaved(f.saved,f.flags,f.client)).rejects.toMatchObject({code:'needs_update',message:expect.stringContaining('99.0.0')});
  expect(f.client.transfer).not.toHaveBeenCalled();
  expect(f.client.request.mock.calls.every(([path]:any[])=>path.startsWith('/api/cli/runs/')||path==='/api/cli/me')).toBe(true);
- expect(existsSync(join(f.root,'cache'))).toBe(false);
+ expect(existsSync(join(f.root,'cache','environments'))).toBe(false);
 });
 for(const version of [undefined,'0.0.0',runtimeVersion])it(`checks the saved executor before SDK setup or state access: ${version}`,async()=>{
  const f=fixture();const inputs=join(f.root,'inputs.json');writeFileSync(inputs,JSON.stringify({pause:true}));
@@ -61,7 +63,7 @@ for(const version of [undefined,'0.0.0',runtimeVersion])it(`checks the saved exe
   expect(f.client.transfer).not.toHaveBeenCalled();
   expect(f.client.request.mock.calls.every(([path]:any[])=>path.startsWith('/api/cli/runs/')||path==='/api/cli/me')).toBe(true);
   await expect(runCurrentFile(join(f.flags['run-dir'],'saved.method'),{...f.flags,resume:true})).rejects.toMatchObject({code:'resume_mismatch'});
-  expect(existsSync(join(f.root,'cache'))).toBe(false);
+  expect(existsSync(join(f.root,'cache','environments'))).toBe(false);
   expect(readFileSync(checkpoint,'utf8')).toBe(before);
  }
  expect(readFileSync(join(f.records,'ledger.txt'),'utf8')).toBe('Hello from a local binding\n');
@@ -74,7 +76,7 @@ it('uploads completed results despite an unsupported package and a different exe
  expect(await runSaved(f.saved,{...f.flags,resume:true},f.client)).toMatchObject({status:'completed'});
  expect(f.client.request.mock.calls.some(([path,verb]:any[])=>path.startsWith('/api/cli/runs/')&&verb==='PUT')).toBe(true);
  expect(f.client.transfer).not.toHaveBeenCalled();
- expect(existsSync(join(f.root,'cache'))).toBe(false);
+ expect(existsSync(join(f.root,'cache','environments'))).toBe(false);
  expect(readFileSync(join(f.records,'ledger.txt'),'utf8')).toBe('Hello from a local binding\n');
 });
 

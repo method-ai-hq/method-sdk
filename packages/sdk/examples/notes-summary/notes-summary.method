@@ -1,4 +1,4 @@
-format: method/3.3
+format: method/3.4
 name: Weekly summary from meeting notes
 goal: Read this week's meeting notes and save a summary with the decisions and the action items, each with its owner, due date and source note.
 environment:

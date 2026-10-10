@@ -292,15 +292,16 @@ const cacheKey = (method: Method, id: string, hash: string) => createHash('sha25
 
 export type ExplainOptions = { step?: string | undefined; roundTrip?: boolean; models?: Models; runRoots?: string[]; write?: (line: string) => void };
 /**
- * Make, check, and upload a card for each script step of the saved version that FILE.method.json links, when the
+ * Make, check, and upload a card for each script step of the saved version of FILE's current content, when the
  * version has no card for the step's current script. A card made earlier for the same script and step is reused.
  */
 export async function explain(client: MethodClient, file: string, options: ExplainOptions = {}) {
   const write = options.write ?? (line => process.stdout.write(line + '\n'));
   if (!client.token()) { write('Script cards skipped: not signed in. Run method login, then method explain FILE.'); return { status: 'skipped' as const, cards: [] }; }
   const path = authoringPath(file), root = dirname(path);
-  const meta = existsSync(`${path}.method.json`) ? readDocument(authoringPath(`${path}.method.json`)) : {};
-  if (!meta.workflow_id || !meta.base_version) throw Error('This file has no saved version. Run it or publish it while signed in first.');
+  const current = await (await import('./versions.js')).currentVersion(path);
+  if (!current) throw Error('This file has no saved version. Run it or publish it while signed in first.');
+  const meta = { workflow_id: current.method_id, base_version: current.version_id };
   const versionPath = `/api/cli/methods/${encodeURIComponent(meta.workflow_id)}/versions/${encodeURIComponent(meta.base_version)}/script-cards`;
   const saved = await client.request<any>(`/api/cli/methods/${encodeURIComponent(meta.workflow_id)}?version=${encodeURIComponent(meta.base_version)}`);
   const method = loadWorkflow(saved.workflow) as unknown as Method;
@@ -334,7 +335,7 @@ export async function explain(client: MethodClient, file: string, options: Expla
       lines.push(`${id}: ${card.summary} [entities ${card.checks.entities}${card.checks.entity_problems.length ? `: ${card.checks.entity_problems.join(' ')}` : ''}; ${trip}]`);
     } catch (error) { lines.push(`${id}: no card; ${(error as Error).message}`); }
   }
-  if (cards.length) await client.request(versionPath, 'PUT', { cards }, true, { timeoutMs: 60_000 });
+  if (cards.length) await client.request(versionPath, 'PUT', { cards }, true, { stallMs: 60_000 });
   for (const line of lines) write(line);
   const failed = lines.some(line => / no card;| skipped;/.test(line));
   if (!failed && !options.step) { mkdirSync(explainDir(), { recursive: true, mode: 0o700 }); writePrivateJson(join(explainDir(), `done-${meta.base_version}.json`), { at: new Date().toISOString() }); }

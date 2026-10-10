@@ -1,3 +1,4 @@
+import { documentForDigest } from "@withmethod/runtime/document.js";
 import { attachResultFiles } from "./result-files.js";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, sep, basename } from "node:path";
@@ -16,7 +17,8 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
   const rawMethod = read("method.json");
   const workflow = loadWorkflow(rawMethod);
   const manifest = read("manifest.json");
-  const digest = createHash("sha256").update(JSON.stringify(rawMethod)).digest("hex");
+  // The runtime hashes the Method without its id: line.
+  const digest = createHash("sha256").update(JSON.stringify(documentForDigest(rawMethod))).digest("hex");
   if (manifest.method_sha256 !== digest) throw Error("Saved method hash does not match the run.");
   const active = existsSync(join(root, ".lock"));
   if (active && (!activeSnapshot || readFileSync(path(".lock"), "utf8") !== String(process.pid))) throw Error("Finish the run before exporting its records.");

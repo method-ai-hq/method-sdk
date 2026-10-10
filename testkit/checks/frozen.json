@@ -1,0 +1,8 @@
+{
+  "check_enforces_wording": "ae0ed7321342f970bfb25eb1dae9aedf306fe52a27873906f94bfcb4b545bb4d",
+  "classify_needs_math": "d932e0ff6d78ff2ea93fb54057baa3672e8e7fd9b80053548175b99b2757cf02",
+  "classify_no_unclear": "1969aea4c15d56037215a96fb956d19731f65c9448bba885cbf9662c7865ae97",
+  "prompt_multiple_tasks": "308d47ec2bb43ec29705c4a87fe5f19025b3330e8d0453b05abf7b66a0bbcb4e",
+  "prompt_no_missing_input": "688ef4b160de98d789fcaaa325744741bbdd9ce8762b2e0653a0dfa660128ed3",
+  "script_calls_model": "103b800a315962a88c1cd68af3b258178bba8ec04bb466bf9bf16ae7fcbab3e8"
+}

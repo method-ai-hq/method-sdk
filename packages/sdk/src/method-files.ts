@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, realpathSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, mkdirSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync } from 'node:fs';
 import { dirname, resolve, relative, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -15,22 +15,45 @@ export function contained(root: string, name: string) {
   if (isAbsolute(rel) || rel.startsWith('..') || path.split(/[\\/]/).includes('sensitive')) throw Error(`File leaves the Method folder: ${name}`);
   return path;
 }
-export async function collectPackage(file: string, workflow: any, client: MethodClient): Promise<MethodPackage | undefined> {
+/** The files that a saved package holds: declared files, script entrypoints, and dependency lockfiles. */
+export function packageFileNames(root: string, workflow: any): string[] {
+  const executions = [...Object.values(workflow.steps).flatMap((s: any) => [s.do, s.check, ...Object.values(s.effects ?? {}).flatMap((e: any) => [e.observe, e.judge])]),
+    ...Object.values(workflow.tools ?? {}).map((t: any) => t.run)].filter(Boolean) as any[];
+  return [...new Set<string>([...(workflow.files ?? []), ...executions.filter(e => e.kind === 'run').map(e => e.entrypoint),
+    ...['package.json', 'package-lock.json', 'pyproject.toml', 'uv.lock'].filter(name => existsSync(resolve(root, name)))])].sort();
+}
+/**
+ * The files of the Method's cases/ folder. A Method with account run data saves its cases with each version; a Method
+ * with device run data keeps them on this computer. Hidden files, sensitive folders, and links are not included.
+ */
+export function caseFileNames(root: string): string[] {
+  const names: string[] = [];
+  const walk = (relativeDir: string) => {
+    const folder = resolve(root, relativeDir);
+    if (!existsSync(folder) || !lstatSync(folder).isDirectory()) return;
+    for (const entry of readdirSync(folder, { withFileTypes: true })) {
+      const name = `${relativeDir}/${entry.name}`;
+      if (entry.name.startsWith('.')) continue;
+      try { packagePath(name); } catch { continue; }
+      if (entry.isDirectory()) walk(name);
+      else if (entry.isFile() && statSync(resolve(root, name)).size <= 20_000_000) names.push(name);
+    }
+  };
+  walk('cases');
+  return names;
+}
+/**
+ * The saved package of a local Method: its declared files, script entrypoints, and dependency lockfiles. Reads files on
+ * this computer only; the outbox uploads them later.
+ */
+export async function buildPackage(file: string, workflow: any): Promise<{ pack: MethodPackage; sources: Record<string, string> }> {
   const root = dirname(resolve(file));
   await lockDependencies(root);
-  const config = existsSync(resolve(root, 'runtime.json')) ? readDocument(resolve(root, 'runtime.json')) : {};
-  for (const p of Object.values(config.runtimes ?? {}) as any[]) if (p.command && isAbsolute(p.command)) throw Error('Use a portable runtime name in runtime.json before saving. Absolute interpreter paths stay local.');
-  for (const value of Object.values(config.environment ?? {})) if (typeof value === 'string' && isAbsolute(value)) throw Error('Bind local input folders with method bind. Do not save absolute input paths in runtime.json.');
-  const executions = Object.values(workflow.steps).flatMap((s: any) => [s.do, s.check]).filter(Boolean) as any[];
-  for (const e of [...executions]) for (const tool of e.tools ?? []) { if (config.tools?.[tool]?.run) executions.push(config.tools[tool].run); }
-  const names = [...new Set<string>([...(workflow.files ?? []), ...executions.filter(e => e.kind === 'run').map(e => e.entrypoint),
-    ...['runtime.json', 'package.json', 'package-lock.json', 'pyproject.toml', 'uv.lock'].filter(name => existsSync(resolve(root, name)))])].sort();
-  const files = names.map(path => { const bytes = readFileSync(contained(root, path)); return {path, sha256: fileHash(bytes), size: bytes.length}; });
+  const names = [...new Set([...packageFileNames(root, workflow), ...(workflow.run_data === 'device' ? [] : caseFileNames(root))])].sort();
+  const sources: Record<string, string> = {};
+  const files = names.map(path => { const source = contained(root, path), bytes = readFileSync(source), sha256 = fileHash(bytes); sources[sha256] = source; return {path, sha256, size: bytes.length}; });
   const pack = MethodPackageSchema.parse({schema:'method-package/1', runtime:runtimeVersion, files, digest:packageDigest(workflow, {runtime:runtimeVersion, files})});
-  const found=files.length?await client.request<{present:string[]}>('/api/cli/files/check','POST',{hashes:files.map(f=>f.sha256)}):{present:[]};
-  const present=new Set(found.present??[]);
-  for (const f of files) if(!present.has(f.sha256))await client.transfer(`/api/cli/files/${f.sha256}`, readFileSync(contained(root, f.path)));
-  return pack;
+  return { pack, sources };
 }
 export async function restorePackage(saved: {workflow_id:string; version_id:string; workflow:any; package?:MethodPackage|null}, root: string, client:MethodClient) {
   if (!saved.package) return false;

@@ -18,7 +18,9 @@
     "pack": "npm run build && mkdir -p dist && npm pack --workspace @withmethod/sdk --ignore-scripts --pack-destination dist",
     "release:build": "tsx scripts/build-release.ts",
     "test:browser": "tsx testkit/slow/browser.ts",
-    "test:examples": "node --test packages/sdk/examples/message-routing/routing.test.mjs packages/sdk/examples/message-routing/retry/retry.test.mjs && python3 -m unittest discover -s packages/sdk/examples/outbound-management -p \"*_test.py\""
+    "test:examples": "node --test packages/sdk/examples/message-routing/routing.test.mjs packages/sdk/examples/message-routing/retry/retry.test.mjs && python3 -m unittest discover -s packages/sdk/examples/outbound-management -p \"*_test.py\"",
+    "eval:checks": "tsx testkit/checks/eval.ts",
+    "freeze:checks": "tsx testkit/checks/freeze.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.10",

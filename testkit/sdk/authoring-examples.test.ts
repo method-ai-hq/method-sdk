@@ -10,8 +10,8 @@ it('ships five complete packages with valid definitions, source descriptions, an
  for(const example of authoringExamples){
   const {directory}=exampleDirectory(example.id);
   const workflow=loadWorkflow(readFileSync(directory+example.entrypoint,'utf8'));
-  expect(workflow.format).toBe('method/3.3');
-  const config=existsSync(directory+'runtime.json')?JSON.parse(readFileSync(directory+'runtime.json','utf8')):{allow_local_processes:true};
+  expect(['method/3.3','method/3.4']).toContain(workflow.format);
+  const config={allow_local_processes:true};
   const result=await preflight(workflow,config,directory,{allowMissingSetup:true});
   for(const name of [...result.files,...example.lessonFiles]){
    expect(files).toContain(example.directory+'/'+name);

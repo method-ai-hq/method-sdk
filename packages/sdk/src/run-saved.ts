@@ -7,7 +7,8 @@ import { restorePackage, runtimeVersion } from './method-files.js';
 import { methodCache, pruneCachedRuns } from './prepare.js';
 import { resolveBindings } from './bindings.js';
 import { runCurrentFile } from './current-runtime.js';
-import { MethodSync, organizationKeepsContent } from './method-sync.js';
+import { MethodSync } from './method-sync.js';
+import { recordKnownVersion } from './outbox.js';
 import { writePrivateJson } from './files.js';
 import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
@@ -27,7 +28,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   const request=prior??{run_id:randomUUID(),workflow_id:saved.workflow_id,version_id:saved.version_id,server:client.server};
   if(prior&&!flags.resume)throw Error('This run already exists. Use --resume.');
   writePrivateJson(requestFile,request);
-  const sync=new MethodSync(client,directory,saved.workflow_id,saved.version_id,request.run_id,saved.workflow?.run_data==='device'||await organizationKeepsContent(client));
+  const sync=new MethodSync(client,directory,saved.workflow_id,saved.version_id,request.run_id,saved.workflow?.run_data==='device');
   const completedFile=join(directory,'summary.json');
   if(flags.resume&&existsSync(completedFile)){const completed=JSON.parse(readFileSync(completedFile,'utf8'));if(completed.status==='completed'){
     const statePath=`/api/cli/methods/${encodeURIComponent(saved.workflow_id)}/state`;
@@ -36,7 +37,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
       const pending=join(directory,'state-pending.json');if(existsSync(pending))await client.request(statePath,'POST',JSON.parse(readFileSync(pending,'utf8')));
       await client.request(statePath,'POST',{action:'release',run_id:request.run_id});
     }
-    await MethodSync.retry(directory,client);process.stdout.write(JSON.stringify({...completed,sync:existsSync(join(directory,'method-pending.json'))?'pending':'saved'})+'\n');return completed;}}
+    await MethodSync.retry(directory,client);process.stdout.write(JSON.stringify({...completed,sync:'saved'})+'\n');return completed;}}
   const inputFile=join(directory,'requested-inputs.json');
   const inputs=flags.inputs?JSON.parse(readFileSync(resolve(flags.inputs),'utf8')):existsSync(inputFile)?JSON.parse(readFileSync(inputFile,'utf8')):{};
   writePrivateJson(inputFile,inputs);
@@ -51,6 +52,8 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     const resuming = !!flags.resume && existsSync(join(directory,'checkpoint.json'));
     if (resuming) assertCheckpointExecutor(JSON.parse(readFileSync(join(directory,'checkpoint.json'),'utf8')));
     else if(saved.package&&!supportedPackageRuntimes.has(saved.package.runtime))throw Object.assign(new Error(`This package records runtime ${saved.package.runtime}; installed executor: ${runtimeVersion}. Use an SDK release that supports this package runtime.`),{code:'needs_update'});
+    // The version is on the server: its runs need no save first.
+    recordKnownVersion(client.server,saved.workflow_id,saved.version_id,saved.version_number);
     if(flags.resume&&existsSync(join(directory,'checkpoint.json'))&&!existsSync(join(directory,'runtime.resolved.json'))){
       const file=join(directory,'saved.method');writePrivateJson(file,saved.workflow);
       return await runCurrentFile(file,{...flags,workspace:flags.workspace??process.cwd(),'run-dir':directory},()=>sync,undefined,client);
@@ -58,11 +61,12 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     const root=saved.package?join(directory,'source'):resolve(flags.workspace??process.cwd());
     await restorePackage(saved,root,client);
     const file=join(directory,'saved.method');writePrivateJson(file,saved.workflow);
-    let config=flags.config?readDocument(resolve(flags.config)):existsSync(join(root,'runtime.json'))?readDocument(join(root,'runtime.json')):{allow_local_processes:true};
+    // An older saved version may carry runtime.json in its package; it is part of that version, not a file on this computer.
+    let config=existsSync(join(root,'runtime.json'))?readDocument(join(root,'runtime.json')):{allow_local_processes:true};
     config=await resolveBindings(client,saved.workflow_id,saved.workflow,config,root,directory);
     const missing=Object.entries(saved.workflow.inputs??{}).filter(([key,def]:any)=>!Object.hasOwn(inputs,key)&&!Object.hasOwn(def,'default'));
     if(missing.length&&!existsSync(join(directory,'checkpoint.json')))throw Object.assign(new Error('Supply the required Method inputs with --inputs FILE.'),{code:'needs_input',missing:Object.fromEntries(missing)});
-    const configFile=join(directory,'runtime.json');writePrivateJson(configFile,config);
+    writePrivateJson(join(directory,'runtime.json'),config);
     if(resuming)started=true;
     let stateFile=flags.state;
     const shared=await client.request<any>(statePath);
@@ -74,14 +78,14 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
       stateFile=join(directory,'initial-state.json');if(!resuming)writePrivateJson(stateFile,state.value);
     }
     const executionFlags={...flags};delete executionFlags.inputs;delete executionFlags.state;
-    const result=await runCurrentFile(file,{...executionFlags,...(!resuming?{inputs:inputFile}:{}),resume:resuming,config:configFile,workspace:root,'run-dir':directory,...(stateFile&&!resuming?{state:stateFile}:{})},()=>sync,async event=>{
+    const result=await runCurrentFile(file,{...executionFlags,...(!resuming?{inputs:inputFile}:{}),resume:resuming,workspace:root,'run-dir':directory,...(stateFile&&!resuming?{state:stateFile}:{})},()=>sync,async event=>{
       if(event.event==='step.started')started=true;
       if(acquired&&event.event==='step.accepted'){
         const commit={action:'commit',run_id:request.run_id,revision,commit_id:`${request.run_id}:${event.sequence}`,value:event.state};
         writePrivateJson(join(directory,'state-pending.json'),commit);
         const result=await client.request<any>(statePath,'POST',commit);revision=result.revision;
       }
-    },client);
+    },client,config);
     // Every step finished (an unconfirmed run too), so the run no longer owns the shared state.
     if(acquired&&finishedRun(result.status)){await client.request(statePath,'POST',{action:'release',run_id:request.run_id});acquired=false;}
     return {run_id:request.run_id,directory,...result};

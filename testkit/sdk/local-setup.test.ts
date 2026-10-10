@@ -17,7 +17,8 @@ function setup() {
 it('validates and runs using the Method folder even from a different working folder',async()=>{
  const s=setup();
  await methodMain(['validate',s.file]);
- expect(s.result()).toMatchObject({valid:true,definition:'valid',local_setup:'valid',executed:false,files:1});
+ // method run prepares node; validate lists the runtime's setup items as they are.
+ expect(s.result()).toMatchObject({valid:true,definition:'valid',local_setup:'needs_preparation',missing_setup:['Prepare node with method run.'],executed:false,files:1});
  s.stdout.mockClear();
  await methodMain(['run',s.file,'--inputs',join(s.dir,'inputs.json'),'--run-dir',join(s.dir,'run')]);
  expect(s.result()).toMatchObject({status:'completed',result:'Hello'});
@@ -25,22 +26,23 @@ it('validates and runs using the Method folder even from a different working fol
  await methodMain(['run',s.file,'--run-dir',join(s.dir,'run'),'--resume']);
  expect(s.result()).toMatchObject({status:'completed',result:'Hello'});
 });
-it('reports missing custom runtimes and helper files without running work',async()=>{
- const s=setup(); rmSync(join(s.dir,'runtime.json'));
- await methodMain(['validate',s.file]); expect(s.result()).toMatchObject({valid:true,definition:'valid',local_setup:'valid',executed:false}); expect(s.result().note).toBe('method run prepares node on the first run.');
- writeFileSync(join(s.dir,'runtime.json'),exampleFiles['runtime.json']!);rmSync(join(s.dir,'copy.cjs'));s.stdout.mockClear();
+it('reports managed runtimes and missing helper files without running work',async()=>{
+ const s=setup();
+ await methodMain(['validate',s.file]); expect(s.result()).toMatchObject({valid:true,definition:'valid',local_setup:'needs_preparation',missing_setup:['Prepare node with method run.'],executed:false});
+ rmSync(join(s.dir,'copy.cjs'));s.stdout.mockClear();
  await methodMain(['validate',s.file]);expect(s.result().error).toContain('copy.cjs');
- writeFileSync(join(s.dir,'copy.cjs'),exampleFiles['copy.cjs']!);
- writeFileSync(join(s.dir,'runtime.json'),JSON.stringify({...JSON.parse(exampleFiles['runtime.json']!),runtimes:{}}));s.stdout.mockClear();
- await methodMain(['validate',s.file]);expect(s.result().local_setup).toBe('valid');
 });
-it('uses an explicit config and resolves its executable path from that folder',async()=>{
- const s=setup();const configDir=join(s.dir,'config');mkdirSync(configDir);
- writeFileSync(join(configDir,'node.sh'),'#!/bin/sh\nexec "'+process.execPath+'" "$@"\n',{mode:0o700});
- const config=JSON.parse(exampleFiles['runtime.json']!);config.runtimes.node.command='./node.sh';writeFileSync(join(configDir,'custom.json'),JSON.stringify(config));
- writeFileSync(join(s.dir,'runtime.json'),'{}');
- await methodMain(['validate',s.file,'--config',join(configDir,'custom.json')]);expect(s.result().valid).toBe(true);
- s.stdout.mockClear();await methodMain(['run',s.file,'--config',join(configDir,'custom.json'),'--inputs',join(s.dir,'inputs.json'),'--run-dir',join(s.dir,'run')]);expect(s.result().result).toBe('Hello');
+it('lists each missing setup item once, however many steps need it',async()=>{
+ const s=setup();
+ // A second node step that copies the first one's output: both need node prepared.
+ const second='  again:\n    name: Copy again\n    purpose: Preserve the copied message.\n    in:\n      message: copied_message\n    do:\n      kind: run\n      runtime: node\n      entrypoint: copy.cjs\n    changes: []\n    out:\n      copied_again:\n        type: text\n        description: The message again.\n';
+ writeFileSync(s.file,readFileSync(s.file,'utf8').replace('result: copied_message\n',`${second}result: copied_message\n`));
+ await methodMain(['validate',s.file]);
+ expect(s.result()).toMatchObject({valid:true,local_setup:'needs_preparation',missing_setup:['Prepare node with method run.']});
+});
+it('rejects --config: a Method needs no configuration file',async()=>{
+ const s=setup();
+ await expect(methodMain(['run',s.file,'--config',join(s.dir,'custom.json')])).rejects.toThrow("Unknown option '--config'");
 });
 it('status does not list Methods, reveal account details, or start login',async()=>{
  const s=setup();const client:any={server:'https://example.test',token:()=>null,login:vi.fn(),request:vi.fn()};
@@ -50,52 +52,14 @@ it('status does not list Methods, reveal account details, or start login',async(
  client.request.mockRejectedValue(Error('401: expired'));s.stdout.mockClear();await methodMain(['status'],()=>client);expect(s.result().signed_in).toBe(false);
  client.request.mockRejectedValue(Error('503: unavailable'));await expect(methodMain(['status'],()=>client)).rejects.toThrow('503');
 });
-it('leaves a pending version for retry when readback fails or differs, then confirms exact preserved content',async()=>{
- const s=setup();const workflow=JSON.parse(JSON.stringify((await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(exampleWorkflow)));
- workflow.run_prompt='\nRead the saved result.\n';writeFileSync(s.file,JSON.stringify(workflow));
- let bad=true;let pack:any;
- const client:any={server:'https://example.test',token:()=> 'test-token',transfer:vi.fn(),request:vi.fn(async (path:string,verb:string,body:any)=>{if(path==='/api/cli/files/check')return {present:[]};if(verb==='POST'){pack=body.package;return {workflow_id:'wf_test',version_id:'v_test',version_number:1};}return {version_id:'v_test',package:pack,workflow:{...workflow,...(bad?{name:'wrong'}:{})}};})};
- const {saveVersion}=await import('../../packages/sdk/src/versions.js');
- await expect(saveVersion(client,s.file)).rejects.toThrow('does not match');
- const pending=JSON.parse(readFileSync(s.file+'.method.json','utf8'));expect(pending.pending.request_id).toBeTruthy();
- bad=false;expect(await saveVersion(client,s.file)).toMatchObject({unchanged:false,version_id:'v_test',workflow_id:'wf_test'});
- expect(JSON.parse(readFileSync(s.file+'.method.json','utf8')).pending).toBeUndefined();
- expect(client.request.mock.calls.filter((c:any[])=>c[1]==='POST'&&c[0]!=='/api/cli/files/check')[1][2].request_id).toBe(pending.pending.request_id);
-});
-
-it('treats harmless whitespace consistently after checking out an older saved document', async()=>{
- const s=setup();const workflow=(await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(exampleWorkflow);
- const stored={workflow_id:'wf_test',version_id:'v_test',version_number:1,workflow:{...workflow,run_prompt:'Read the report.'}};
- const client:any={server:'https://example.test',token:()=> 'test-token',transfer:vi.fn(),request:vi.fn(async()=>stored)};
- const {collectPackage}=await import('../../packages/sdk/src/method-files.js');
- Object.assign(stored,{package:await collectPackage(s.file,(await import('../../packages/workflow-language/src/validate.js')).loadWorkflow(stored.workflow),client)});
- const checkout=join(s.dir,'checkout.method');await methodMain(['get','wf_test','--out',checkout],()=>client);
- writeFileSync(checkout,readFileSync(checkout,'utf8').replace('Read the report.', 'Read the report.'));
- const {saveVersion}=await import('../../packages/sdk/src/versions.js');
- expect(await saveVersion(client,checkout)).toMatchObject({unchanged:true,version_id:'v_test'});
- expect(client.request.mock.calls.filter((c:any[])=>c[0]!=='/api/cli/files/check').every((c:any[])=>c[1]===undefined)).toBe(true);
-});
-
 it('validates a simple local-agent Method without a configuration file', async()=>{
- const s=setup(); rmSync(join(s.dir,'runtime.json'));
+ const s=setup();
  // Validation checks the executable exists; it must not need a developer's Codex install.
  writeFileSync(join(s.dir,'codex'), '#!/bin/sh\nexit 91\n', {mode:0o700});
  vi.stubEnv('PATH', s.dir);
  writeFileSync(s.file,JSON.stringify({format:'method/3.1',name:'Reply',goal:'Return supplied text',inputs:{text:{type:'text'}},steps:{reply:{in:{text:'inputs.text'},do:{kind:'agent',model:'default',prompt:'Return {{text}}.',tools:[]},out:{answer:{type:'text'}}}},result:'answer'}));
  await methodMain(['validate',s.file]);expect(s.result().valid).toBe(true);
 });
-
-it('resumes a direct executor checkpoint from the same release without adding SDK setup fields',async()=>{
- const s=setup();
- const {runCurrentMethod}=await import('../../packages/sdk/src/current-runtime.js');
- const config=JSON.parse(exampleFiles['runtime.json']!);
- const directory=join(s.dir,'old-run');
- expect((await runCurrentMethod(s.file,config,{runDir:directory,inputs:{message:'direct'}})).status).toBe('completed');
- s.stdout.mockClear();
- await methodMain(['run',s.file,'--resume','--run-dir',directory]);
- expect(s.result()).toMatchObject({status:'completed',result:'direct'});
-});
-
 
 it('keeps resolved setup for a local run that did not specify a directory',async()=>{
  const s=setup();
@@ -106,3 +70,22 @@ it('keeps resolved setup for a local run that did not specify a directory',async
  await methodMain(['run',s.file,'--resume','--run-dir',directory]);
  expect(s.result()).toMatchObject({status:'completed',result:'Hello'});
 });
+it('gives the runtime the tools that a method/3.4 document declares', async () => {
+ const dir = mkdtempSync(join(tmpdir(), 'method-tools-')); dirs.push(dir);
+ const { localSetup } = await import('../../packages/sdk/src/local-setup.js');
+ const tool = { description: 'Read the notes.', in: {}, out: { notes: { type: 'text', description: 'The notes.' } }, run: { kind: 'run', runtime: 'node', entrypoint: 'notes.mjs' }, effects: [] };
+ const file = join(dir, 'task.method');
+ writeFileSync(file, JSON.stringify({ format: 'method/3.4', name: 'Notes', goal: 'Read notes.', tools: { read_notes: tool },
+  steps: { read: { name: 'Read', purpose: 'Read the notes.', do: { kind: 'agent', model: 'default', prompt: 'Call read_notes.', tools: ['read_notes'] }, out: { answer: { type: 'text', description: 'The notes.' } } } }, result: 'answer' }));
+ expect((await localSetup(file, {})).config.tools).toEqual({ read_notes: tool });
+});
+it('puts this CLI first on the PATH that scripts get, so a script that runs method uses it', async () => {
+ const dir = mkdtempSync(join(tmpdir(), 'method-cli-')); dirs.push(dir);
+ vi.stubEnv('METHOD_CACHE_DIR', join(dir, 'cache'));
+ const { cliBin } = await import('../../packages/sdk/src/prepare.js');
+ const { execFileSync } = await import('node:child_process');
+ const bin = cliBin();
+ expect(cliBin()).toBe(bin);
+ const version = JSON.parse(readFileSync('packages/sdk/package.json', 'utf8')).version;
+ expect(execFileSync(join(bin, 'method'), ['--version'], { cwd: dir, encoding: 'utf8' })).toContain(`Method SDK ${version}`);
+}, 30_000);

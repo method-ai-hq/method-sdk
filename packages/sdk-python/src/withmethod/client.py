@@ -22,7 +22,8 @@ def runtime_command(entry: str = "bridge") -> list[str]:
         return [override]
     # Development checkout uses the source runtime, so tests cannot pass against an old build.
     project = Path(__file__).resolve().parents[4]
-    source = project / "packages" / "sdk" / "src" / f"{entry}.ts"
+    # The CLI entry is method.ts; the bridge is bridge.ts.
+    source = project / "packages" / "sdk" / "src" / ("method.ts" if entry == "cli" else f"{entry}.ts")
     loader = project / "node_modules" / "tsx" / "dist" / "loader.mjs"
     if source.is_file() and loader.is_file():
         return ["node", "--import", str(loader), str(source)]

@@ -8,6 +8,8 @@ import { entityProblems, hasPython, makeCard, recordedInputs, sameOutput, script
 import { MethodClient } from '../../packages/sdk/src/method-client.js';
 import { methodMain } from '../../packages/sdk/src/method.js';
 import { writePrivateJson } from '../../packages/sdk/src/files.js';
+import { currentVersion, writeMethodId } from '../../packages/sdk/src/versions.js';
+import { readDocument } from '../../packages/sdk/src/authoring.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -137,19 +139,20 @@ it.skipIf(!python)('makes, uploads, and then reuses cards through method explain
   const root = temp(); vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache'));
   const file = join(root, 'leads.method');
   writeFileSync(file, JSON.stringify(method)); writeFileSync(join(root, 'score.py'), script); recordRun(root, [leads[0]]);
-  writePrivateJson(`${file}.method.json`, { server: 'https://method.example', workflow_id: 'wf', base_version: 'v1' });
+  writeMethodId(file, `wf_${'a'.repeat(32)}`);
+  const current = (await currentVersion(file))!, wf = current.method_id, v1 = current.version_id;
   const hash = scriptSha256(method, 'score', { 'score.py': sha(script) })!;
   const stored: any[] = []; const drafts = [draft()];
   const fetcher = vi.fn(async (url: any, init: any) => {
     const path = String(url).replace('https://method.example', ''), body = init.body ? JSON.parse(init.body) : undefined;
-    if (path === '/api/cli/methods/wf?version=v1') return Response.json({ workflow_id: 'wf', version_id: 'v1', workflow: method, package: { files: [{ path: 'score.py', sha256: sha(script), size: script.length }] } });
-    if (path === '/api/workspace/methods/wf/versions/v1/script-cards') return Response.json({ cards: stored });
+    if (path === `/api/cli/methods/${wf}?version=${v1}`) return Response.json({ workflow_id: wf, version_id: v1, workflow: method, package: { files: [{ path: 'score.py', sha256: sha(script), size: script.length }] } });
+    if (path === `/api/workspace/methods/${wf}/versions/${v1}/script-cards`) return Response.json({ cards: stored });
     if (path === '/api/cli/models/default') return Response.json({ provider: 'openrouter', model: 'test/model' });
     if (path === '/api/cli/models/respond') {
       const content = body.request.response_format.json_schema.name === 'method_program' ? { code: rightProgram } : drafts.shift();
       return Response.json({ model: 'test/model-1', choices: [{ message: { content: JSON.stringify(content) }, finish_reason: 'stop' }] });
     }
-    if (path === '/api/cli/methods/wf/versions/v1/script-cards' && init.method === 'PUT') { stored.push(...body.cards); return Response.json({ saved: body.cards.map((c: any) => c.step_id) }); }
+    if (path === `/api/cli/methods/${wf}/versions/${v1}/script-cards` && init.method === 'PUT') { stored.push(...body.cards); return Response.json({ saved: body.cards.map((c: any) => c.step_id) }); }
     throw Error(`Unexpected request: ${init.method} ${path}`);
   });
   const client = new MethodClient('https://method.example', fetcher as typeof fetch, join(root, 'credentials'));
@@ -166,5 +169,5 @@ it.skipIf(!python)('makes, uploads, and then reuses cards through method explain
   await methodMain(['explain', file, '--no-round-trip'], () => client);
   expect(out.at(-1)).toBe('score: card exists.\n');
   expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/models/respond'))).toHaveLength(2);
-  expect(readFileSync(file, 'utf8')).toBe(JSON.stringify(method));
+  expect(readDocument(file)).toEqual({ ...method, format: 'method/3.4', id: wf });
 });

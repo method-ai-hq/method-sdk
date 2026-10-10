@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 const exec = promisify(execFile);
 export const methodCache = () => process.env.METHOD_CACHE_DIR ?? join(homedir(), '.cache', 'method');
 export const runFolderDays = 30;
@@ -24,6 +26,26 @@ export function pruneCachedRuns(root = join(methodCache(), 'runs'), now = Date.n
       if (latest < cutoff) rmSync(folder, { recursive: true, force: true });
     } catch { /* Left for a later run. */ }
   }
+}
+/**
+ * A folder with a `method` command that runs this CLI. The SDK puts it first on the PATH that scripts get, so a script
+ * that runs `method` (such as improve.method's `method test`) uses the CLI that runs the Method, not an older one.
+ */
+export function cliBin() {
+  const source = import.meta.url.endsWith('.ts');
+  const entry = fileURLToPath(new URL(`./method.${source ? 'ts' : 'js'}`, import.meta.url));
+  // From source (tests and development), tsx loads the TypeScript; its absolute URL works from any folder.
+  const argv = [process.execPath, ...(source ? ['--import', pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href] : []), entry];
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  const script = `#!/bin/sh\nexec ${argv.map(quote).join(' ')} "$@"\n`;
+  const folder = join(methodCache(), 'cli', createHash('sha256').update(script).digest('hex').slice(0, 16));
+  const file = join(folder, 'method');
+  if (!existsSync(file) || readFileSync(file, 'utf8') !== script) {
+    mkdirSync(folder, { recursive: true, mode: 0o700 });
+    const temporary = `${file}.${process.pid}.tmp`;
+    writeFileSync(temporary, script, { mode: 0o700 }); renameSync(temporary, file);
+  }
+  return folder;
 }
 const uvVersion = '0.8.22';
 export async function command(program: string, args: string[], cwd: string, env = process.env) {
@@ -68,7 +90,7 @@ async function prepareOnce(root: string, config: any, method: any) {
   const hasNodeDependencies = ['dependencies','devDependencies','optionalDependencies'].some(key => Object.keys(nodePackage[key] ?? {}).length > 0);
   const runtimes = {...config.runtimes};
   const executions = Object.values(method.steps).flatMap((s:any) => [s.do,s.check,...Object.values(s.effects ?? {}).flatMap((e:any) => [e.observe,e.judge])]).filter(Boolean) as any[];
-  for (const tool of Object.values(config.tools ?? {}) as any[]) executions.push(tool.run);
+  for (const tool of Object.values({ ...config.tools, ...method.tools }) as any[]) if (tool.run) executions.push(tool.run);
   const needsPython = hasPython || executions.some(e => e?.runtime === 'python' && !runtimes.python);
   const key = createHash('sha256').update(JSON.stringify([process.platform, process.arch, process.version, needsPython, ...files.map(n => existsSync(join(root,n)) ? readFileSync(join(root,n),'utf8') : null)])).digest('hex');
   const cache = join(methodCache(),'environments',key), ready = join(cache,'ready.json');
@@ -110,7 +132,7 @@ async function prepareOnce(root: string, config: any, method: any) {
       try { await command(process.execPath,['-e',`const {chromium}=require(${JSON.stringify(browser)}); (async()=>{const b=await chromium.launch({headless:true});try{const p=await b.newPage();await p.goto('data:text/html,<title>Method</title>');if(await p.title()!=='Method')throw Error('Browser page did not load');}finally{await b.close()}})().catch(e=>{console.error(e.message);process.exitCode=1})`],cache); }
       catch(e:any) { throw Error(`The browser cannot start on this computer. ${e.message}`); }
     }
-    return { config:{...config,runtimes}, processPath:[dirname(process.execPath),...(needsPython?[dirname(python)]:[]),process.env.PATH??''].join(delimiter),
+    return { config:{...config,runtimes}, processPath:[cliBin(),dirname(process.execPath),...(needsPython?[dirname(python)]:[]),process.env.PATH??''].join(delimiter),
       prepareBundle: async (bundle:string) => { const modules=join(cache,'node_modules'), dest=join(bundle,'node_modules'); if(existsSync(modules)&&!existsSync(dest)) symlinkSync(modules,dest,'dir'); } };
   } finally { closeSync(fd); rmSync(lock,{force:true}); }
 }

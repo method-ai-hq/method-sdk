@@ -1,6 +1,5 @@
 import { managedClassification } from './classification-client.js';
 import { MethodClient } from './method-client.js';
-import {recordDeploymentSource,finishDeploymentSource} from './deployment-source.js';
 import {openBrowser} from './browser.js';
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from 'node:path';
@@ -34,13 +33,20 @@ export function recentRuns(exclude: string, limit = 20) {
   }
   return [...found].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([dir]) => dir);
 }
-export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server)) {
+/**
+ * Run a local Method file. The run starts at once: saving and run records go through the outbox and never stop or fail
+ * the run. baseConfig is a configuration the SDK made (a saved version's package); otherwise localSetup builds it.
+ * runSecrets are values that the SDK gives this run only (such as the signed-in key for improve.method); they come
+ * before the shell and the secret store, and are never saved.
+ */
+export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, runSecrets: Record<string, string> = {}) {
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
   const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
   if (flags.resume) assertCheckpointExecutor(json(join(flags['run-dir']!, 'checkpoint.json')));
-  const setup = await localSetup(file, flags);
+  const setup = await localSetup(file, flags, baseConfig);
   let config = setup.config;
+  const agent = setup.agent;
   const sourceRoot = setup.sourceRoot;
   const method = (await import('./authoring.js')).readDocument(file);
   const controller = new AbortController();
@@ -51,10 +57,11 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   let runFailed = false;
   let browser: Awaited<ReturnType<typeof openBrowser>>;
   try {
-    sync = syncFactory?.();
-    await sync?.start(method, json(flags.inputs) ?? {}, {});
+    try { sync = syncFactory?.(); } catch (error) { process.stderr.write(`Run records stay on this computer: ${(error as Error).message}\n`); }
+    // Records the start; sends nothing. The outbox starts when the run starts.
+    await sync?.start(method, json(flags.inputs) ?? {}, {}, false);
     // A run with its own OpenRouter key (config.classification.api_key_env) needs no Method sign-in for classification.
-    const needs = accountNeeds(method, config, flags.agent);
+    const needs = accountNeeds(method, config, agent);
     const classification = needs.classification ? managedClassification(client) : undefined;
     // Classification uses the Method account. Hosted models are used when this computer is signed in.
     if (classification && !client.token()) await client.login();
@@ -73,7 +80,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
           try { hostedModel = await managedModels(client).model(); }
           catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}). Using a local agent.\n`); }
         }
-        config.models = await resolveAgentProfiles(method, config, flags.agent, hostedModel);
+        config.models = await resolveAgentProfiles(method, config, agent, hostedModel);
         if (classification) config.classification = await classification.resolve(controller.signal);
       }
       await checkAgents(config.models);
@@ -82,15 +89,14 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       if(resolvedFile){mkdirSync(dirname(resolvedFile),{recursive:true,mode:0o700});writePrivateJson(resolvedFile,config);}
       if(flags['run-dir']){const path=join(authoringPath(flags['run-dir']),'setup.json');const events=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):[];writePrivateJson(path,[...events,{at:new Date().toISOString(),type:'setup_completed'}]);}
     }
-    if(!flags.resume)recordDeploymentSource(authoringPath(flags['run-dir']!),sourceRoot,authoringPath(file),method,config);
     browser = await openBrowser(method,config,flags['run-dir']!,controller.signal);
     const hostedModels = Object.values(config.models ?? {}).some((profile: any) => profile.backend === 'method') ? managedModels(client) : undefined;
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
-      agent: flags.agent as 'codex' | 'claude' | undefined, inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
+      agent: agent as 'codex' | 'claude' | undefined, inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
       cacheFrom: flags.resume ? [] : recentRuns(authoringPath(flags['run-dir']!)),
       fresh: flags.fresh ? true : flags.rerun?.length ? flags.rerun.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean) : undefined,
-      secrets: resolveSecrets(Object.keys(method.secrets ?? {})), ...(hostedModels ? { hostedModels } : {}),
+      secrets: { ...resolveSecrets(Object.keys(method.secrets ?? {})), ...Object.fromEntries(Object.entries(runSecrets).filter(([key]) => Object.hasOwn(method.secrets ?? {}, key))) }, ...(hostedModels ? { hostedModels } : {}),
       human: json(flags.human), signal: controller.signal,
       ...(browser ? {connections:browser.connections} : {}),
       sourceRoot, ...(classification ? {classification} : {}),
@@ -103,9 +109,8 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       onEvent: async (event: any) => { await onEvent?.(event); sync?.snapshot(); if (flags.verbose) process.stderr.write(JSON.stringify(event) + "\n"); },
     });
     runFailed = !['completed','unconfirmed'].includes(result.status);
-    if(result.status==='completed')finishDeploymentSource(authoringPath(flags['run-dir']!),method,config);
-    await sync?.finish();
-    const display=sync&&flags['run-dir']?{...result,dashboard_sync:existsSync(join(authoringPath(flags['run-dir']),'method-pending.json'))?'pending':'saved'}:result;
+    const synced = await sync?.finish();
+    const display=synced?{...result,dashboard_sync:synced}:result;
     process.stdout.write(JSON.stringify(display, null, 2) + "\n");
     // 3: every step finished, but an observer could not confirm an external change.
     if (result.status !== "completed") process.exitCode = ({needs_input:2,unconfirmed:3} as Record<string,number>)[result.status] ?? 1;

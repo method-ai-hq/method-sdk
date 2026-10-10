@@ -36,12 +36,12 @@ ${checkEditingRule}
 export const firstMethodRules = `# Build a Method
 
 1. **Sign in first.** Run \`method status\`. If it is not signed in, run \`method login\` and let the user approve in the browser. Signed in, model and classification steps need no keys, each run saves a version when the file changed, and runs appear on the dashboard.
-2. **Each model or classifier request is its own step**: \`call\`, \`agent\`, or \`classify\`, with its prompt in the Method. Then the user can change one prompt, run again, and compare. A script never calls a model API; \`validate\` and \`run\` refuse it (\`model_call_in_script\`). When the user already has code that does the work, keep its fixed logic as \`run\` steps and move each prompt and rubric into its own step. "The same thing" means the same behavior with steps, not a wrapper around the code. If a request cannot become a step because Method lacks a feature, tell the user what is missing. Do not wrap the code.
+2. **Each model or classifier request is its own step**: \`call\`, \`agent\`, or \`classify\`, with its prompt in the Method. Then the user can change one prompt, run again, and compare. A script never calls a model API. When the user already has code that does the work, keep its fixed logic as \`run\` steps and move each prompt and rubric into its own step. "The same thing" means the same behavior with steps, not a wrapper around the code. If a request cannot become a step because Method lacks a feature, tell the user what is missing. Do not wrap the code.
 3. **Show the design, then build it in the same turn.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Do not wait for approval unless the user asked to approve first. Ask only for information that you cannot find and that would change the design.
-4. **Run early and often.** Write the first steps, validate, run, then add the next steps. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. \`--rerun STEP\` runs a step again anyway; \`--fresh\` runs every step.
+4. **Run early and often.** Write the first steps, validate, run, then add the next steps. Fix errors. Fix each warning, or accept it with the user's reason. Never add a check only to remove a warning. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. \`--rerun STEP\` runs a step again anyway; \`--fresh\` runs every step.
 5. **Keep the inputs of the existing code.** If the code takes an ID and looks up the record, the Method takes the same ID and looks it up the same way.
-6. **Use the defaults without asking.** Model steps use the account's hosted models and \`classify\` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add \`models: {writer: {backend: method, model: "provider/model"}}\` to runtime.json and use \`model: writer\` in the steps; it needs no key. Run content goes to the user's account; set \`run_data: device\` only when the user asks to keep it on this computer. \`run_data: device\` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running. Do not ask the user to choose and do not wait: change this only if the user says that no data may leave this computer. Say these defaults in one line and continue.
-7. **Keys stay out of chat.** Declare each key that a script needs under \`secrets:\` with its purpose. Run \`method secret find\` in the Method's folder: it lists the key files nearby and the names in each, never the values, and prints the import command. Name the file to the user, ask once, then run that command. If it finds nothing, ask the user to run \`method secret set NAME\`, which opens a private form in their browser. Never open, print, or search a key file (\`cat\`, \`grep\`, an editor): its values would go into the chat. Never ask for a value in chat.
+6. **Use the defaults without asking.** Model steps use the account's hosted models and \`classify\` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add \`models: {writer: provider/model}\` to the Method and use \`model: writer\` in the steps (or \`model: provider/model\` on the step); it needs no key. Run content goes to the user's account; set \`run_data: device\` only when the user asks to keep it on this computer. \`run_data: device\` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running. Do not ask the user to choose and do not wait: change this only if the user says that no data may leave this computer. Say these defaults in one line and continue.
+7. **Keys stay out of chat.** Declare each key that a script needs under \`secrets:\` with its purpose; every script of the Method receives all of its declared secrets. Run \`method secret find\` in the Method's folder: it lists the key files nearby and the names in each, never the values, and prints the import command. Name the file to the user, ask once, then run that command. If it finds nothing, ask the user to run \`method secret set NAME\`, which opens a private form in their browser. Never open, print, or search a key file (\`cat\`, \`grep\`, an editor): its values would go into the chat. Never ask for a value in chat.
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand. If you cannot run, say so.
 10. **Publish** with \`method publish FILE --reason TEXT\` when the user wants to share or schedule a version. It runs the Method's cases first.
@@ -81,7 +81,7 @@ Write it in the style of this summary from an earlier week:
 export const fieldReference = `# Field reference
 
 \`\`\`text
-format: method/3.3
+format: method/3.4
 name, goal          text
 inputs              {NAME: DATA}           values the run receives (--inputs FILE)
 secrets             {NAME: purpose}        keys that scripts receive as environment variables
@@ -105,9 +105,9 @@ STEP   name, purpose          a run step needs both: its rules, result, and exte
        do: one of
          {kind: run, runtime: python | node, entrypoint: FILE, args: [...]}
              reads one JSON object (its in) on stdin, prints one JSON object (its out); files go under $METHOD_OUTPUT_DIR
-         {kind: call, model: PROFILE, prompt: TEXT}
+         {kind: call, model: NAME, prompt: TEXT}
              the step's in go to the model as JSON; {{ALIAS}} puts a text, number, or boolean value into the prompt
-         {kind: agent, model: PROFILE, prompt: TEXT, tools: [TOOL]}
+         {kind: agent, model: NAME, prompt: TEXT, tools: [TOOL]}
          {kind: classify, question: TEXT, options: {ID: description}}   value: {choice, probabilities}
          {kind: classify, question: TEXT, answer: yes_no}                value: {answer, probability} (of yes)
          {kind: classify, question: TEXT, levels: [LOW, ..., HIGH]}      value: {level, score, probabilities}; 2-10 levels
@@ -116,10 +116,14 @@ STEP   name, purpose          a run step needs both: its rules, result, and exte
        out: {NAME: DATA}      (classify: out: NAME)
        changes: [state.NAME | environment.NAME]; a service change needs effects or no_effect_reason
        check, limits: {timeout_ms, max_model_requests, max_agent_turns}
+       accept: {CODE: reason}   keep a warning or note with the user's reason
 
-runtime.json beside the Method (optional)
-  models: {PROFILE: {backend: method, model: provider/model}}   a hosted model; no key. Steps without a profile use default.
-  environment: {NAME: path}   limits: {...}   allow_local_processes: true
+models: {NAME: provider/model | {model, max_output_tokens, reasoning_effort}}   hosted models; no key. A step without model uses the account default.
+limits: {timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_concurrency, ..., step: {timeout_ms, max_agent_turns, max_model_requests}}
+tools:  {NAME: {description, in, out, run, effects}}   script tools that agent steps list in tools
+id: wf_...   written by the CLI at the first signed-in save; keep it. method new-id FILE makes a copy a new Method.
+Connections: a files connection uses the folder NAME beside the Method, or method bind FILE NAME --file PATH (this computer only).
+Issues: errors block; warnings and notes do not.
 \`\`\`
 
 \`method schema method\` prints the complete JSON schema.
@@ -139,7 +143,7 @@ These are design outlines, not runnable Method files.
 
 
 /** Cost rules for a design; in concepts, not in the start of the guide. */
-export const costRules = "Check the model configuration before describing execution cost. A call with a direct API backend uses one request without tools. A coding-agent backend can start an agent process and use tools. Do not claim fewer agent processes from the step type alone. State the expected model requests and agent processes when the configuration makes those counts known; mark unknown counts as unknown.";
+export const costRules = "Before describing execution cost, check how the model steps run. With hosted models, a call is one request without tools, and an agent step can make several requests and use tools. With --agent, each model step starts a local agent process. State the expected model requests and agent processes when they are known; mark unknown counts as unknown.";
 
 /** What to watch after a Method works. */
 export const watchRules = `# Watch it
@@ -150,4 +154,12 @@ export const watchRules = `# Watch it
 - For slow effects such as email delivery, schedule \`method observe --pending\`.
 `;
 
-export const exampleSelection = "After choosing the execution types and step boundaries, read complete examples that help implement the design with `method authoring example EXAMPLE_ID`. Read additional examples when needed. Use their syntax and relevant implementation details. Choose the steps for the current task independently.";
+/** What to do after a Method works: production, improvement, and script cards. */
+export const afterRules = `# After it works
+
+- **Put it in an app:** \`method connect APP_FOLDER\` publishes it and prints the code to add.
+- **Improve from a correction:** \`method improve FILE --note TEXT\` makes a proposal; \`method apply FILE\` merges it.
+- **Explain the scripts:** \`method explain FILE\` writes a card for each script step.
+`;
+
+export const exampleSelection = "After choosing the step types, read the examples that fit the design. Use their syntax; choose the steps for this task yourself.";

@@ -37,9 +37,9 @@ Tests use local scripts and mocked providers. They do not need a Method account 
 
 The Release workflow builds the npm archive, Python wheel, and four self-contained CLI distributions. It publishes them with SHA-256 hashes in `manifest.json`. The private application can mirror those exact artifacts. It does not rebuild them.
 
-## Breaking changes in 0.7
+## Breaking changes
 
-New Methods use `format: method/3.3`; existing method/3.1 and method/3.2 documents remain supported. Method 3.3 confirms external changes with observers (effects), and `method test` and `method learn` turn corrections into recorded cases. The SDK uses one current runtime.
+New Methods use `format: method/3.4`: models, limits, tools, and the Method ID are in the Method file, and no runtime.json is read. `method validate` reports a leftover runtime.json or FILE.method.json as an error and says what to move where. Effects confirm external changes; `method case new` and `method test` keep corrections as recorded cases. `method deploy` is removed: production runs use `method connect`, workers, or Method Cloud. The SDK uses one current runtime.
 
 Use `method`. The `workflow`, `sdk`, `method-run`, and `workflow-bridge` aliases are removed. Python keeps `withmethod`; `workflow-corp`, `method-python`, and the `workflow_corp` module are removed. `method-bridge` is the machine interface for Python.
 

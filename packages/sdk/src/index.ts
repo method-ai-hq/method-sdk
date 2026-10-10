@@ -1,7 +1,10 @@
 export { runMethod } from "./run-method.js";
 export { methodSchema, configSchema } from "@withmethod/runtime/schema.js";
 export { loadWorkflow as loadMethod, serializeWorkflow as serializeMethod } from "../../workflow-language/src/validate.js";
-export { WorkflowSchema as MethodSchema, type Workflow as Method } from "../../workflow-language/src/schema.js";
+export { WorkflowSchema as MethodSchema, type Workflow as MethodDocument } from "../../workflow-language/src/schema.js";
+export { Method, MethodApiError, verifyWebhook, type AskEvent, type AskHandler, type StartRunOptions, type StartedRun, type ProductionRun, type RunStatus } from "./production.js";
+export { seal as sealRunData, open as openRunData, inputsDigest } from "./run-data.js";
+export { ProductionWorker, cliExecutor, type WorkerOptions, type WorkerResult } from "./worker.js";
 export { inspectRun } from "./inspect.js";
 export { InspectionSchema, copyInstructions } from "../../workflow-language/src/inspection.js";
 export { saveWorkflowLink as saveMethodLink, isWorkflowLink as isMethodLink } from "./link.js";

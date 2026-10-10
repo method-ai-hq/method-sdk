@@ -21,11 +21,10 @@ it('uses the same document and file contract as the runtime',()=>{
  expect(outputSchema({file:'file'})).toEqual(runtimeSchema({file:'file'}));
  const doc={...base,run_prompt:'  Keep spaces.  '};expect(loadWorkflow(doc)).toEqual(validateMethod(doc).method);
 });
-it('doctor accepts script-only configuration without an agent',async()=>{
- const dir=temp();mkdirSync(join(dir,'bin'));vi.stubEnv('PATH',join(dir,'bin'));
- const file=join(dir,'runtime.json');writeFileSync(file,JSON.stringify({runtimes:{node:{command:process.execPath,version:process.versions.node}}}));
+it('doctor accepts a computer without an agent',async()=>{
+ const dir=temp();mkdirSync(join(dir,'bin'));vi.stubEnv('PATH',join(dir,'bin'));vi.stubEnv('CLAUDECODE','');vi.stubEnv('CODEX_THREAD_ID','');
  const out=vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
- await methodMain(['doctor','--config',file]);expect(out.mock.calls.flat().join('')).toContain('No method was run');
+ await methodMain(['doctor']);expect(out.mock.calls.flat().join('')).toContain('No method was run');
 });
 it('doctor checks an explicitly selected Claude agent',async()=>{
  const dir=temp();const command=join(dir,'claude');writeFileSync(command,`#!${process.execPath}\nconsole.log(JSON.stringify({loggedIn:true}));`,{mode:0o700});vi.stubEnv('PATH',dir);
@@ -35,9 +34,8 @@ it('doctor checks an explicitly selected Claude agent',async()=>{
  await expect(methodMain(['doctor','--agent','claude'])).rejects.toThrow(/claude access check/);
 });
 it('a local background run creates a worker that wait can reconnect to',()=>{
- const dir=temp();writeFileSync(join(dir,'task.method'),JSON.stringify({...base,steps:{respond:{do:{kind:'run',runtime:'node',entrypoint:'script.mjs'},out:{answer:{type:'text'}}}}}));
+ const dir=temp();writeFileSync(join(dir,'task.method'),JSON.stringify({...base,steps:{respond:{name:'Respond',do:{kind:'run',runtime:'node',entrypoint:'script.mjs'},out:{answer:{type:'text'}}}}}));
  writeFileSync(join(dir,'script.mjs'),'for await(const c of process.stdin){};console.log(JSON.stringify({answer:"done"}));');
- writeFileSync(join(dir,'runtime.json'),JSON.stringify({allow_local_processes:true,runtimes:{node:{command:process.execPath,version:process.versions.node}}}));
  const entry=resolve('packages/sdk/src/method.ts'),loader=resolve('node_modules/tsx/dist/loader.mjs'),run=join(dir,'run');
  const call=(args:string[])=>execFileSync(process.execPath,['--import',loader,entry,...args],{cwd:dir,encoding:'utf8',timeout:20000});
  expect(JSON.parse(call(['run','task.method','--background','--run-dir',run])).status).toBe('started');

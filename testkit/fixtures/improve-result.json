@@ -1,0 +1,5 @@
+{
+  "proposal": "{\"cause\":\"No safe change was found. rule: Target cases do not pass: names-owner, short-summary. examples: Target cases do not pass: names-owner, short-summary. structure: The candidate could not be tested: The last step must keep the original step ID.. rewrite: Target cases do not pass: names-owner, short-summary. rule: Target cases do not pass: names-owner, short-summary. examples: Target cases do not pass: names-owner, short-summary. structure: The candidate could not be tested: The last step must keep the original step ID.. rewrite: Target cases do not pass: names-owner, short-summary.\",\"evidence\":{\"kind\":\"none\",\"steps\":[\"summarize\"],\"candidate\":null,\"cases\":[{\"id\":\"names-owner\",\"before\":\"unverifiable\",\"after\":\"unverifiable\",\"target\":true},{\"id\":\"short-summary\",\"before\":\"unverifiable\",\"after\":\"unverifiable\",\"target\":true}],\"before_after\":[],\"replay\":null,\"cost\":null,\"prompt_growth_pct\":null,\"case_suggestion\":null,\"script_change\":null,\"budget\":{\"model_calls\":104,\"usd\":0.2492,\"minutes\":0.04}}}",
+  "kind": "none",
+  "proposal_id": ""
+}

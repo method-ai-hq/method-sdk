@@ -1,4 +1,4 @@
-format: method/3.3
+format: method/3.4
 name: Classify and route a customer message
 goal: Choose a support destination and show the rule used.
 inputs:

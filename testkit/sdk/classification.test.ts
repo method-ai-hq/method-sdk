@@ -65,7 +65,7 @@ it('validates offline and resolves downstream classifier references from the sha
   // Without a saved sign-in, classification is setup that the user must do.
   vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'method-home-')));
   expect(await localAuthoring(['validate', f.file])).toBe(true); expect(fetch).not.toHaveBeenCalled();
-  expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('needs_action'));
+  expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('Classification needs Method sign-in'));
   const method=loadWorkflow(definition);
   expect(effectiveOutputs(method.steps.classify!)).toHaveProperty('category');
   expect(referenceShape(method,'category.probabilities.billing')).toEqual('number');

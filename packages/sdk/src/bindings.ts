@@ -1,18 +1,25 @@
 import { existsSync, readFileSync, readdirSync, lstatSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
-import { sha256 } from '../../contracts/src/identity.js';
 import { packagePath } from '../../contracts/src/method-package.js';
 import { fileHash } from './method-files.js';
 import { writePrivateJson } from './files.js';
 import type { MethodClient } from './method-client.js';
+import { bindConnectionValue, readComputerSettings } from './computer-settings.js';
+import { ensureMethodId } from './versions.js';
+import { readDocument } from './authoring.js';
 
-const localFile=(client:MethodClient,id:string)=>join(dirname(client.credentialFile),'bindings',`${sha256(client.server+id)}.json`);
-export async function bindInput(client:MethodClient,id:string,name:string,path:string,upload=false) {
+/** A Method by ID (its saved definition) or by local FILE (its id: line is written when it has none). */
+async function target(client:MethodClient,idOrFile:string){
+  if(/\.method$/i.test(idOrFile)&&existsSync(idOrFile)){const id=ensureMethodId(idOrFile);return {id,workflow:readDocument(idOrFile)};}
+  if(!client.token())throw Error('Use the Method FILE, or sign in with method login to bind a saved Method by ID.');
+  return {id:idOrFile,workflow:(await client.request<any>(`/api/cli/methods/${encodeURIComponent(idOrFile)}`)).workflow};
+}
+export async function bindInput(client:MethodClient,idOrFile:string,name:string,path:string,upload=false) {
   if(!/^[a-z][a-z0-9_]*$/.test(name))throw Error('Use the environment binding name.');
-  const saved=await client.request<any>(`/api/cli/methods/${encodeURIComponent(id)}`);
-  if(saved.workflow.environment?.[name]?.type!=='files')throw Error('Use the name of a declared files binding.');
+  const {id,workflow}=await target(client,idOrFile);
+  if(workflow.environment?.[name]?.type!=='files')throw Error('Use the name of a declared files binding.');
   const root=realpathSync(resolve(path));if(root.split(/[\\/]/).includes('sensitive'))throw Error('Use a folder outside sensitive/.');
-  if(!upload){const file=localFile(client,id),old=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):{};writePrivateJson(file,{...old,[name]:root});return {saved:true,scope:'this computer',name};}
+  if(!upload){bindConnectionValue(id,name,root);return {saved:true,scope:'this computer',method_id:id,name};}
   const files:Array<{path:string;sha256:string;size:number}>=[];
   async function walk(dir:string,prefix=''){
     for(const entry of readdirSync(dir,{withFileTypes:true})){
@@ -28,33 +35,28 @@ export async function bindInput(client:MethodClient,id:string,name:string,path:s
   return client.request(`/api/cli/methods/${encodeURIComponent(id)}/bindings/${name}`,'PUT',{kind:'files',files});
 }
 
-export async function bindConnection(client:MethodClient,id:string,name:string,value:string,upload=false) {
-  const saved=await client.request<any>(`/api/cli/methods/${encodeURIComponent(id)}`);
-  if(!saved.workflow.environment?.[name]||saved.workflow.environment[name].type==='files')throw Error('Use a declared service, browser, desktop, or tool binding.');
+export async function bindConnection(client:MethodClient,idOrFile:string,name:string,value:string,upload=false) {
+  const {id,workflow}=await target(client,idOrFile);
+  if(!workflow.environment?.[name]||workflow.environment[name].type==='files')throw Error('Use a declared service, browser, desktop, or tool binding.');
   // Values identify a connection. Credentials remain in the service's existing login store.
-  if(saved.workflow.environment[name].type==='browser'&&/^method-browser:[a-z][a-z0-9_-]*$/.test(value)){
-    if(upload)throw Error('Browser selection is private to this computer. Use method deploy to transfer a selected session.');
-    const file=localFile(client,id),old=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):{};
-    writePrivateJson(file,{...old,[name]:{kind:'connection',value}});return {saved:true,scope:'this computer',name};
+  if(workflow.environment[name].type==='browser'&&/^method-browser:[a-z][a-z0-9_-]*$/.test(value)){
+    if(upload)throw Error('Browser selection is private to this computer.');
+    bindConnectionValue(id,name,value);return {saved:true,scope:'this computer',method_id:id,name};
   }
   const url=new URL(value);if(!['https:','http:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)throw Error('Use a connection URL without credentials, query parameters, or a fragment.');
   if(upload)return client.request(`/api/cli/methods/${encodeURIComponent(id)}/bindings/${name}`,'PUT',{kind:'connection',value:url.href});
-  const file=localFile(client,id),old=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):{};
-  writePrivateJson(file,{...old,[name]:{kind:'connection',value:url.href}});return {saved:true,scope:'this computer',name};
+  bindConnectionValue(id,name,url.href);return {saved:true,scope:'this computer',method_id:id,name};
 }
 
 export async function resolveBindings(client:MethodClient,id:string,method:any,config:any,root:string,runDirectory:string) {
-  const local=existsSync(localFile(client,id))?JSON.parse(readFileSync(localFile(client,id),'utf8')):{};
+  const local=readComputerSettings().bindings[id]??{};
   const snapshot=join(runDirectory,'input-bindings.json');
   const remote=existsSync(snapshot)?JSON.parse(readFileSync(snapshot,'utf8')):await client.request<Record<string,any>>(`/api/cli/methods/${encodeURIComponent(id)}/bindings`);
   const environment={...config.environment},missing=[];
   for(const [name,definition] of Object.entries(method.environment??{}) as [string,any][]){
     if(definition.type==='browser'&&!local[name]&&!remote[name]&&!environment[name]){environment[name]='method-browser:default';continue;}
-    if(local[name]?.kind==='connection'){environment[name]=local[name].value;continue;}
-    if(typeof local[name]==='string'&&existsSync(local[name])){environment[name]=local[name];continue;}
+    if(local[name]&&(definition.type!=='files'||existsSync(local[name]))){environment[name]=local[name];continue;}
     if(environment[name]){if(definition.type==='files')environment[name]=resolve(root,environment[name]);continue;}
-    if(local[name]?.kind==='connection'){environment[name]=local[name].value;continue;}
-    if(typeof local[name]==='string'&&existsSync(local[name])){environment[name]=local[name];continue;}
     if(remote[name]?.kind==='connection'){environment[name]=remote[name].value;continue;}
     if(remote[name]?.kind==='files'){
       const folder=join(runDirectory,'inputs',name);mkdirSync(folder,{recursive:true,mode:0o700});

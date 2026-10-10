@@ -48,12 +48,10 @@ export function change(document: any, path: string, value: any, remove = false):
   }
   return document;
 }
+/** Read, change, and replace the file in one rename. */
 export function editDocument(file: string, edit: (doc: any) => any) {
-  const path = authoringPath(file), lock = authoringPath(`${path}.lock`);
-  let fd: number;
-  try { fd = openSync(lock, "wx", 0o600); } catch { throw Error("The draft is locked by another command. Retry after it finishes."); }
-  try { const result = edit(readDocument(path)); writeDocument(path, result); return result; }
-  finally { closeSync(fd); unlinkSync(lock); }
+  const path = authoringPath(file);
+  const result = edit(readDocument(path)); writeDocument(path, result); return result;
 }
 export function differences(a: any, b: any, path = ""): any[] {
   if (JSON.stringify(a) === JSON.stringify(b)) return [];
@@ -72,7 +70,9 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     process.stdout.write(authoringGuide(args[1], args[2]));
     return true;
   }
-  const { values: v, positionals: p } = parseArgs({ args: args.slice(1), allowPositionals: true, options: Object.fromEntries(["name", "goal", "id", "instructions-file", "json", "value-file", "text", "text-file", "path", "before", "model", "purpose", "kind", "runtime", "entrypoint", "config", "workspace"].map(k => [k, { type: "string" as const }])) });
+  const { values: v, positionals: p } = parseArgs({ args: args.slice(1), allowPositionals: true, options: Object.fromEntries([...["name", "goal", "id", "instructions-file", "json", "value-file", "text", "text-file", "path", "before", "model", "purpose", "kind", "runtime", "entrypoint", "workspace"].map(k => [k, { type: "string" }]),
+    // validate and check read these two flags from args.
+    ["notes", { type: "boolean" }], ["all", { type: "boolean" }]]) as Record<string, { type: "string" }> });
   const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + "\n");
   const value = () => {
     const sources = ["json", "value-file", "text", "text-file"].filter(k => v[k] !== undefined);
@@ -90,53 +90,72 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     if (!schema) throw Error("Unknown schema. See method authoring.");
     print(schema); return true;
   }
-  const file = stepEdit || command === "check" ? p[1] : p[0];
+  const file = stepEdit || command === "check" && ["set", "remove"].includes(p[0] ?? "") ? p[1] : p[0];
   if (!file) throw Error(`Supply a Method file. Read method ${command} --help.`);
   if (command === "init") {
     if (!v.name || !v.goal) throw Error("Supply --name and --goal.");
     const path = authoringPath(file);
-    if (existsSync(path) || existsSync(`${path}.method.json`)) throw Error("Choose a new draft file.");
-    const draft = { format: "method/3.3", name: v.name, goal: v.goal, steps: {}, result: {} };
+    if (existsSync(path)) throw Error("Choose a new draft file.");
+    const draft = { format: "method/3.4", name: v.name, goal: v.goal, steps: {}, result: {} };
     // Exclusive creation prevents simultaneous init from replacing a draft.
     mkdirSync(dirname(path), {recursive:true,mode:0o700});
     const fd = openSync(path, "wx", 0o600); closeSync(fd); writeDocument(path, draft); print({ file: path, workflow: draft }); return true;
   }
   if (command === "validate") {
     let definition = "invalid";
+    const { collectIssues, shownIssues } = await import("./method-issues.js");
+    const flags = { notes: args.includes("--notes"), all: args.includes("--all") };
     try {
-      const workflow = loadWorkflow(readDocument(file)); definition = "valid";
-      {
-        const { config, configFile, sourceRoot } = await localSetup(file, v);
-        const secrets = (await import('./secrets.js')).resolveSecrets(Object.keys((workflow as any).secrets ?? {}));
-        const { files, missingSetup } = await preflight(workflow, config, sourceRoot, {allowMissingSetup:true, secrets});
-        // Managed runtimes are prepared by method run; only the other items need action.
-        const automatic = [...new Set(missingSetup.filter((item: string) => item.startsWith("Prepare ") && item.endsWith(" with method run.")))];
-        // method run opens the browser and connects its controls itself.
-        const browser = missingSetup.some((item: string) => item.startsWith("Prepare browser:") || item.startsWith("Connect tool: browser_"));
-        // Classification uses the Method account; with a saved sign-in, method run needs nothing more.
-        const { MethodClient } = await import("./method-client.js");
-        const signedIn = (() => { try { return !!new MethodClient().token(); } catch { return false; } })();
-        const classification = signedIn && missingSetup.some((item: string) => item.startsWith("Classification needs Method sign-in"));
-        const needed = [...new Set(missingSetup.filter((item: string) => !automatic.includes(item) && !item.startsWith("Prepare browser:") && !item.startsWith("Connect tool: browser_") && !(classification && item.startsWith("Classification needs Method sign-in"))))];
-        const prepared = [...automatic.map((item: string) => item.slice(8, -17)), ...(browser ? ["the browser"] : []), ...(classification ? ["classification with your Method sign-in"] : [])];
-        // What each step executes, and what it still needs on this computer.
-        const missingSecrets = Object.keys((workflow as any).secrets ?? {}).filter(name => !secrets[name]);
-        const login = "method login";
-        const steps = Object.entries(workflow.steps).map(([id, step]: [string, any]) => {
-          const exec = step.do, profile = config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
-          const runs = step.ask ? "asks the user"
-            : exec.kind === "run" ? `${exec.runtime} ${exec.entrypoint}`
-            : exec.kind === "classify" ? (config.classification?.api_key_env ? "Jev through OpenRouter with your own key" : "Method's classifier")
-            : profile?.backend === "method" ? `the hosted model ${profile.model}`
-            : profile ? `${profile.backend}${profile.model ? ` ${profile.model}` : ""}`
-            : signedIn ? "the account's hosted model" : "a local Codex or Claude agent";
-          const needs = [...(exec?.kind === "run" ? missingSecrets.map(name => `secret ${name}`) : []),
-            ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env || ["call", "agent"].includes(exec?.kind) && !profile) ? [`${login} (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
-          return { id, runs, ...(needs.length ? { needs } : {}) };
-        });
-        print({ valid: true, definition, local_setup: needed.length ? "needs_action" : "valid", ...(needed.length ? {missing_setup:needed} : {}), ...(prepared.length ? {note:`method run prepares ${prepared.join(" and ")} on the first run.`} : {}), config: configFile, workspace: sourceRoot, files: files.length, steps, executed: false });
+      const report = await collectIssues(file);
+      const shown = shownIssues(report, flags);
+      if (report.issues.some(issue => issue.level === "error")) {
+        print({ valid: false, definition: report.invalid ? "invalid" : "valid", executed: false, ...shown });
+        process.exitCode = 1; return true;
       }
-    } catch (error) { print({ valid: false, definition, local_setup: definition === "valid" ? "invalid" : "not_checked", executed: false, error: error instanceof Error ? error.message : String(error) }); process.exitCode = 1; }
+      const workflow = loadWorkflow((await import("./versions.js")).methodContent(readDocument(file))); definition = "valid";
+      const { config, sourceRoot, agent } = await localSetup(file, v);
+      const declared = Object.keys((workflow as any).secrets ?? {});
+      const secrets = (await import('./secrets.js')).resolveSecrets(declared);
+      const { MethodClient } = await import("./method-client.js");
+      const client = new MethodClient();
+      const signedIn = (() => { try { return !!client.token(); } catch { return false; } })();
+      // A missing secret is the missing_secret issue, so preflight gets a stand-in for it. With a saved sign-in,
+      // classification and hosted models use the account, as in method run.
+      const signedInOptions = signedIn ? { classification: (await import("./classification-client.js")).managedClassification(client), hostedModels: (await import("./hosted-models.js")).managedModels(client) } : {};
+      // The run resolves the account's classifier version; validate checks only that it can.
+      if (signedIn && !config.classification) config.classification = { provider: "typesafe", model: (await import("@withmethod/runtime/classification.js")).typesafeModel };
+      const { files, missingSetup } = await preflight(workflow, config, sourceRoot, { allowMissingSetup: true, secrets: { ...Object.fromEntries(declared.map(name => [name, "missing"])), ...secrets }, ...signedInOptions });
+      // What each step executes, and what it still needs on this computer.
+      const missingSecrets = declared.filter(name => !secrets[name]);
+      const ownKey = (await import("./own-model-key.js")).ownKeyEnv();
+      const steps = Object.entries(workflow.steps).map(([id, step]: [string, any]) => {
+        const exec = step.do, named = (workflow as any).models?.[exec?.model] ?? (/^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/.test(exec?.model ?? "") ? exec.model : undefined);
+        const profile = named ? { backend: "method", model: typeof named === "string" ? named : named.model } : config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
+        const runs = step.ask ? "asks the user"
+          : exec.kind === "run" ? `${exec.runtime} ${exec.entrypoint}`
+          : exec.kind === "classify" ? (config.classification?.api_key_env || ownKey ? "Jev through OpenRouter with your own key" : "Method's classifier")
+          : profile?.backend === "method" ? (ownKey && !agent ? `${profile.model} through OpenRouter with your own key` : `the hosted model ${profile.model}`)
+          : profile ? `${profile.backend}${profile.model ? ` ${profile.model}` : ""}`
+          : signedIn ? (ownKey && !agent ? "the account's default model through OpenRouter with your own key" : "the account's hosted model") : "a local Codex or Claude agent";
+        const needs = [...(exec?.kind === "run" ? missingSecrets.map(name => `secret ${name}`) : []),
+          ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env && !ownKey || ["call", "agent"].includes(exec?.kind) && !profile) ? [`method login (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
+        return { id, runs, ...(needs.length ? { needs } : {}) };
+      });
+      print({ valid: true, definition, local_setup: missingSetup.length ? "needs_preparation" : "valid", ...(missingSetup.length ? { missing_setup: [...new Set(missingSetup)] } : {}), workspace: sourceRoot, files: files.length, steps, executed: false, ...shown });
+    } catch (error: any) {
+      // A setup error from preflight is an error issue too.
+      const issue = { level: "error", code: error?.code ?? "invalid_method", message: error instanceof Error ? error.message : String(error), fix: "Fix what the message names, then validate again." };
+      print({ valid: false, definition, local_setup: definition === "valid" ? "invalid" : "not_checked", executed: false, error: issue.message, issues: [issue], issue_counts: { errors: 1, warnings: 0, notes: 0, accepted: 0 } }); process.exitCode = 1;
+    }
+    return true;
+  }
+  if (command === "check" && /\.(method|json)$/i.test(file) && !p[2]) {
+    // method check FILE: only the issues, without the local setup.
+    const { collectIssues, shownIssues } = await import("./method-issues.js");
+    const report = await collectIssues(file);
+    const errors = report.issues.some(issue => issue.level === "error");
+    print({ valid: !errors, ...shownIssues(report, { notes: args.includes("--notes"), all: args.includes("--all") }) });
+    if (errors) process.exitCode = 1;
     return true;
   }
   if (command === "show") { print(at(readDocument(file), v.path ?? "")); return true; }

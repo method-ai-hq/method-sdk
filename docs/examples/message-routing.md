@@ -15,7 +15,7 @@ review. Return the destination, rule, probability, and threshold.
 ## message-routing.method
 
 ```yaml
-format: method/3.3
+format: method/3.4
 name: Classify and route a customer message
 goal: Choose a support destination and show the rule used.
 inputs:

@@ -1,4 +1,4 @@
-format: method/3.3
+format: method/3.4
 name: Route a message and create one ticket
 goal: Create a ticket and recover an interrupted response without a duplicate write.
 inputs:

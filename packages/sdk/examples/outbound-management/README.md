@@ -75,7 +75,7 @@ review. Customers and opt-outs stay out of outreach tasks.
 
 A checked plan returns a replacement for `state.crm`. Method accepts that state
 only after the save check passes. Shared account state uses a run lock and revision
-checks so local and deployed runs use one current CRM. If the CRM changed during
+checks so local and production runs use one current CRM. If the CRM changed during
 research, the save stops. Repeating the same save does not repeat its updates.
 The receipt records the saved state hash. Keep shared state enabled for normal use.
 
@@ -83,20 +83,18 @@ The receipt records the saved state hash. Keep shared state enabled for normal u
 before it changes the CRM. The research notes for the day are the notes from the
 email search, the Happenstance search, and the pages that could not be opened.
 
-## Deploy
+## Production
 
-After a saved-version run completes, use `method deploy --from-run RUN_DIRECTORY`.
-Review its runner, browser sites, coding-agent access, and shared state, then use
-the returned approval command. The deployed Method uses the same account CRM;
-it does not need a writable local folder. Complete any runner sign-in checks.
-Deployment prepares the runner; it does not schedule or send outreach.
+Publish the Method and run it from an app with `method connect APP_FOLDER`, from
+`method worker`, or on Method Cloud (`method publish --cloud`). Production runs use
+the same account CRM; they do not need a writable local folder. Publishing does
+not schedule or send outreach.
 
 ## Files and checks
 
 - `outbound.method`: read CRM, read email, find and enrich prospects, update contacts, draft tasks, save.
 - `crm.py` and entry scripts: state reads, source checks (`check_sources.py email|prospects|enrichment`),
   contact and task checks (`check_plan.py contacts|tasks`), state replacements.
-- `runtime.json`: Python setup; no third-party Python libraries.
 - `starter/crm.json`: empty CRM with editable target settings.
 - `inputs.json`: email date range and date to plan.
 

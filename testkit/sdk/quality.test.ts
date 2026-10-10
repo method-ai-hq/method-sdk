@@ -51,7 +51,7 @@ it('effect add copies a reviewed observer and declares the effect', async () => 
   const printed = read();
   vi.restoreAllMocks();
   const doc = parse(readFileSync(file, 'utf8'));
-  expect(doc.format).toBe('method/3.3');
+  expect(doc.format).toBe('method/3.4');
   expect(doc.environment.bounce_mailbox).toMatchObject({ role: 'observer', type: 'service' });
   expect(doc.steps.send.effects.delivered).toMatchObject({ confirm: 'unrefuted_at_horizon', fixtures: 'observers/mail.delivery/fixtures',
     observe: { runtime: 'mail_observer', entrypoint: 'observers/mail.delivery/fetch.mjs', args: ['--connection', 'bounce_mailbox'] } });
@@ -140,4 +140,23 @@ it('warns that cases hold run data when they would be committed to Git, and not 
   expect(casesPrivacyWarning(file)).toMatch(/keeps copies of run data .* inside a Git repository/);
   writeFileSync(join(root, '.gitignore'), 'cases/*/recording.json\n');
   expect(casesPrivacyWarning(file)).toBeUndefined();
+});
+
+it('judges rubric criteria with the account model when signed in, without --agent', async () => {
+  const root = temp();
+  vi.stubEnv('METHOD_CONFIG_DIR', join(root, 'config')); vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache')); vi.stubEnv('METHOD_API_KEY', 'mk_test');
+  vi.stubEnv('CLAUDECODE', ''); vi.stubEnv('CODEX_THREAD_ID', '');
+  const requests: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: any) => { requests.push(new URL(String(url)).pathname); return Response.json({ provider: 'openrouter', model: 'openai/gpt-6-luna' }); }));
+  const file = join(root, 'send.method');
+  writeFileSync(file, stringify(sendMethod())); writeFileSync(join(root, 'send.mjs'), 'console.log(JSON.stringify({receipt: "ok"}))');
+  const { preparedConfig } = await import('../../packages/sdk/src/quality.js');
+  const prepared = await preparedConfig(file, {}, { judge: true });
+  expect(prepared.config.models.judge).toEqual({ backend: 'method', model: 'openai/gpt-6-luna' });
+  expect(prepared.hostedModels).toBeTruthy();
+  expect(requests).toContain('/api/cli/models/default');
+  // A local agent keeps judging with that agent.
+  const withAgent = await preparedConfig(file, { agent: 'codex' }, { judge: true });
+  expect(withAgent.config.models?.judge).toBeUndefined();
+  vi.unstubAllGlobals();
 });

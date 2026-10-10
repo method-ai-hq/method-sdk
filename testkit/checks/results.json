@@ -1,0 +1,381 @@
+{
+  "split": "heldout",
+  "generated_at": "2026-10-10T00:29:26.337Z",
+  "server": "https://app.withmethod.ai",
+  "threshold": 0.5,
+  "checks": {
+    "script_calls_model": {
+      "level": "warning",
+      "version": 1,
+      "bar": 0.9,
+      "items": 71,
+      "positives": 33,
+      "negatives": 38,
+      "synthetic": 6,
+      "errors": 0,
+      "tp": 32,
+      "fp": 0,
+      "fn": 1,
+      "tn": 38,
+      "precision": 1,
+      "recall": 0.97,
+      "real_only": {
+        "tp": 32,
+        "fp": 0,
+        "fn": 1,
+        "tn": 32,
+        "precision": 1,
+        "recall": 0.97
+      },
+      "meets_bar": true,
+      "heldout_sha256": "103b800a315962a88c1cd68af3b258178bba8ec04bb466bf9bf16ae7fcbab3e8",
+      "mistakes": [
+        {
+          "id": "script_calls_model-055",
+          "label": true,
+          "probability": 0.01
+        }
+      ]
+    },
+    "prompt_multiple_tasks": {
+      "level": "note",
+      "version": 1,
+      "bar": 0.75,
+      "items": 56,
+      "positives": 23,
+      "negatives": 33,
+      "synthetic": 18,
+      "errors": 0,
+      "tp": 23,
+      "fp": 10,
+      "fn": 0,
+      "tn": 23,
+      "precision": 0.697,
+      "recall": 1,
+      "real_only": {
+        "tp": 8,
+        "fp": 9,
+        "fn": 0,
+        "tn": 21,
+        "precision": 0.471,
+        "recall": 1
+      },
+      "meets_bar": false,
+      "heldout_sha256": "308d47ec2bb43ec29705c4a87fe5f19025b3330e8d0453b05abf7b66a0bbcb4e",
+      "mistakes": [
+        {
+          "id": "prompt_multiple_tasks-020",
+          "label": false,
+          "probability": 0.98
+        },
+        {
+          "id": "prompt_multiple_tasks-017",
+          "label": false,
+          "probability": 0.89
+        },
+        {
+          "id": "prompt_multiple_tasks-021",
+          "label": false,
+          "probability": 0.76
+        },
+        {
+          "id": "prompt_multiple_tasks-023",
+          "label": false,
+          "probability": 0.93
+        },
+        {
+          "id": "prompt_multiple_tasks-029",
+          "label": false,
+          "probability": 0.84
+        },
+        {
+          "id": "prompt_multiple_tasks-044",
+          "label": false,
+          "probability": 0.78
+        },
+        {
+          "id": "prompt_multiple_tasks-045",
+          "label": false,
+          "probability": 0.95
+        },
+        {
+          "id": "prompt_multiple_tasks-059",
+          "label": false,
+          "probability": 0.77
+        },
+        {
+          "id": "prompt_multiple_tasks-069",
+          "label": false,
+          "probability": 0.86
+        },
+        {
+          "id": "prompt_multiple_tasks-109",
+          "label": false,
+          "probability": 0.59
+        }
+      ]
+    },
+    "check_enforces_wording": {
+      "level": "note",
+      "version": 1,
+      "bar": 0.75,
+      "items": 55,
+      "positives": 29,
+      "negatives": 26,
+      "synthetic": 32,
+      "errors": 0,
+      "tp": 29,
+      "fp": 1,
+      "fn": 0,
+      "tn": 25,
+      "precision": 0.967,
+      "recall": 1,
+      "real_only": {
+        "tp": 0,
+        "fp": 1,
+        "fn": 0,
+        "tn": 22,
+        "precision": 0,
+        "recall": null
+      },
+      "meets_bar": true,
+      "heldout_sha256": "ae0ed7321342f970bfb25eb1dae9aedf306fe52a27873906f94bfcb4b545bb4d",
+      "mistakes": [
+        {
+          "id": "check_enforces_wording-031",
+          "label": false,
+          "probability": 0.58
+        }
+      ]
+    },
+    "classify_needs_math": {
+      "level": "warning",
+      "version": 1,
+      "bar": 0.9,
+      "items": 60,
+      "positives": 32,
+      "negatives": 28,
+      "synthetic": 56,
+      "errors": 0,
+      "tp": 32,
+      "fp": 0,
+      "fn": 0,
+      "tn": 28,
+      "precision": 1,
+      "recall": 1,
+      "real_only": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "tn": 4,
+        "precision": null,
+        "recall": null
+      },
+      "meets_bar": true,
+      "heldout_sha256": "d932e0ff6d78ff2ea93fb54057baa3672e8e7fd9b80053548175b99b2757cf02",
+      "mistakes": []
+    },
+    "classify_no_unclear": {
+      "level": "note",
+      "version": 1,
+      "bar": 0.75,
+      "items": 59,
+      "positives": 23,
+      "negatives": 36,
+      "synthetic": 56,
+      "errors": 0,
+      "tp": 23,
+      "fp": 22,
+      "fn": 0,
+      "tn": 14,
+      "precision": 0.511,
+      "recall": 1,
+      "real_only": {
+        "tp": 0,
+        "fp": 3,
+        "fn": 0,
+        "tn": 0,
+        "precision": 0,
+        "recall": null
+      },
+      "meets_bar": false,
+      "heldout_sha256": "1969aea4c15d56037215a96fb956d19731f65c9448bba885cbf9662c7865ae97",
+      "mistakes": [
+        {
+          "id": "classify_no_unclear-001",
+          "label": false,
+          "probability": 0.52
+        },
+        {
+          "id": "classify_no_unclear-005",
+          "label": false,
+          "probability": 0.67
+        },
+        {
+          "id": "classify_no_unclear-009",
+          "label": false,
+          "probability": 0.75
+        },
+        {
+          "id": "classify_no_unclear-003",
+          "label": false,
+          "probability": 0.63
+        },
+        {
+          "id": "classify_no_unclear-015",
+          "label": false,
+          "probability": 0.68
+        },
+        {
+          "id": "classify_no_unclear-028",
+          "label": false,
+          "probability": 0.86
+        },
+        {
+          "id": "classify_no_unclear-031",
+          "label": false,
+          "probability": 0.81
+        },
+        {
+          "id": "classify_no_unclear-036",
+          "label": false,
+          "probability": 0.92
+        },
+        {
+          "id": "classify_no_unclear-045",
+          "label": false,
+          "probability": 0.94
+        },
+        {
+          "id": "classify_no_unclear-043",
+          "label": false,
+          "probability": 0.94
+        },
+        {
+          "id": "classify_no_unclear-046",
+          "label": false,
+          "probability": 0.88
+        },
+        {
+          "id": "classify_no_unclear-055",
+          "label": false,
+          "probability": 0.83
+        },
+        {
+          "id": "classify_no_unclear-065",
+          "label": false,
+          "probability": 0.94
+        },
+        {
+          "id": "classify_no_unclear-070",
+          "label": false,
+          "probability": 0.78
+        },
+        {
+          "id": "classify_no_unclear-072",
+          "label": false,
+          "probability": 0.87
+        },
+        {
+          "id": "classify_no_unclear-073",
+          "label": false,
+          "probability": 0.86
+        },
+        {
+          "id": "classify_no_unclear-084",
+          "label": false,
+          "probability": 0.92
+        },
+        {
+          "id": "classify_no_unclear-087",
+          "label": false,
+          "probability": 0.92
+        },
+        {
+          "id": "classify_no_unclear-092",
+          "label": false,
+          "probability": 0.66
+        },
+        {
+          "id": "classify_no_unclear-101",
+          "label": false,
+          "probability": 0.84
+        },
+        {
+          "id": "classify_no_unclear-108",
+          "label": false,
+          "probability": 0.76
+        },
+        {
+          "id": "classify_no_unclear-106",
+          "label": false,
+          "probability": 0.67
+        }
+      ]
+    },
+    "prompt_no_missing_input": {
+      "level": "warning",
+      "version": 1,
+      "bar": 0.9,
+      "items": 64,
+      "positives": 24,
+      "negatives": 40,
+      "synthetic": 26,
+      "errors": 0,
+      "tp": 17,
+      "fp": 0,
+      "fn": 7,
+      "tn": 40,
+      "precision": 1,
+      "recall": 0.708,
+      "real_only": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 2,
+        "tn": 36,
+        "precision": null,
+        "recall": 0
+      },
+      "meets_bar": true,
+      "heldout_sha256": "688ef4b160de98d789fcaaa325744741bbdd9ce8762b2e0653a0dfa660128ed3",
+      "mistakes": [
+        {
+          "id": "prompt_no_missing_input-035",
+          "label": true,
+          "probability": 0.07
+        },
+        {
+          "id": "prompt_no_missing_input-044",
+          "label": true,
+          "probability": 0.04
+        },
+        {
+          "id": "prompt_no_missing_input-070",
+          "label": true,
+          "probability": 0
+        },
+        {
+          "id": "prompt_no_missing_input-074",
+          "label": true,
+          "probability": 0.21
+        },
+        {
+          "id": "prompt_no_missing_input-082",
+          "label": true,
+          "probability": 0.43
+        },
+        {
+          "id": "prompt_no_missing_input-081",
+          "label": true,
+          "probability": 0.22
+        },
+        {
+          "id": "prompt_no_missing_input-102",
+          "label": true,
+          "probability": 0.08
+        }
+      ]
+    }
+  },
+  "model": "jev-1.13.0"
+}

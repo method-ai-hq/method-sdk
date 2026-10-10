@@ -13,7 +13,6 @@ import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { localAuthoring, authoringPath, readDocument, writeDocument } from "./authoring.js";
-import { workflowDocumentDigest } from "../../contracts/src/identity.js";
 import { MethodClient, DEFAULT_SERVER } from "./method-client.js";
 import { MethodSync } from "./method-sync.js";
 import { progressMain } from "./progress.js";
@@ -46,12 +45,16 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
 }
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
-  if (args[0] === 'deploy') {
-    const p=parseArgs({args:args.slice(1),options:{'from-run':{type:'string'},approve:{type:'string'},run:{type:'string'},login:{type:'string'},agent:{type:'string'},inputs:{type:'string'},resume:{type:'string'}}});
-    if([p.values['from-run'],p.values.approve,p.values.run,p.values.login].filter(Boolean).length!==1)throw Error('Use method deploy --from-run DIR, --approve ID, --run ID, or --login ID.');
-    const {prepareDeployment,approveDeployment}=await import('./deploy.js');
-    const result=p.values['from-run']?await prepareDeployment(safePath(p.values['from-run'])):p.values.approve?await approveDeployment(p.values.approve):p.values.login?await (await import('./runner-deploy.js')).loginRunner(p.values.login,p.values.agent):await (await import('./runner-deploy.js')).runDeployment(p.values.run!,p.values.inputs? safePath(p.values.inputs):undefined,p.values.resume);
-    process.stdout.write(JSON.stringify(result,null,2)+'\n');if(result.status==='needs_input')process.exitCode=2;return;
+  if (['improve','proposals','apply'].includes(args[0] ?? '')) return (await import('./proposals.js')).proposalCommand(args, clientFactory);
+  await (await import('./proposals.js')).autoApply(args, clientFactory);
+  if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);
+  if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));
+  if (args[0] === 'connect' || args[0] === 'answer') {
+    const server = parseArgs({ args: args.slice(1), strict: false, options: { server: { type: 'string' } } }).values.server;
+    const client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER);
+    const { connectCommand, answerCommand } = await import('./connect.js');
+    process.stdout.write(JSON.stringify(await (args[0] === 'connect' ? connectCommand : answerCommand)(args.slice(1), client), null, 2) + '\n');
+    return;
   }
   if (args[0] === 'browser' && args[1] === 'connect') {
     const {configureBrowser}=await import('./browser.js');
@@ -78,7 +81,9 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     process.stdout.write(JSON.stringify(result)+'\n');return;
   }
   if (args[0] === 'secret') return (await import('./secrets.js')).secretCommand(args.slice(1));
-  if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.3\n`); return; }
+  if (args[0] === '__checks' && args[1]) return (await import('./method-issues.js')).checksWorker(args[1]);
+  if (args[0] === 'models' && !args.includes('--help')) return (await import('./hosted-models.js')).modelsCommand(args.slice(1), clientFactory);
+  if (args.length === 1 && args[0] === "--version") { process.stdout.write(`Method SDK ${packageInfo.version}; runtime ${runtimeInfo.version}; current format method/3.4\n`); return; }
   if (["observe", "test", "case", "effect"].includes(args[0] ?? "") && !args.includes("--help")) {
     const quality = await import("./quality.js");
     if (args[0] === "observe") return quality.observeCommand(args.slice(1));
@@ -96,7 +101,6 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     }
   }
   const localCommand = ["prompt", "inspect", "doctor"].includes(args[0] ?? "")
-    || args[0] === "check" && /\.(method)$/i.test(args[1] ?? "")
     || ["run", "steps"].includes(args[0] ?? "") && /\.(method)$|^https?:\/\//i.test(args[1] ?? "");
   if (localCommand) {
     if (args[0] === 'run' && await dispatchRunWorker(args, parse(args).values)) return;
@@ -141,10 +145,15 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return;
   }
   const authorFile = command === "publish" || command === "explain" ? target : undefined;
-  const metaFile = authorFile ? safePath(`${authorFile}.method.json`) : undefined;
-  const meta = metaFile && existsSync(metaFile) ? readDocument(metaFile) : {};
+  if (command === "config") return (await import("./computer-settings.js")).configCommand(rest.slice(1));
+  if (command === "new-id") {
+    if (!target || rest.length !== 2) throw Error("Use method new-id FILE.");
+    const { newMethodId, writeMethodId } = await import("./versions.js");
+    const id = newMethodId(); writeMethodId(safePath(target), id);
+    process.stdout.write(JSON.stringify({ file: safePath(target), method_id: id }, null, 2) + "\n"); return;
+  }
   if (!["status","login","logout","devices","revoke","list","get","steps","step","run","runs","logs","publish","explain","bind","state"].includes(command)) throw Error(help);
-  const client = clientFactory(values.server ?? meta.server ?? DEFAULT_SERVER);
+  const client = clientFactory(values.server ?? DEFAULT_SERVER);
   if (command === "login") {
     await client.login();
     return;
@@ -168,7 +177,9 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (command === "explain") { await (await import("./explain.js")).explainCommand(client, rest.slice(1)); return; }
   // The first real command starts browser approval if no credential is saved.
   if (!client.token()) await client.login();
-  else if(command==='run') {try{await client.request('/api/cli/me');}catch(error){if(String(error).includes('401:'))await client.login();else throw error;}}
+  // Any signed-in command sends what is left in the outbox, in the background.
+  else (await import("./outbox.js")).sendLeftovers(client);
+  if(command==='run'&&client.token()) {try{await client.request('/api/cli/me');}catch(error){if(String(error).includes('401:'))await client.login();else throw error;}}
   const print = (v: unknown) =>
     process.stdout.write(JSON.stringify(v, null, 2) + "\n");
   if (command === "devices") {
@@ -219,8 +230,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return;
   }
   if (command === "publish") {
-    if (!authorFile) throw Error("Use method publish FILE [--reason TEXT].");
-    print(await publish(client, safePath(authorFile), values.reason, (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean)));
+    if (!authorFile) throw Error("Use method publish FILE [--reason TEXT] [--cloud|--workers] [--env NAME].");
+    print(await (await import("./cloud.js")).publishWithPlacement(client, rest, () => publish(client, safePath(authorFile), values.reason, (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean))));
     return;
   }
   if (!target) throw Error(help);
@@ -256,11 +267,12 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       const out = safePath(parsed.values.out);
       if (existsSync(out))
         throw Error("Choose a new output file; this file already exists.");
-      const metadataPath = safePath(`${out}.method.json`);
-      if (existsSync(metadataPath)) throw Error("Choose a file without existing Method metadata.");
       await restorePackage(saved, resolve(out, ".."), client);
-      writeDocument(out, workflow);
-      writePrivateJson(metadataPath, { server: client.server, workflow_id: saved.workflow_id, base_version: saved.version_id, digest: workflowDocumentDigest(loadWorkflow(workflow)), package_digest:saved.package?.digest, digest_format: "document/1" });
+      // The id: line links the file to its Method; its content is the saved version.
+      const { methodContent, writeMethodId } = await import("./versions.js");
+      writeDocument(out, methodContent(workflow));
+      writeMethodId(out, saved.workflow_id);
+      (await import("./outbox.js")).recordCheckout(client.server, saved.workflow_id, saved.version_id, saved.version_number, methodContent(workflow));
       print({
         workflow_id: saved.workflow_id,
         version_id: saved.version_id,

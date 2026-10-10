@@ -1,6 +1,7 @@
 import { transferResults } from "./result-transfer.js";
 import { MAX_RESULT_BYTES, MAX_RESULT_TRANSFER_BYTES } from "../../workflow-language/src/result-files.js";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { Outbox, type RunItem } from "./outbox.js";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -31,8 +32,11 @@ export class MethodSync {
   private sending = false;
   private initial: RunInspection | undefined;
   private warned = false;
+  private live = false;
+  private deviceChecked = false;
   private timer: ReturnType<typeof setInterval> | undefined;
   private scheduled: ReturnType<typeof setTimeout> | undefined;
+  readonly outbox: Outbox;
   constructor(
     readonly client: MethodClient,
     readonly directory: string,
@@ -40,9 +44,11 @@ export class MethodSync {
     versionId: string,
     runId?: string,
     // run_data: device, or the organization keeps run content on devices. The account receives the run's shape and
-    // timing; its content stays on this computer.
+    // timing; its content stays on this computer. The organization setting is read when the first record is sent.
     device = false,
+    outbox?: Outbox,
   ) {
+    this.outbox = outbox ?? new Outbox(client);
     const path = join(directory, "method-sync.json");
     this.state = existsSync(path)
       ? SyncSchema.parse(JSON.parse(readFileSync(path, "utf8")))
@@ -59,17 +65,26 @@ export class MethodSync {
       this.state.workflow_id !== workflowId ||
       this.state.version_id !== versionId
     )
-      throw Error("This run is linked to another Method method or server.");
+      throw Error("This run is linked to another Method or server.");
     if (device) this.state.device = true;
     this.save();
   }
   get device() {
     return this.state.device === true;
   }
+  private get item(): RunItem {
+    return { kind: "run", server: this.client.server, run_dir: this.directory, version_id: this.state.version_id, pid: process.pid };
+  }
   private save() {
     writePrivateJson(join(this.directory, "method-sync.json"), this.state);
   }
   private async upload(inspection: RunInspection) {
+    // A run record is sent after its version is on the server.
+    if (!await this.outbox.whenSaved(this.state.version_id)) throw Error("The version is not saved yet.");
+    if (!this.device && !this.deviceChecked) {
+      if (await organizationKeepsContent(this.client)) { this.state.device = true; this.save(); }
+      this.deviceChecked = true;
+    }
     if (this.device) inspection = deviceOnly(inspection);
     const payload = {
       workflow_id: this.state.workflow_id,
@@ -78,16 +93,12 @@ export class MethodSync {
       inspection,
     };
     this.save();
-    // Save before upload. Sync can be retried after an interrupted connection without running steps again.
-    writePrivateJson(join(this.directory, "method-pending.json"), payload);
     if (inspection.files?.length) {
       // Publish completed work even if transferring its result files is interrupted.
       await this.send({...payload, inspection:{...inspection, files:undefined}});
       payload.sequence = ++this.state.sequence;
       this.save();
-      writePrivateJson(join(this.directory, "method-pending.json"), payload);
       payload.inspection = {...inspection, files:await transferResults(this.client, this.directory, inspection.files)};
-      writePrivateJson(join(this.directory, "method-pending.json"), payload);
     }
     await this.send(payload);
   }
@@ -96,6 +107,8 @@ export class MethodSync {
       `/api/cli/runs/${this.state.id}`,
       "PUT",
       payload,
+      true,
+      { stallMs: 60_000 },
     ));
     if (!this.state.dashboard_id)
       process.stderr.write(
@@ -104,38 +117,48 @@ export class MethodSync {
     this.state.dashboard_id = result.id;
     this.save();
     this.warned = false;
-    const file=join(this.directory,'method-pending.json');
-    if(existsSync(file)&&JSON.parse(readFileSync(file,'utf8')).sequence===(payload as any).sequence)rmSync(file,{force:true});
   }
+  /**
+   * Record the run's start. This sends nothing and never throws: the run never waits for the account. With live, the
+   * outbox starts sending (the version first) and the run's records follow it.
+   */
   async start(
     workflow: RunInspection["workflow"],
     inputs: RunInspection["inputs"],
     resources: RunInspection["resources"],
+    live = true,
   ) {
-    if (this.timer) return;
-    // Require the initial dashboard record before starting any business action.
-    this.initial = {
-      schema: "workflow-inspection/2",
-      workflow,
-      run_id: this.state.id,
-      status: "running",
-      inputs,
-      resources,
-      invocations: {},
-      events: existsSync(join(this.directory,"setup.json")) ? JSON.parse(readFileSync(join(this.directory,"setup.json"),"utf8")) : [],
-    };
-    // A completed checkpoint remains completed when reconnecting or adding result files.
     try {
-      const saved = inspectRun(this.directory, {includeFiles:"references"});
-      if (saved.status === 'succeeded') this.initial = saved;
-    } catch { /* Preparation has no checkpoint yet. */ }
-    writePrivateJson(join(this.directory,'setup-inspection.json'),this.initial);
-    await this.upload(this.initial);
-    this.timer = setInterval(() => this.capture(), 5000);
-    this.timer.unref();
+      if (this.live) return;
+      this.initial = {
+        schema: "workflow-inspection/2",
+        workflow,
+        run_id: this.state.id,
+        status: "running",
+        inputs,
+        resources,
+        invocations: {},
+        events: existsSync(join(this.directory,"setup.json")) ? JSON.parse(readFileSync(join(this.directory,"setup.json"),"utf8")) : [],
+      };
+      // A completed checkpoint remains completed when reconnecting or adding result files.
+      try {
+        const saved = inspectRun(this.directory, {includeFiles:"references"});
+        if (saved.status === 'succeeded') this.initial = saved;
+      } catch { /* Preparation has no checkpoint yet. */ }
+      writePrivateJson(join(this.directory,'setup-inspection.json'),this.initial);
+      this.outbox.add(this.item);
+      if (!live) return;
+      this.live = true;
+      this.outbox.start();
+      const initial = this.initial;
+      this.sending = true;
+      this.pending = this.upload(initial).catch(error => this.warn(error)).finally(() => { this.sending = false; });
+      this.timer = setInterval(() => this.capture(), 5000);
+      this.timer.unref();
+    } catch (error) { this.warn(error); }
   }
   snapshot() {
-    if (this.stopped || this.scheduled) return;
+    if (this.stopped || this.scheduled || !this.live) return;
     // Coalesce tool bursts before reading the journal or encoding attachments.
     this.scheduled = setTimeout(() => {
       this.scheduled = undefined;
@@ -160,19 +183,31 @@ export class MethodSync {
   }
 
   private warn(error: unknown) {
+    // Before the version is saved, the run's last line says what happens; nothing else is printed.
+    if (!this.warned && String(error).includes("not saved yet")) { this.warned = true; return; }
     if (!this.warned)
       process.stderr.write(
-        `Dashboard sync paused: ${String(error)}\nRun records remain here. Retry with method sync ${JSON.stringify(this.directory)}.\n`,
+        `Dashboard sync paused: ${String(error)}\nRun records remain here; any later method command sends them.\n`,
       );
     this.warned = true;
   }
-  async finish(failure?: unknown) {
-    if(this.stopped)return;
+  /**
+   * Send the final record: the outbox sends the version first. Resolves "saved" or "pending"; a pending run stays in
+   * the outbox. Never throws.
+   */
+  async finish(failure?: unknown): Promise<"saved" | "pending"> {
+    this.finished ??= this.finishOnce(failure);
+    return this.finished;
+  }
+  private finished: Promise<"saved" | "pending"> | undefined;
+  private async finishOnce(failure?: unknown): Promise<"saved" | "pending"> {
     this.stopped = true;
     clearInterval(this.timer);
     clearTimeout(this.scheduled);
-    await this.pending;
     try {
+      if (!this.initial) this.outbox.add(this.item);
+      await this.pending;
+      await this.outbox.drain();
       let inspection: RunInspection;
       try {
         inspection = inspectRun(this.directory, { includeFiles: "references" });
@@ -187,12 +222,19 @@ export class MethodSync {
               ? failure.message
               : String(failure ?? error),
         };
+        // A run that failed before its first step keeps this record for a later sync.
+        writePrivateJson(join(this.directory, "setup-inspection.json"), inspection);
       }
       await this.upload(inspection);
+      this.outbox.remove(this.item);
+      return "saved";
     } catch (error) {
       this.warn(error);
+      this.outbox.release(this.item);
+      return "pending";
     }
   }
+  /** Send the final local record of a run. Never runs business actions. */
   static async retry(directory: string, client?: MethodClient) {
     const state = SyncSchema.parse(
       JSON.parse(readFileSync(join(directory, "method-sync.json"), "utf8")),
@@ -203,8 +245,12 @@ export class MethodSync {
       state.workflow_id,
       state.version_id,
     );
-    // Export the final local state. Never rerun business actions during sync.
-    let inspection = inspectRun(directory, { includeFiles: "references" });
+    let inspection: RunInspection;
+    try { inspection = inspectRun(directory, { includeFiles: "references" }); }
+    catch (error) {
+      if (!existsSync(join(directory, "setup-inspection.json"))) throw error;
+      inspection = InspectionSchema.parse(JSON.parse(readFileSync(join(directory, "setup-inspection.json"), "utf8")));
+    }
     if (state.dashboard_id) {
       const saved=await sync.client.request<{run:{status:string;inspection:RunInspection}}>(`/api/workspace/runs/${state.dashboard_id}`);
       // A later observation can change a finished run's status; then the local record replaces the saved one.
@@ -220,18 +266,8 @@ export class MethodSync {
         inspection = { ...saved.run.inspection, files };
       }
     }
-    const pendingPath = join(directory, "method-pending.json");
-    if (existsSync(pendingPath)) {
-      const pending = JSON.parse(readFileSync(pendingPath, "utf8"));
-      if (
-        JSON.stringify(InspectionSchema.parse(pending.inspection)) ===
-        JSON.stringify(inspection)
-      ) {
-        await sync.upload(inspection);
-        return;
-      }
-    }
     await sync.upload(inspection);
+    sync.outbox.remove(sync.item);
   }
 }
 

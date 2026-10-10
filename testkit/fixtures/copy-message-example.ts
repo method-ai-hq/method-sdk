@@ -34,8 +34,9 @@ export const exampleFiles: Record<string, string> = {
   "copy.yaml": "name: Copy message\npurpose: Preserve the exact message.\nchanges: []\nin:\n  message: inputs.message\ndo:\n  kind: run\n  runtime: node\n  entrypoint: copy.cjs\nlimits:\n  timeout_ms: 10000\nout:\n  copied_message:\n    type: text\n    description: The complete unchanged message.\n",
   "check.yaml": "equals:\n  actual: copied_message\n  expected: message\n",
   "inputs.json": '{"message":"Hello"}\n',
-  "runtime.json": JSON.stringify({ allow_local_processes: true, runtimes: { node: { command: "node", version: "22+" } }, limits: { timeout_ms: 60000, max_model_requests: 0, max_invocations: 10, max_tool_calls: 0, max_output_bytes: 1000000, max_request_bytes: 1000000 } }, null, 2) + "\n",
 };
+/** The runtime configuration that the SDK builds for this example on a computer with node on PATH. */
+export const exampleConfig = { allow_local_processes: true, runtimes: { node: { command: "node", version: "22+" } }, limits: { timeout_ms: 60000, max_model_requests: 0, max_invocations: 10, max_tool_calls: 0, max_output_bytes: 1000000, max_request_bytes: 1000000 } };
 export const exampleCommands: string[][] = [
   ["init", "message.method", "--name", "Copy a message", "--goal", "Preserve every character of a supplied message."],
   ["set", "message.method", "/inputs", "--value-file", "inputs.yaml"],

@@ -26,7 +26,7 @@ Paths are relative to the manifest's directory. List each HTML page, script, sty
 
 The run page offers **Open website** once all listed files are attached. It also offers **Download website**, which saves a ZIP with the same directory structure. Preview links expire after one hour; open the website again from the run to get a new link. Websites run in an isolated browser frame. They can load their listed assets and data, but cannot read the Method session, contact external services, submit forms, or navigate the main app. Remote API connections are not part of a saved website result.
 
-Use `examples/website-result.method`, `examples/build-website-result.mjs`, and `examples/runtime.json` as a complete example. The example includes a stylesheet, a script, and JSON data loaded by the script.
+Use `examples/website-result.method` and `examples/build-website-result.mjs` as a complete example. The example includes a stylesheet, a script, and JSON data loaded by the script.
 
 Existing workflows do not gain a website file list automatically. Update the output-producing script to write this manifest, and declare its format in a new Method version. Old runs with ordinary file outputs can still attach and download those files; Method does not guess the contents of an old, task-specific file list.
 

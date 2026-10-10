@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { documentForDigest } from "@withmethod/runtime/document.js";
 
 export const StableIdSchema = z.string().regex(
   /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/,
@@ -21,14 +22,23 @@ export function semanticDigest(value: unknown): string {
   return sha256(canonicalJson(value));
 }
 
-/** Document identity preserves authored step and classifier option order. */
+/**
+ * Document identity preserves authored step and classifier option order. The Method ID (`id:`) names the account
+ * Method and is not content: a copy with another ID has the same digest.
+ */
 export function workflowDocumentDigest(value: { steps: Record<string, unknown> }): string {
-  return semanticDigest({ ...value, steps: Object.entries(value.steps).map(([id, raw]) => {
+  const content = documentForDigest(value) as { steps: Record<string, unknown> };
+  return semanticDigest({ ...content, steps: Object.entries(value.steps).map(([id, raw]) => {
     const step = raw as {do?: {kind?: string; options?: Record<string, unknown>}} | null;
     return [id, step?.do?.kind === 'classify'
       ? {...step, do: {...step.do, options: Object.entries(step.do.options ?? {})}}
       : raw];
   }) });
+}
+
+/** A version ID: the same content (package digest) of a Method is always the same version. */
+export function versionIdFor(methodId: string, packageDigest: string): string {
+  return `v_${sha256(`${methodId}:${packageDigest}`).slice(0, 32)}`;
 }
 
 function canonicalize(value: unknown): unknown {

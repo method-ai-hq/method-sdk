@@ -9,36 +9,48 @@ import { observeRun, pendingRuns } from "@withmethod/runtime/observe.js";
 import { createCase, retireCase, listCases, testSuite, defaultCasesDir } from "@withmethod/runtime/cases.js";
 import { authoringPath, editDocument, readDocument } from "./authoring.js";
 import { localSetup } from "./local-setup.js";
-import { resolveAgentProfiles, checkAgents } from "./capabilities.js";
+import { resolveAgentProfiles, checkAgents, accountNeeds } from "./capabilities.js";
+import { managedModels } from "./hosted-models.js";
+import { MethodClient } from "./method-client.js";
 import { prepareRuntime, methodCache } from "./prepare.js";
 import { writePrivateJson } from "./files.js";
 
 const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + "\n");
 const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
 
-/** The same runtime preparation as method run, without starting a run. */
-export async function preparedConfig(file: string, flags: { config?: string; workspace?: string; agent?: string }) {
+/** The same runtime preparation as method run, without starting a run. Hosted models are used when signed in. */
+export async function preparedConfig(file: string, flags: { workspace?: string; agent?: string }, options: { judge?: boolean } = {}) {
   const setup = await localSetup(file, flags);
   const method = readDocument(file);
   const config = setup.config;
-  config.models = await resolveAgentProfiles(method, config, flags.agent);
+  const client = new MethodClient();
+  let hostedModel: string | undefined;
+  const signedIn = (() => { try { return !!client.token(); } catch { return false; } })();
+  // A rubric judge is a model step too: without a local agent, a signed-in computer judges with the account's model.
+  const judge = options.judge && !setup.agent && !config.models?.judge;
+  if ((accountNeeds(method, config, setup.agent).models || judge) && signedIn) {
+    try { hostedModel = await managedModels(client).model(); }
+    catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}). Using a local agent.\n`); }
+  }
+  config.models = await resolveAgentProfiles(method, config, setup.agent, hostedModel);
+  if (judge && hostedModel) config.models.judge = { backend: "method", model: hostedModel };
   await checkAgents(config.models);
   const prepared = await prepareRuntime(setup.sourceRoot, config, method);
-  return { config: prepared.config, sourceRoot: setup.sourceRoot, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle };
+  const hostedModels = Object.values(prepared.config.models ?? {}).some((profile: any) => profile.backend === 'method') ? managedModels(client) : undefined;
+  return { config: prepared.config, sourceRoot: setup.sourceRoot, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(hostedModels ? { hostedModels } : {}) };
 }
 
 /** Run directories that this computer's Method runs use by default. */
 export const defaultRunRoots = () => [resolve(".method-runs"), join(methodCache(), "runs")];
 
 export async function observeCommand(args: string[]) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { pending: { type: "string", multiple: true }, config: { type: "string" }, sync: { type: "boolean" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { pending: { type: "string", multiple: true }, sync: { type: "boolean" } } });
   const dirs = positionals.map(dir => authoringPath(dir));
   if (!dirs.length) for (const root of values.pending ?? defaultRunRoots()) dirs.push(...await pendingRuns(authoringPath(root)));
-  const config = values.config ? readDocument(values.config) : undefined;
   const runs = [];
   for (const dir of dirs) {
     try {
-      const result = await observeRun(dir, { config });
+      const result = await observeRun(dir, {});
       let dashboard: string | undefined;
       // A late observation can change a synced run; upload the new record so the dashboard shows it.
       if (result.changed && existsSync(join(dir, "method-sync.json")) && values.sync !== false) {
@@ -81,16 +93,16 @@ export async function casesNotice(file: string) {
 }
 
 /** Run the cases of a Method with the same preparation as method run. */
-export async function runCases(file: string, flags: { config?: string; workspace?: string; agent?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[] } = {}) {
-  const prepared = await preparedConfig(file, flags);
+export async function runCases(file: string, flags: { workspace?: string; agent?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[] } = {}) {
+  const prepared = await preparedConfig(file, flags, { judge: true });
   const report = await testSuite(file, prepared.config, { ...options,
-    runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(flags.agent ? { agent: flags.agent } : {}) } });
+    runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(flags.agent ? { agent: flags.agent } : {}) } });
   if (!options.ids && !options.casesDir) recordChecked(file, report);
   return report;
 }
 
 export async function testCommand(args: string[]) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, config: { type: "string" }, workspace: { type: "string" }, agent: { type: "string" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" }, agent: { type: "string" } } });
   const file = positionals[0];
   if (!file || positionals.length !== 1) throw Error("Use method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]...");
   const report = await runCases(authoringPath(file), values, { casesDir: values.cases ? authoringPath(values.cases) : undefined, ids: values.case,
@@ -121,7 +133,7 @@ export async function caseGate(file: string, accept: string[] = [], reason?: str
 export async function caseCommand(args: string[]) {
   const text = { type: "string" } as const;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { run: text, "passing-run": text, id: text, note: text, rubric: { type: "string", multiple: true }, ref: text, context: { type: "string", multiple: true }, expect: text,
-    observations: text, redact: text, runs: text, "min-pass": text, author: text, reason: text, by: text, cases: text, config: text, workspace: text, agent: text,
+    observations: text, redact: text, runs: text, "min-pass": text, author: text, reason: text, by: text, cases: text, workspace: text, agent: text,
     "retention-days": text, supersedes: { type: "string", multiple: true } } });
   const [action, file, id] = positionals as string[];
   if (!file || !["new", "retire", "list"].includes(action ?? "")) throw Error("Use method case new|retire|list FILE. See method help case new.");
@@ -132,14 +144,14 @@ export async function caseCommand(args: string[]) {
   if (action === "retire") { if (!id || !values.reason) throw Error("Supply the case ID and --reason."); await retireCase(methodFile, id, { by: values.by ?? null, reason: values.reason, casesDir }); return print({ retired: id }); }
   if (!values.id || !values.note || (!values.run && !values["passing-run"])) throw Error('Supply --id, --note "the person\'s words", and --run (the run that went wrong) or --passing-run (a run that was right).');
   if (!values.rubric?.length && !values.expect) throw Error('Say what must be true with --rubric "plain sentence" (repeatable), or give --expect FILE.');
-  const prepared = await preparedConfig(methodFile, { ...(values.config ? { config: values.config } : {}), ...(values.workspace ? { workspace: values.workspace } : {}), ...(values.agent ? { agent: values.agent } : {}) });
+  const prepared = await preparedConfig(methodFile, { ...(values.workspace ? { workspace: values.workspace } : {}), ...(values.agent ? { agent: values.agent } : {}) }, { judge: true });
   const privacy = casesPrivacyWarning(methodFile, casesDir);
   if (privacy) process.stderr.write(privacy + "\n");
   print(await createCase({ methodFile, runDir: values.run ? authoringPath(values.run) : undefined, passingRun: values["passing-run"] ? authoringPath(values["passing-run"]) : undefined,
     id: values.id, note: values.note, author: values.author ?? null, rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
     retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, config: prepared.config,
-    options: { runOptions: { processPath: prepared.processPath, ...(values.agent ? { agent: values.agent } : {}) } } }));
+    options: { runOptions: { processPath: prepared.processPath, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(values.agent ? { agent: values.agent } : {}) } } }));
 }
 
 /**
@@ -185,7 +197,7 @@ export async function effectCommand(args: string[]) {
     const step = doc.steps?.[stepId];
     if (!step) throw Error(`Step not found: ${stepId}.`);
     if (!(step.changes ?? []).some((c: string) => c.startsWith("environment."))) throw Error(`${stepId} changes no environment. Declare the changed connection in changes first.`);
-    doc.format = "method/3.3";
+    if (doc.format !== "method/3.4") doc.format = "method/3.4";
     doc.environment ??= {};
     const existing = doc.environment[connection];
     if (existing && existing.role !== "observer") throw Error(`Environment ${connection} exists and is not an observer connection. Choose --connection NAME.`);

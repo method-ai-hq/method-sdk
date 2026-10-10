@@ -1,4 +1,4 @@
-format: method/3.3
+format: method/3.4
 name: Manage daily outbound
 goal: Read campaign email, find prospects in Happenstance, enrich them from company and LinkedIn pages, update the CRM, and prepare today's outreach tasks.
 inputs:
@@ -264,4 +264,3 @@ files:
   - check_sources.py
   - check_plan.py
   - save_day.py
-  - runtime.json

@@ -59,12 +59,17 @@ it('a device-only inspection keeps the run shape and drops its content', () => {
 it('publish checks cases, saves the version, and marks it published', async () => {
   const root = home();
   writeFileSync(join(root, 'task.method'), JSON.stringify({ format: 'method/3.3', name: 'Publish', goal: 'Publish a version.', steps: { ask: { ask: 'What is your name?', out: { name: { type: 'text', description: 'Name.' } } } }, result: 'name' }));
+  vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache'));
   let workflow: any, pack: any;
   const client: any = { server: 'https://example.test', token: () => 'test-token', transfer: vi.fn(), request: vi.fn(async (path: string, verb: string, body: any) => {
     if (path === '/api/cli/files/check') return { present: [] };
     if (path.endsWith('/publish')) return { published_at: '2026-10-09T00:00:00Z', publish_reason: body.reason };
-    if (verb === 'POST') { workflow = body.workflow; pack = body.package; return { workflow_id: 'wf_test', version_id: 'v_test' }; }
-    return { version_id: 'v_test', version_number: 1, workflow, package: pack };
+    if (verb === 'PUT' && path.includes('/versions/')) { workflow = body.workflow; pack = body.package; return { version_id: path.split('/').at(-1), version_number: 1 }; }
+    throw Error(`Unexpected request: ${verb} ${path}`);
   }) };
-  expect(await publish(client, join(root, 'task.method'), 'First release')).toMatchObject({ workflow_id: 'wf_test', version_id: 'v_test', published_at: '2026-10-09T00:00:00Z', publish_reason: 'First release' });
+  const published = await publish(client, join(root, 'task.method'), 'First release');
+  expect(published).toMatchObject({ version_id: expect.stringMatching(/^v_[a-f0-9]{32}$/), version_number: 1, published_at: '2026-10-09T00:00:00Z', publish_reason: 'First release' });
+  expect(workflow.id).toBeUndefined(); expect(pack.digest).toMatch(/^[a-f0-9]{64}$/);
+  expect(client.request.mock.calls.at(-1)[0]).toBe(`/api/cli/methods/${published.workflow_id}/versions/${published.version_id}/publish`);
+  await expect(publish(client, join(root, 'task.method'), undefined, ['case_one'])).rejects.toThrow('Give --reason with --accept-failing-case');
 });

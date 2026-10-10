@@ -13,7 +13,7 @@ Every Friday, read this week's meeting notes and save a summary with the decisio
 ## notes-summary.method
 
 ```yaml
-format: method/3.3
+format: method/3.4
 name: Weekly summary from meeting notes
 goal: Read this week's meeting notes and save a summary with the decisions and the action items, each with its owner, due date and source note.
 environment:
@@ -82,12 +82,6 @@ writeFileSync(path, lines.join('\n'));
 console.log(JSON.stringify({path}));
 ```
 
-## runtime.json
-
-```json
-{"allow_local_processes": true, "environment": {"notes": "notes", "out": "out"}}
-```
-
 ## README.md
 
 ```markdown
@@ -109,5 +103,4 @@ The smallest complete Method: a script reads a folder, one model call finds the 
 - notes-summary/notes/2026-10-07-planning.md
 - notes-summary/out/.keep
 - notes-summary/read-notes.mjs
-- notes-summary/runtime.json
 - notes-summary/save.mjs

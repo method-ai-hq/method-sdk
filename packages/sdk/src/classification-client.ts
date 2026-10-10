@@ -6,7 +6,7 @@ import { MethodClient } from './method-client.js';
 const Identity = z.strictObject({provider: z.literal('typesafe'), model: z.string().trim().min(1)});
 /** Use the same Method account and server as the run. Each evaluation is one attempt. */
 export function managedClassification(client: MethodClient): ClassificationProvider {
-  const options = (signal: AbortSignal) => ({signal, timeoutMs: 30_000, maxResponseBytes: classificationByteLimit});
+  const options = (signal: AbortSignal) => ({signal, stallMs: 30_000, maxResponseBytes: classificationByteLimit});
   return {
     async resolve(signal) {
       return Identity.parse(await client.request('/api/cli/classifications/model', 'GET', undefined, true, options(signal)));

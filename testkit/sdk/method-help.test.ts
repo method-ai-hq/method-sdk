@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {authoringExamples,renderExample} from "../../packages/sdk/src/authoring-example.js";
-import {exampleScript,exampleWorkflow} from '../fixtures/copy-message-example.js';
+import { exampleConfig,exampleScript,exampleWorkflow} from '../fixtures/copy-message-example.js';
 const approvedReport = readFileSync(resolve('packages/sdk/examples/daily-briefing/approved-report.md'),'utf8');
 import { authoringGuide, commandHelp, guideTopics } from "../../packages/sdk/src/method-help.js";
 import { methodMain } from "../../packages/sdk/src/method.js";
@@ -52,7 +52,7 @@ it("executes the copy-message editing fixture without adding it to the authoring
   const dir = temp();
   expect(loadWorkflow(exampleWorkflow).format).toBe('method/3.3');
   expect(shell(dir,exampleScript())).toContain('"valid": true');
-  const result = await runMethod(join(dir, 'message.method'), JSON.parse(readFileSync(join(dir, 'runtime.json'), 'utf8')), {inputs: {message:'Hello\n  '}, runDir:join(dir,'run')});
+  const result = await runMethod(join(dir, 'message.method'), exampleConfig, {inputs: {message:'Hello\n  '}, runDir:join(dir,'run')});
   expect(result).toMatchObject({status:'completed',result:'Hello\n  '});
   expect(authoringGuide('commands')).not.toContain(exampleWorkflow);
 },30_000);

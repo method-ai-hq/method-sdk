@@ -13,7 +13,34 @@ Turn one prepared day folder into a complete, cited daily briefing. Follow the a
 ## daily-briefing.method
 
 ```yaml
-format: method/3.3
+format: method/3.4
+tools:
+  calculate_activity_times:
+    description: Calculate activity times and save time-plan.json and time-estimates.json in this run. Each successful call replaces both files; supply the complete plan each time. Calculate only the activities supplied in the plan. Choose records for the activities. Check whether messages are automated prompts before counting them as work. Record selection and exclusion reasons in the calculation plan. Gaps and playback do not measure continuous attention. Leave activities without enough evidence unestimated.
+    in:
+      day:
+        type: text
+        description: Selected date in YYYY-MM-DD form.
+      timezone:
+        type: text
+        description: Selected named timezone.
+      plan:
+        type: text
+        description: "JSON with activities and not_estimated (short reasons for activities without an estimate). Each activity has id, label, reason, mode, and optional excluded: [{record_ids, reason}]. A field reference is {record_id, field}, where field is a dotted path in the prepared record, such as time.local, time.end, or attributes.msPlayed. Use points with points: [field references], gap_minutes, and optional compare_gaps. This counts first-to-last time in each group; a single point adds zero. Use intervals with intervals: [{start: field reference, end: field reference}]. Record connections between different endpoint records in the activity reason. Intervals are clipped to the day and overlaps count once. Use durations with durations: [field references] and unit: milliseconds, seconds, or minutes. Each selected duration counts once. Supply saved fields, not invented times or calculated totals."
+    out:
+      estimates:
+        type: text
+        description: Calculated durations and the records and assumptions used to calculate them.
+      files:
+        type: list
+        description: Supporting file references to return with the draft.
+        items:
+          type: file
+    run:
+      kind: run
+      runtime: python
+      entrypoint: briefing_times.py
+    effects: []
 name: Write a daily briefing
 goal: Turn one prepared day folder into a complete, cited daily briefing. Follow the approved example for writing and layout, and save the briefing with its website.
 inputs:
@@ -77,7 +104,7 @@ steps:
       session_links: session_links
     do:
       kind: agent
-      model: writer
+      model: default
       prompt: |
         Write the story of {{selected_day.day}} from the records in {{selected_day.folder}}.
         Follow the complete approved report in example.report for writing and detail.
@@ -138,7 +165,6 @@ files:
   - briefing_markdown.py
   - reader/reader.css
   - reader/reader.js
-  - runtime.json
   - package.json
   - package-lock.json
   - pyproject.toml
@@ -1464,52 +1490,6 @@ function revealHash(){const id=decodeURIComponent(location.hash.slice(1));if(!id
 {"day":"2026-05-11","timezone":"America/Chicago"}
 ```
 
-## runtime.json
-
-```json
-{
-  "allow_local_processes": true,
-  "tools": {
-    "calculate_activity_times": {
-      "description": "Calculate activity times and save time-plan.json and time-estimates.json in this run. Each successful call replaces both files; supply the complete plan each time. Calculate only the activities supplied in the plan. Choose records for the activities. Check whether messages are automated prompts before counting them as work. Record selection and exclusion reasons in the calculation plan. Gaps and playback do not measure continuous attention. Leave activities without enough evidence unestimated.",
-      "in": {
-        "day": {
-          "type": "text",
-          "description": "Selected date in YYYY-MM-DD form."
-        },
-        "timezone": {
-          "type": "text",
-          "description": "Selected named timezone."
-        },
-        "plan": {
-          "type": "text",
-          "description": "JSON with activities and not_estimated (short reasons for activities without an estimate). Each activity has id, label, reason, mode, and optional excluded: [{record_ids, reason}]. A field reference is {record_id, field}, where field is a dotted path in the prepared record, such as time.local, time.end, or attributes.msPlayed. Use points with points: [field references], gap_minutes, and optional compare_gaps. This counts first-to-last time in each group; a single point adds zero. Use intervals with intervals: [{start: field reference, end: field reference}]. Record connections between different endpoint records in the activity reason. Intervals are clipped to the day and overlaps count once. Use durations with durations: [field references] and unit: milliseconds, seconds, or minutes. Each selected duration counts once. Supply saved fields, not invented times or calculated totals."
-        }
-      },
-      "out": {
-        "estimates": {
-          "type": "text",
-          "description": "Calculated durations and the records and assumptions used to calculate them."
-        },
-        "files": {
-          "type": "list",
-          "description": "Supporting file references to return with the draft.",
-          "items": {
-            "type": "file"
-          }
-        }
-      },
-      "run": {
-        "kind": "run",
-        "runtime": "python",
-        "entrypoint": "briefing_times.py"
-      },
-      "effects": []
-    }
-  }
-}
-```
-
 ## sample-report.md
 
 ```markdown
@@ -1603,7 +1583,7 @@ Open the website returned by the run. Source links open the saved records and se
 ## Files
 
 - daily-briefing.method: input checks, writing with a source check, and website rendering.
-- runtime.json: website inspection and time calculation tools.
+- daily-briefing.method `tools:`: the time calculation tool.
 - briefing_*.py, reader/, vendor/: helpers and website assets.
 - pyproject.toml, uv.lock, package.json, package-lock.json: dependencies.
 - sample/, inputs.json: inputs for a sample run, kept outside the Method's saved files.
@@ -1636,7 +1616,6 @@ Open the website returned by the run. Source links open the saved records and se
 - daily-briefing/pyproject.toml
 - daily-briefing/reader/reader.css
 - daily-briefing/reader/reader.js
-- daily-briefing/runtime.json
 - daily-briefing/sample-output.zip
 - daily-briefing/sample-report.md
 - daily-briefing/sample/context.json

@@ -22,7 +22,7 @@ Open the website returned by the run. Source links open the saved records and se
 ## Files
 
 - daily-briefing.method: input checks, writing with a source check, and website rendering.
-- runtime.json: website inspection and time calculation tools.
+- daily-briefing.method `tools:`: the time calculation tool.
 - briefing_*.py, reader/, vendor/: helpers and website assets.
 - pyproject.toml, uv.lock, package.json, package-lock.json: dependencies.
 - sample/, inputs.json: inputs for a sample run, kept outside the Method's saved files.

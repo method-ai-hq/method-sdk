@@ -29,6 +29,13 @@ export function resolveSecrets(names: string[]): Record<string, string> {
   }));
 }
 
+/** Every secret value on this computer (the store, and the shell values of the declared names), to find a leaked value. */
+export function deviceSecretValues(declared: string[] = []): Record<string, string> {
+  const values: Record<string, string> = { ...readStore() };
+  for (const key of declared) if (process.env[key]) values[key] = process.env[key]!;
+  return values;
+}
+
 /** Read KEY=VALUE lines without executing the file. Quotes and a leading export are removed. */
 function parseEnv(text: string): Record<string, string> {
   const values: Record<string, string> = {};
