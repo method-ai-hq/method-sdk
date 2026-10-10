@@ -523,7 +523,7 @@ method config model-key [--off]
 ```
 
 Arguments and defaults:
-Settings live in ~/.config/method/computer.json (private): agent (run every model step with a local agent), bindings (method bind), and model_key_env. model-key imports OPENROUTER_API_KEY from the one nearby key file that holds it, or else opens a private browser form for it (the value stays in this computer's secret store), and then sends every hosted model step and every classify step on this computer to OpenRouter with your key, in place of the account's model credit; the run prints Using your own OpenRouter key. Your OpenRouter account's privacy settings then apply. --off goes back to the account. Run limits belong to the Method (limits:). Nothing goes into a Method file.
+Settings live in ~/.config/method/computer.json (private): agent (run every model step with a local agent), bindings (method bind), and model_key_env. model-key imports OPENROUTER_API_KEY from the one nearby key file that holds it, or else opens a private browser form for it (the value stays in this computer's secret store), and then sends every hosted model step and every classify step on this computer to OpenRouter with your key, in place of the account's model credit; the run prints Using your own OpenRouter key. Those requests keep Method's private options: no provider that trains on the data, and zero data retention. --off goes back to the account. Run limits belong to the Method (limits:). Nothing goes into a Method file.
 
 Result and changes:
 The settings, or one line.

@@ -11,7 +11,7 @@ npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.1
 method --version
 ```
 
-Node.js 22 or later is required. Python 3.11 or later uses the installed Node package:
+Node.js 22 or later is required. Python 3.9 or later uses the installed Node package:
 
 ```sh
 pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.14.0/withmethod-0.14.0-py3-none-any.whl
