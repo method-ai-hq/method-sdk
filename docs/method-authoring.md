@@ -1554,7 +1554,7 @@ Arguments and defaults:
 No required arguments.
 
 Result and changes:
-Server JSON device list. No changes.
+JSON list of the computers signed in to your account, with id, name, created_at, revoked_at, and this_computer (true for the computer that asks). Revoke one with method revoke ID. No changes.
 
 Example:
 
