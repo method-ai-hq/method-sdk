@@ -3,7 +3,7 @@ import { MethodClient } from './method-client.js';
 import {openBrowser} from './browser.js';
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from 'node:path';
-import { managedModels } from './hosted-models.js';
+import { hostedModelsFor, managedModels } from './hosted-models.js';
 import { resolveSecrets } from './secrets.js';
 import { randomUUID } from 'node:crypto';
 import { assertCheckpointExecutor } from '@withmethod/runtime/executor-version.js';
@@ -90,7 +90,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       if(flags['run-dir']){const path=join(authoringPath(flags['run-dir']),'setup.json');const events=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):[];writePrivateJson(path,[...events,{at:new Date().toISOString(),type:'setup_completed'}]);}
     }
     browser = await openBrowser(method,config,flags['run-dir']!,controller.signal);
-    const hostedModels = Object.values(config.models ?? {}).some((profile: any) => profile.backend === 'method') ? managedModels(client) : undefined;
+    const hostedModels = Object.values(config.models ?? {}).some((profile: any) => profile.backend === 'method') ? await hostedModelsFor(client) : undefined;
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
       agent: agent as 'codex' | 'claude' | undefined, inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,

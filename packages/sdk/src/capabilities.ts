@@ -2,7 +2,7 @@ import {resolveModels} from '@withmethod/runtime/agents.js';
 import {executable} from '@withmethod/runtime/io.js';
 import {directBackends} from '@withmethod/runtime/model.js';
 import {command} from './prepare.js';
-import {announceOwnKey, loadOwnKey, ownKeyClassification, ownKeyEnv, withOwnKey} from './own-model-key.js';
+import {announceOwnKey, loadOwnKey, ownKeyClassification, ownKeyEnv} from './own-model-key.js';
 /** Check supported agent access without starting a model request. Custom commands remain operator-owned. */
 export async function checkAgents(profiles:Record<string,any>){
  const checked=new Set<string>();
@@ -29,9 +29,10 @@ export async function resolveAgentProfiles(method: any, config: any, agent?: str
   const hosted = !agent && Object.values(profiles).some((profile: any) => profile?.backend === 'method');
   if (!hosted && !classifies) return profiles;
   if (classifies && !config.classification?.api_key_env) config.classification = ownKeyClassification(env);
-  const own = hosted ? withOwnKey(profiles, env) : (loadOwnKey(env), profiles);
+  // Hosted profiles stay hosted: the run sends their requests with the own key (hostedModelsFor).
+  loadOwnKey(env);
   announceOwnKey();
-  return own;
+  return profiles;
 }
 /** What a run needs from the Method account: hosted models for unconfigured call and agent steps, and classification. */
 export function accountNeeds(method: any, config: any, agent?: string) {

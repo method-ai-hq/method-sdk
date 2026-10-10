@@ -6,11 +6,9 @@
 import { typesafeModel } from '@withmethod/runtime/classification.js';
 import { readComputerSettings, updateComputerSettings } from './computer-settings.js';
 import { resolveSecrets, setSecret } from './secrets.js';
+import type { HostedModels } from '@withmethod/runtime';
 
 export const ownKeyName = 'OPENROUTER_API_KEY';
-// The output limit of a hosted request; a direct OpenRouter profile needs one.
-const outputTokens = 16_000;
-
 /** The name of this computer's own model key, or undefined. A local agent (--agent) replaces it for model steps. */
 export const ownKeyEnv = () => readComputerSettings().model_key_env;
 
@@ -28,15 +26,23 @@ export async function modelKeyCommand(args: string[], set: (name: string) => Pro
 }
 
 /**
- * The resolved model profiles with each hosted profile (backend method) sent to OpenRouter with the own key. Other
- * profiles (a local agent) are unchanged. The key value is put into this process's environment from the device store,
- * so the runtime reads it by name; scripts receive only their declared secrets.
+ * Hosted model requests sent to OpenRouter with the own key, in place of the account: the same request, with the same
+ * private options as the account (no training on the data, zero data retention). Every hosted profile uses it, the
+ * Method's own models too.
  */
-export function withOwnKey(profiles: Record<string, any>, env: string): Record<string, any> {
+export function ownKeyModels(env: string): HostedModels {
   loadOwnKey(env);
-  return Object.fromEntries(Object.entries(profiles).map(([name, profile]) => [name, profile?.backend === 'method'
-    ? { backend: 'openrouter-chat', model: profile.model, api_key_env: env, max_output_tokens: profile.max_output_tokens ?? outputTokens, ...(profile.reasoning_effort ? { reasoning_effort: profile.reasoning_effort } : {}) }
-    : profile]));
+  return {
+    async request(body: any, signal: AbortSignal) {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST', signal, headers: { authorization: `Bearer ${process.env[env]}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ ...body, provider: { ...(body.provider ?? {}), data_collection: 'deny', zdr: true }, usage: { include: true } }),
+      });
+      const data: any = await response.json().catch(() => null);
+      if (!response.ok) throw Object.assign(Error(`${response.status}: ${data?.error?.message ?? 'OpenRouter refused the request'} (your own key, ${env})`), { status: response.status });
+      return data;
+    },
+  };
 }
 
 /** Put the own key's value into this process's environment (a shell value is used first). required: fail without one. */

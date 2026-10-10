@@ -7,6 +7,13 @@ const Default = z.object({ provider: z.literal('openrouter'), model: z.string().
 // A model service that is briefly unavailable gets three attempts in all, like classification.
 const attempts = 3;
 
+/** Where a run's hosted model requests go: this computer's own OpenRouter key when it has one, else the account. */
+export async function hostedModelsFor(client: MethodClient): Promise<HostedModels> {
+  const { ownKeyEnv, ownKeyModels } = await import('./own-model-key.js');
+  const env = ownKeyEnv();
+  return env ? ownKeyModels(env) : managedModels(client);
+}
+
 /** Hosted models through the signed-in Method account. The account's model credit pays for them. */
 export function managedModels(client: MethodClient): HostedModels & { model(): Promise<string> } {
   return {

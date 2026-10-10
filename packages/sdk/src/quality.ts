@@ -10,7 +10,7 @@ import { createCase, retireCase, listCases, testSuite, defaultCasesDir } from "@
 import { authoringPath, editDocument, readDocument } from "./authoring.js";
 import { localSetup } from "./local-setup.js";
 import { resolveAgentProfiles, checkAgents, accountNeeds } from "./capabilities.js";
-import { managedModels } from "./hosted-models.js";
+import { hostedModelsFor, managedModels } from "./hosted-models.js";
 import { managedClassification } from "./classification-client.js";
 import { MethodClient } from "./method-client.js";
 import { prepareRuntime, methodCache } from "./prepare.js";
@@ -40,7 +40,7 @@ export async function preparedConfig(file: string, flags: { workspace?: string; 
   if (classification) config.classification = await classification.resolve(new AbortController().signal);
   await checkAgents(config.models);
   const prepared = await prepareRuntime(setup.sourceRoot, config, method);
-  const hostedModels = Object.values(prepared.config.models ?? {}).some((profile: any) => profile.backend === 'method') ? managedModels(client) : undefined;
+  const hostedModels = Object.values(prepared.config.models ?? {}).some((profile: any) => profile.backend === 'method') ? await hostedModelsFor(client) : undefined;
   return { config: prepared.config, sourceRoot: setup.sourceRoot, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(hostedModels ? { hostedModels } : {}), ...(classification ? { classification } : {}) };
 }
 
