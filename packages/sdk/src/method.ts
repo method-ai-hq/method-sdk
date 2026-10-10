@@ -145,6 +145,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return;
   }
   const authorFile = command === "publish" || command === "explain" ? target : undefined;
+  if (command === "guard-keys") return (await import("./guard-keys.js")).guardKeysCommand();
   if (command === "config") return (await import("./computer-settings.js")).configCommand(rest.slice(1));
   if (command === "new-id") {
     if (!target || rest.length !== 2) throw Error("Use method new-id FILE.");

@@ -1201,7 +1201,7 @@ method improve FILE [--case ID] [--note TEXT] [--step ID] [--server URL]
 ```
 
 Arguments and defaults:
---note: the correction, in your words. --step: improve only this step. --case: the case the change must pass. A Method with account run data improves in your account; see the progress on the dashboard. A Method with run_data: device improves on this computer, so its run content stays here; the result is a local proposal in .method/proposals/.
+--note: the correction, in your words; it is about the newest run of the Method on this computer, which the improvement reads and a suggested case records. --step: improve only this step. --case: the case the change must pass. A Method with account run data improves in your account; see the progress on the dashboard. A Method with run_data: device improves on this computer, so its run content stays here; the result is a local proposal in .method/proposals/.
 
 Result and changes:
 JSON with the improvement and the dashboard link, or the local proposal ID. Nothing is published, and the file does not change.

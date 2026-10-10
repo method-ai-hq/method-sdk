@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -172,6 +172,32 @@ it('starts an account improvement for account run data', async () => {
   expect(client.calls).toEqual([{ path: `/api/methods/${METHOD_ID}/improvements`, verb: 'POST', body: { step_id: 'a', note: 'Name the customer.' } }]);
   expect(printed(out)).toMatchObject({ improvement: { id: 'run_9' }, url: `https://example.test/methods/${METHOD_ID}` });
   await expect(improveCommand([file, '--step', 'missing'], () => client)).rejects.toThrow('Step missing is not in');
+});
+
+it('sends the newest run of the Method with a note, and the suggested case names its folder', async () => {
+  const { root, file } = setup(method({ a: step('a', 'A.'), b: step('b', 'B.') }));
+  const run = (name: string, id: string, dashboard: string, at: number) => {
+    const dir = join(root, 'cache', 'runs', name); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'method.json'), JSON.stringify({ id, name: 'Echo' }));
+    writeFileSync(join(dir, 'method-sync.json'), JSON.stringify({ dashboard_id: dashboard }));
+    writeFileSync(join(dir, 'checkpoint.json'), '{}'); utimesSync(join(dir, 'checkpoint.json'), at, at);
+    return dir;
+  };
+  run('older', METHOD_ID, 'run_older', 1_000);
+  const newest = run('newest', METHOD_ID, 'run_newest', 2_000);
+  run('other', `wf_${'d'.repeat(32)}`, 'run_other', 3_000);
+  const client = fakeClient({
+    [`POST /api/methods/${METHOD_ID}/improvements`]: () => ({ improvement: { id: 'run_9', status: 'queued' } }),
+    'GET /api/proposals/prop_1': () => ({ proposal: { id: 'prop_1', method_id: METHOD_ID, base_version_id: null, status: 'accepted', cause: 'No case tests this correction.', created_at: '2026-10-09T00:00:00Z',
+      evidence: { kind: 'case', steps: [], case_suggestion: { id: 'no-paint', note: 'She does not paint.', run_id: 'run_newest', rubric: ['No painting.'] } }, base_workflow: null, proposed_workflow: null } }),
+  });
+  const out = stdout();
+  await improveCommand([file, '--note', 'She does not paint.'], () => client);
+  expect(client.calls[0].body).toEqual({ note: 'She does not paint.', run_id: 'run_newest' });
+  out.mockClear();
+  await proposalCommand(['apply', file, 'prop_1'], () => client);
+  const next = printed(out).next;
+  expect(next).toContain(`--run ${JSON.stringify(newest)}`); expect(next).not.toContain('RUN_FOLDER');
 });
 
 it('runs improve.method on this computer for device run data and saves a local proposal', async () => {

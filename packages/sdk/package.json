@@ -35,7 +35,7 @@
     "prepack": "npm --prefix ../.. run build"
   },
   "dependencies": {
-    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/bc21501c3ea039cd19746c44f86f0708a8c94a30",
+    "@withmethod/runtime": "https://codeload.github.com/method-ai-hq/method-spec/tar.gz/762dfe715603da0ca0a4db3a07725fc5fa31f7d5",
     "fflate": "^0.8.3",
     "yaml": "^2.9.0",
     "zod": "^3.25.76"
