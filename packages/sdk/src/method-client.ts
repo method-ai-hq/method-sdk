@@ -222,14 +222,17 @@ export class MethodClient {
   }
 }
 export function openUrl(url: string) {
-  const command =
-    process.platform === "darwin"
+  // $BROWSER, as many command-line tools read it, picks the program that opens the link.
+  const chosen = process.env.BROWSER?.trim();
+  const command = chosen
+    ? chosen
+    : process.platform === "darwin"
       ? "open"
       : process.platform === "win32"
         ? "rundll32"
         : "xdg-open";
   const args =
-    process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+    !chosen && process.platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
   const child = spawn(command, args, { stdio: "ignore", detached: true });
   child.on("error", () =>
     process.stderr.write("Open the sign-in link above in your browser.\n"),
