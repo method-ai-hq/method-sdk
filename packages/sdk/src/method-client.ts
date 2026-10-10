@@ -80,9 +80,20 @@ export class MethodClient {
     if (authenticated && !token)
       throw Error("Sign in with method login first.");
     const data = body === undefined ? undefined : JSON.stringify(body);
-    const { status, statusText, ok, bytes } = await this.send(path, method, {
-      ...(data ? { body: data, type: "application/json" } : {}), token, ...options,
-    });
+    // A lost connection: a read is tried again (three attempts in all, like transfer); any request says which server.
+    let sent: Awaited<ReturnType<typeof this.send>>;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        sent = await this.send(path, method, { ...(data ? { body: data, type: "application/json" } : {}), token, ...options });
+        break;
+      } catch (error: any) {
+        const lost = error?.name === "TypeError" && !options.signal?.aborted;
+        if (lost && method === "GET" && attempt < 3) { await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); continue; }
+        if (lost) throw Object.assign(Error(`Method cannot be reached at ${this.server} (${method} ${path}): ${error.cause?.code ?? error.message}. Check the connection and run again.`), { code: "network" });
+        throw error;
+      }
+    }
+    const { status, statusText, ok, bytes } = sent;
     const text = Buffer.from(bytes).toString("utf8");
     let result: any;
     try { result = JSON.parse(text); }
