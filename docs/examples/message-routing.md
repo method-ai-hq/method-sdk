@@ -1,6 +1,6 @@
 # Worked example: message-routing
 
-Classifies a customer message with Jev, then applies a script rule to choose a support destination.
+Classifies a customer message with Method's classifier, then a script rule chooses a support destination. ticket.method adds one ticket write that a retry does not repeat.
 
 ## TASK.md
 
@@ -33,7 +33,7 @@ steps:
       options:
         billing: Billing — invoices, charges, refunds, and payments.
         technical: Technical support — errors and problems using the product.
-        other: Other — no listed team fits, or more information is needed.
+        unclear: Unclear — the message does not say enough to choose, or no listed team fits.
     out: message_category
   choose_destination:
     name: Choose the destination
@@ -66,7 +66,7 @@ run_prompt: Run this Method with the customer message, then show the destination
 
 ```javascript
 export function chooseDestination(category) {
-  const ids = ['billing', 'technical', 'other'];
+  const ids = ['billing', 'technical', 'unclear'];
   if (!category || !ids.includes(category.choice)) {
     throw new Error('Expected a declared category.');
   }
@@ -83,11 +83,11 @@ export function chooseDestination(category) {
   }
   const required = 0.90;
   const observed = probabilities[category.choice];
-  const automatic = category.choice !== 'other' && observed >= required;
+  const automatic = category.choice !== 'unclear' && observed >= required;
   return {
     routing: {
       destination: automatic ? category.choice : 'manual_review',
-      rule_applied: category.choice === 'other' ? 'other_requires_review' :
+      rule_applied: category.choice === 'unclear' ? 'unclear_requires_review' :
         automatic ? 'selected_category_meets_threshold' : 'below_threshold',
       selected_probability: observed,
       required_probability: required
@@ -128,39 +128,157 @@ try {
 }
 ```
 
+## ticket.method
+
+```yaml
+format: method/3.4
+name: Route a message and create one ticket
+goal: Create a ticket and recover an interrupted response without a duplicate write.
+inputs:
+  message:
+    type: text
+    description: The complete customer message to classify.
+steps:
+  classify_message:
+    name: Classify the customer message
+    in:
+      message: inputs.message
+    do:
+      kind: classify
+      question: Which team should handle the main request in this message?
+      options:
+        billing: Billing — invoices, charges, refunds, and payments.
+        technical: Technical support — errors and problems using the product.
+        unclear: Unclear — the message does not say enough to choose, or no listed team fits.
+    out: message_category
+  choose_destination:
+    name: Choose the destination
+    purpose: |
+      Chooses Billing or Technical support when that category is selected
+      and its probability is at least 90%. Otherwise chooses Manual review.
+      Returns the destination, the rule used, and the probability and threshold.
+    in:
+      category: message_category
+    do:
+      kind: run
+      runtime: node
+      entrypoint: choose-destination.mjs
+    out:
+      routing:
+        type: record
+        description: The selected destination and the values used to choose it.
+        fields:
+          destination: text
+          rule_applied: text
+          selected_probability: number
+          required_probability: number
+  create_ticket:
+    name: Create the support ticket
+    purpose: Creates a ticket for the selected destination and returns its receipt.
+      Sends the operation ID as the Idempotency-Key, so a retry returns the same
+      ticket. The saved effect reads the ticket back by the operation ID.
+    in:
+      message: inputs.message
+      routing: routing
+      service: environment.ticket_service
+    do:
+      kind: run
+      runtime: node
+      entrypoint: create-ticket.mjs
+    changes:
+      - environment.ticket_service
+    out:
+      ticket:
+        type: record
+        description: The service receipt for this operation.
+        fields:
+          ticket_id: text
+          operation_id: text
+    effects:
+      saved:
+        intent: The ticket service stores one ticket for this operation with the
+          submitted message and destination.
+        in:
+          message: inputs.message
+          destination: routing.destination
+        observe:
+          kind: http
+          path: /tickets/by-operation/{token}
+          expect:
+            fields:
+              operation_id: "{token}"
+              message: "{inputs.message}"
+              destination: "{inputs.destination}"
+        blocking: true
+result: ticket
+files:
+  - routing.mjs
+run_prompt: Run this Method with the customer message, then show the destination
+  and the rule used.
+environment:
+  ticket_service:
+    type: service
+    description: Ticket service with idempotent writes and operation lookup.
+```
+
+## create-ticket.mjs
+
+```javascript
+let text = '';
+for await (const chunk of process.stdin) text += chunk;
+const {message, routing, service} = JSON.parse(text);
+const operation = process.env.METHOD_OPERATION_ID;
+if (!operation || typeof message !== 'string' || !['billing','technical','manual_review'].includes(routing?.destination))
+  throw Error('Expected a message, destination, and Method operation ID.');
+const response = await fetch(new URL('/tickets', service), {
+  method: 'POST', signal: AbortSignal.timeout(10_000),
+  headers: {'content-type':'application/json','Idempotency-Key':operation},
+  body: JSON.stringify({message,destination:routing.destination}),
+});
+if (!response.ok) throw Error(`Ticket service returned ${response.status}. Inspect operation ${operation} before retrying.`);
+const ticket = await response.json();
+if (typeof ticket.ticket_id !== 'string' || ticket.operation_id !== operation) throw Error('The ticket receipt does not match this operation.');
+process.stdout.write(JSON.stringify({ticket:{ticket_id:ticket.ticket_id,operation_id:operation}})+'\n');
+```
+
 ## README.md
 
-```markdown
+````markdown
 # Classify and route a message
 
-This Method classifies a customer message, then returns a destination and the
-rule used. Test the routing script with `node --test routing.test.mjs`.
+`message-routing.method` classifies a customer message, then returns a destination and the rule used.
 
-Validate with `method validate message-routing.method`. Run with
-`method run message-routing.method --inputs inputs.json`. Method uses your
-existing sign-in and prepares the Node runtime through its normal setup.
+- The classify step has an `unclear` option, so the classifier can say that the message does not say enough. It does not have to guess a team.
+- The classifier returns a probability for each option. The routing script applies the rule: Billing or Technical support when that option is chosen with at least 90%; Manual review for `unclear` or a lower probability. The example threshold is 90%; choose your own from a few labeled messages.
+- Test the rule with `node --test routing.test.mjs`.
 
-The Method page explains the rule. The Run page shows the message, probabilities,
-destination, and rule used. The example threshold is 90%; choose a production
-threshold by testing your own labeled messages.
-
-`result.fixture.json` is an illustrative result, not a live model response.
-The `retry/` folder contains a loopback recovery test. Run it from this folder
-with `node --test retry/retry.test.mjs`. It uses the installed Method runtime.
-
-This complete Method has no additional task checks. The runtime checks output types. Classification and routing return the requested result without changing an external system. Add a task check only when the request introduces a concrete failure that needs one.
+```sh
+method validate message-routing.method
+method run message-routing.method --inputs inputs.json
 ```
+
+The classify step uses Method's classifier through your sign-in. The Run page shows the message, the probabilities, the destination, and the rule used. `result.fixture.json` is an illustrative result, not a live classifier response.
+
+## Create one ticket, also after a retry
+
+`ticket.method` adds a step that creates a ticket in a ticket service (`environment.ticket_service`). A retry must not create a second ticket:
+
+- `create-ticket.mjs` sends the run's operation ID (`METHOD_OPERATION_ID`) as the `Idempotency-Key`, so the service returns the same ticket for a repeated request.
+- The `saved` effect reads the ticket back by the operation ID. A receipt shows only that the service accepted the request; the read-back shows that the ticket exists with the right message and destination.
+
+`node --test ticket.test.mjs` runs the Method against a local ticket service. It stops the run after the service saved the ticket and before the script returned, then resumes with `--retry`. The test checks that the service has one ticket, that the two requests used the same key, and that the effect is confirmed.
+````
 
 ## Installed files
 
 - message-routing/README.md
 - message-routing/TASK.md
 - message-routing/choose-destination.mjs
+- message-routing/create-ticket.mjs
 - message-routing/inputs.json
 - message-routing/message-routing.method
 - message-routing/result.fixture.json
-- message-routing/retry/create-ticket.mjs
-- message-routing/retry/retry.test.mjs
-- message-routing/retry/ticket.method
 - message-routing/routing.mjs
 - message-routing/routing.test.mjs
+- message-routing/ticket.method
+- message-routing/ticket.test.mjs

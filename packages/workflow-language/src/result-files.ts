@@ -16,7 +16,7 @@ export const ResultPathSchema = z
         .split("/")
         .some(
           (part) =>
-            !part || part === "." || part === ".." || part === "sensitive",
+            !part || part === "." || part === "..",
         ) &&
       !/[?#%\x00-\x1f]/.test(path),
     "Use a relative file path without parent directories.",

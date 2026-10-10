@@ -140,7 +140,6 @@ function cleanDraft(value: any, lineCount: number): Draft {
 export function recordedInputs(id: string, entrypoint: string, roots: string[], limit = 3) {
   const runs: [string, number][] = [];
   for (const root of new Set(roots.map(path => resolve(path)))) {
-    if (root.split(/[\\/]/).includes('sensitive')) continue;
     let names: string[] = [];
     try { names = readdirSync(root); } catch { continue; }
     for (const name of names) {

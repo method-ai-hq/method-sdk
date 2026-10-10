@@ -8,14 +8,15 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { methodIssues } from '@withmethod/runtime/document.js';
+import { isModelId } from '@withmethod/runtime/semantics.js';
 import { parseDocumentValue } from '../../workflow-language/src/validate.js';
 import { authoringPath } from './authoring.js';
 import { changedSteps, checkTargets, checks, checksDir, evaluateTarget, modelIssues, runChecks, shownChecks, type Issue, type Target } from './model-checks.js';
 import { packageFileNames } from './method-files.js';
 import { MethodClient } from './method-client.js';
 
-const hostedId = /^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/;
-const refused = (path: string) => path.split(sep).includes('sensitive') || /^\.env(\.|$)/.test(basename(path));
+/** A .env file holds secret values: issue checks never read it. */
+export const refused = (path: string) => /^\.env(\.|$)/.test(basename(path));
 /** A file of the Method folder as text; undefined when it is missing, outside the folder, or not allowed. */
 export function folderReader(file: string) {
   const root = realpathSync(dirname(resolve(file)));
@@ -44,7 +45,9 @@ export function hostedModelUses(method: any) {
   for (const [id, step] of Object.entries<any>(method.steps ?? {})) for (const [field, exec] of [['do.model', step.do], ['check.model', step.check]] as const) {
     if (!exec || !['call', 'agent'].includes(exec.kind) || typeof exec.model !== 'string') continue;
     const named = method.models?.[exec.model];
-    const model = typeof named === 'string' ? named : typeof named?.model === 'string' ? named.model : hostedId.test(exec.model) ? exec.model : undefined;
+    // A local-agent entry ({agent: codex | claude}) is not a hosted model.
+    if (named?.agent) continue;
+    const model = typeof named === 'string' ? named : typeof named?.model === 'string' ? named.model : isModelId(exec.model) ? exec.model : undefined;
     if (model) uses.push({ step: id, field, model, ...(named ? { name: exec.model } : {}) });
   }
   return uses;
@@ -66,7 +69,7 @@ export function legacyIssues(file: string): Issue[] {
   const path = authoringPath(file), folder = dirname(path), issues: Issue[] = [];
   if (existsSync(join(folder, 'runtime.json'))) issues.push({ code: 'legacy_runtime_json', level: 'error',
     message: `runtime.json is next to ${basename(path)}. Methods no longer read runtime.json, so its settings would be lost.`,
-    fix: 'Move each part into the Method, then delete runtime.json. models -> top-level models: (NAME: provider/model, or {model, max_output_tokens, reasoning_effort}); a profile with backend codex or claude -> use model: default in its steps and run with --agent codex|claude. limits -> top-level limits:. step_defaults -> limits.step. tools -> top-level tools:. environment paths -> method bind ID NAME --file FOLDER (a folder beside the Method with the connection name needs nothing). classification.api_key_env -> method config model-key. runtimes and allow_local_processes need nothing. Set format: method/3.4 and remove runtime.json from files:.' });
+    fix: 'Move each part into the Method, then delete runtime.json. models -> top-level models: (NAME: provider/model, or {model, max_output_tokens, reasoning_effort}); a profile with backend codex or claude -> NAME: {agent: codex|claude, model, reasoning_effort} (keep its model and reasoning_effort). limits -> top-level limits:. step_defaults -> limits.step. tools -> top-level tools:. environment paths -> method bind ID NAME --file FOLDER (a folder beside the Method with the connection name needs nothing). classification.api_key_env -> method config model-key. runtimes and allow_local_processes need nothing. Set format: method/3.4 and remove runtime.json from files:.' });
   if (existsSync(`${path}.method.json`)) issues.push({ code: 'legacy_sidecar', level: 'error',
     message: `${basename(path)}.method.json is next to ${basename(path)}. Methods keep their ID in the file now.`,
     fix: `Put its workflow_id as the line id: wf_... directly after format: method/3.4 in ${basename(path)}, then delete ${basename(path)}.method.json.` });

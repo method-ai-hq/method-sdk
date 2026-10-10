@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { localAuthoring, readDocument, change, authoringPath } from "../../packages/sdk/src/authoring.js";
+import { localAuthoring, readDocument, change } from "../../packages/sdk/src/authoring.js";
 import { loadWorkflow } from "../../packages/workflow-language/src/validate.js";
 import { method } from "../fixtures/method.js";
 const dirs:string[]=[];afterEach(()=>{dirs.splice(0).forEach(d=>rmSync(d,{recursive:true,force:true}));vi.restoreAllMocks();process.exitCode=0;});
@@ -13,9 +13,8 @@ it("edits stable named steps and preserves the file after invalid changes",async
  await localAuthoring(["check","set",file,"copy","--json",JSON.stringify({equals:{actual:"copied_message",expected:"message"}})]);expect(readDocument(file).steps.copy.check).toEqual({equals:{actual:"copied_message",expected:"message"}});
  await localAuthoring(["step","remove",file,"copy"]);await localAuthoring(["validate",file]);expect(process.exitCode).toBe(1);
 });
-it("does not mutate prototypes and blocks sensitive symlink parents",()=>{
+it("does not mutate prototypes",()=>{
  expect(()=>change({},"/__proto__/polluted",true)).toThrow();expect(({} as any).polluted).toBeUndefined();expect(()=>change([],"/02",true)).toThrow();
- const {dir}=setup();mkdirSync(join(dir,"sensitive"));symlinkSync(join(dir,"sensitive"),join(dir,"alias"));expect(()=>authoringPath(join(dir,"alias","new.method"))).toThrow();
 });
 it("moving a step changes display order without changing dependencies",async()=>{
  const {file}=setup();const flow=method();flow.steps.later={in:{text:"copied_message"},do:{kind:"agent",model:"default",prompt:"Read text.",tools:[]}};writeFileSync(file,JSON.stringify(flow));await localAuthoring(["step","move",file,"later","--before","copy"]);const saved=loadWorkflow(readDocument(file));expect(Object.keys(saved.steps)).toEqual(["later","copy"]);expect(saved.steps.later?.in?.text).toBe("copied_message");

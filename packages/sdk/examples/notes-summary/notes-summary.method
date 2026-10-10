@@ -25,8 +25,16 @@ steps:
       prompt: |
         From these meeting notes, list every decision and every action item.
         For each item, give the note file it comes from. For an action item,
-        give the owner, and the due date as YYYY-MM-DD when the notes give one;
-        otherwise use an empty due. Do not add anything that the notes do not say.
+        give the owner and the due date. Write every date as YYYY-MM-DD, also
+        inside a decision; take the year from the note's file name. When the
+        notes give no due date, leave due empty. Do not add anything that the
+        notes do not say.
+
+        Two items from other notes, written the way they should be:
+        - "Decision: ship the beta on 3 Nov." in 2026-10-28-review.md is the decision
+          text "Ship the beta on 2026-11-03.", source "2026-10-28-review.md".
+        - "Lee will book the venue." in 2026-10-28-review.md is the action
+          "Book the venue.", owner "Lee", due "", source "2026-10-28-review.md".
 
         {{material}}
     out:

@@ -35,16 +35,16 @@ test('retry reuses the operation ID after the service commits and before stdout 
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(()=>{server.closeAllConnections();server.close();});
   const url=`http://127.0.0.1:${server.address().port}`;
-  await cp(fileURLToPath(new URL('../',import.meta.url)),root,{recursive:true});
-  const method=parse(await readFile(join(root,'retry/ticket.method'),'utf8'));
+  await cp(fileURLToPath(new URL('./',import.meta.url)),root,{recursive:true});
+  const method=parse(await readFile(join(root,'ticket.method'),'utf8'));
   // The handshake exists only in this test wrapper. The real action has no test hooks.
-  method.steps.create_ticket.do.entrypoint='retry/fixture-action.mjs';
-  method.files.push('retry/create-ticket.mjs');
-  await writeFile(join(root,'retry/fixture-action.mjs'),`const write=process.stdout.write.bind(process.stdout);process.stdout.write=data=>{void fetch(${JSON.stringify(url+'/committed')},{method:'POST'}).then(()=>write(data));return true;};await import('./create-ticket.mjs');`);
+  method.steps.create_ticket.do.entrypoint='fixture-action.mjs';
+  method.files.push('create-ticket.mjs');
+  await writeFile(join(root,'fixture-action.mjs'),`const write=process.stdout.write.bind(process.stdout);process.stdout.write=data=>{void fetch(${JSON.stringify(url+'/committed')},{method:'POST'}).then(()=>write(data));return true;};await import('./create-ticket.mjs');`);
   const file=join(root,'task.method');await writeFile(file,stringify(method));
   const config={allow_local_processes:true,runtimes:{node:{command:process.execPath,version:process.version}},environment:{ticket_service:url},classification:{provider:'typesafe',model:'jev-fixture'}};
   let classifications=0;
-  const classification={resolve:async()=>config.classification,evaluate:async()=>{classifications++;return {...config.classification,choice:'billing',probabilities:{billing:.94,technical:.04,other:.02},confidence:.8,usage:null};}};
+  const classification={resolve:async()=>config.classification,evaluate:async()=>{classifications++;return {...config.classification,choice:'billing',probabilities:{billing:.94,technical:.04,unclear:.02},confidence:.8,usage:null};}};
   const runDir=join(root,'run'),controller=new AbortController();
   const running=runMethod(file,config,{runDir,classification,inputs:{message:'Please send my invoice.'},signal:controller.signal});
   await saved;

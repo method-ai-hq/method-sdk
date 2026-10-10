@@ -10,7 +10,7 @@ import { InspectionSchema, type RunInspection } from "../../workflow-language/sr
 export function inspectCurrentRun(root: string, activeSnapshot = false, includeFiles: boolean | "references" = false): RunInspection {
   const path = (name: string) => {
     const actual = realpathSync(join(root, name));
-    if (!actual.startsWith(root + sep) || actual.split(sep).includes("sensitive")) throw Error("Run record escapes the run directory.");
+    if (!actual.startsWith(root + sep)) throw Error("Run record escapes the run directory.");
     return actual;
   };
   const read = (name: string) => JSON.parse(readFileSync(path(name), "utf8"));

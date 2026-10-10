@@ -1,0 +1,165 @@
+format: method/3.4
+name: Triage a support ticket
+goal: Read a new help desk ticket, choose its queue and priority, draft a first reply, and update the ticket. Ask a person when the team is unclear.
+run_data: device
+models:
+  writer: anthropic/claude-haiku-4.5
+secrets:
+  HELPDESK_TOKEN: API token for the help desk. read-ticket.mjs and set-ticket.mjs send it as a Bearer token.
+inputs:
+  ticket_id:
+    type: text
+    description: ID of the new ticket in the help desk, such as T-1042.
+environment:
+  helpdesk:
+    type: service
+    description: Help desk API. GET /tickets/ID reads a ticket; PATCH /tickets/ID sets its queue, priority, tags, and internal note.
+steps:
+  read:
+    name: Read the ticket
+    purpose: Reads the ticket from the help desk with HELPDESK_TOKEN and returns its id, subject, and text. Fails when the help desk does not return the ticket. Changes nothing.
+    in: {ticket_id: inputs.ticket_id, helpdesk: environment.helpdesk}
+    do: {kind: run, runtime: node, entrypoint: read-ticket.mjs}
+    out:
+      ticket: {type: record, fields: {id: text, subject: text, body: text}, description: The ticket as the help desk returned it.}
+
+  team:
+    name: Choose the team
+    in: {subject: ticket.subject, body: ticket.body}
+    do:
+      kind: classify
+      question: Which team should handle the main request in this support ticket?
+      options:
+        billing: Billing - invoices, charges, refunds, and plan changes.
+        technical: Technical - errors, outages, and problems using the product.
+        account: Account - sign-in, users, and access.
+        unclear: Unclear - the ticket does not say enough to choose, or no listed team fits.
+    out: team
+
+  refund:
+    name: Check for a refund request
+    in: {body: ticket.body}
+    do:
+      kind: classify
+      question: Does the customer ask for money back?
+      answer: yes_no
+    out: refund
+
+  urgency:
+    name: Score the urgency
+    in: {subject: ticket.subject, body: ticket.body}
+    do:
+      kind: classify
+      question: How urgent is this support ticket for the customer?
+      levels: [low, normal, high, urgent]
+    out: urgency
+
+  route:
+    name: Choose the queue and priority
+    purpose: Chooses the team's queue when the team is not unclear and its probability is at least 80%. Otherwise chooses the triage queue and marks the ticket for a person. The priority is the most likely urgency level. Adds the tag refund_request when the probability of a refund request is at least 50%. Returns the rule used. Changes nothing.
+    in: {team: team, refund: refund, urgency: urgency}
+    do: {kind: run, runtime: node, entrypoint: route.mjs}
+    out:
+      decision:
+        type: record
+        description: The queue, priority, and tags, whether a person must choose the team, and the rule used.
+        fields:
+          queue: text
+          priority: text
+          tags: {type: list, items: text}
+          needs_person: boolean
+          rule: text
+          reason: text
+
+  draft_reply:
+    name: Draft the first reply
+    in: {ticket: ticket}
+    do:
+      kind: call
+      model: writer
+      prompt: |
+        Write the first reply to this support ticket, for a support agent to check and send.
+        Thank the customer in one sentence. Then say in one or two sentences what happens next.
+        If the ticket does not say what is wrong, ask for the one detail that is missing.
+        Do not promise a refund, a date, or a fix. Sign it "The support team".
+
+        Subject: {{ticket.subject}}
+        {{ticket.body}}
+
+        Two replies that the team liked:
+
+        Ticket: "I was charged twice for October."
+        Reply: "Thank you for telling us about the double charge. Our billing team will check your October invoices and reply within one business day. The support team"
+
+        Ticket: "The export button does nothing."
+        Reply: "Thank you for the report. Which browser do you use, and does the export fail for every report or only for one? With that, our technical team can look into it. The support team"
+    out:
+      reply: {type: text, description: The reply draft for a support agent to check.}
+
+  update:
+    name: Update the ticket
+    purpose: Sets the ticket's queue, priority, and tags, and adds the reply draft as an internal note, with one PATCH request. A repeated request sets the same values, so a retry is safe. A ticket whose team is unclear goes to the triage queue.
+    in:
+      ticket_id: inputs.ticket_id
+      queue: decision.queue
+      priority: decision.priority
+      tags: decision.tags
+      note: reply
+      helpdesk: environment.helpdesk
+    do: {kind: run, runtime: node, entrypoint: set-ticket.mjs}
+    changes: [environment.helpdesk]
+    effects:
+      updated:
+        intent: The ticket has the chosen priority. The queue is not part of this effect, because the move step changes it after a person's answer.
+        in: {ticket_id: inputs.ticket_id, priority: decision.priority}
+        observe:
+          kind: http
+          path: /tickets/{inputs.ticket_id}
+          expect: {fields: {priority: "{inputs.priority}"}}
+    out:
+      updated: {type: record, fields: {id: text, queue: text, priority: text}, description: The queue and priority that the help desk returned.}
+
+  ask_person:
+    name: Ask a person for the team
+    when: decision.needs_person
+    after: update
+    in: {ticket: ticket, reason: decision.reason}
+    ask: |
+      Ticket {{ticket.id}} is in the triage queue: {{reason}}.
+      Subject: {{ticket.subject}}
+
+      Which team should handle it: billing, technical, or account?
+    out:
+      chosen_queue: {type: text, description: "billing, technical, or account"}
+
+  move:
+    name: Move the ticket to the chosen team
+    when: decision.needs_person
+    purpose: Rejects an answer that is not billing, technical, or account. Then sets that queue with one PATCH request and keeps the priority and tags. A repeated request sets the same values.
+    in:
+      ticket_id: inputs.ticket_id
+      queue: chosen_queue
+      priority: decision.priority
+      tags: decision.tags
+      helpdesk: environment.helpdesk
+    do: {kind: run, runtime: node, entrypoint: set-ticket.mjs, args: [--team-only]}
+    changes: [environment.helpdesk]
+    effects:
+      moved:
+        intent: The ticket is in the queue that the person chose.
+        in: {ticket_id: inputs.ticket_id, queue: chosen_queue}
+        observe:
+          kind: http
+          path: /tickets/{inputs.ticket_id}
+          expect: {fields: {queue: "{inputs.queue}"}}
+    out:
+      moved: {type: record, fields: {id: text, queue: text, priority: text}, description: The queue and priority that the help desk returned.}
+    accept:
+      unused_output: The receipt stays in the run record. The result cannot name it, because the step is skipped when the team is clear.
+result:
+  decision: decision
+  reply: reply
+  ticket: updated
+files:
+  - helpdesk.mjs
+  - triage.mjs

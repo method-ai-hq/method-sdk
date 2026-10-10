@@ -9,12 +9,12 @@ def website_manifest(destination, inventory, title, extras):
     files = []
     for relative, expected in inventory.items():
         path = PurePosixPath(relative)
-        if path.is_absolute() or any(part in ('..', 'sensitive') for part in path.parts):
+        if path.is_absolute() or '..' in path.parts:
             raise ValueError('Invalid website output path')
         files.append({'path': 'website/' + relative, 'sha256': expected,
                       'media_type': mimetypes.guess_type(relative)[0] or 'application/octet-stream'})
     for name in extras:
-        if PurePosixPath(name).name != name or name == 'sensitive':
+        if PurePosixPath(name).name != name:
             raise ValueError('Invalid supporting output path')
         files.append({'path': name, 'sha256': digest(destination / name),
                       'media_type': mimetypes.guess_type(name)[0] or 'application/octet-stream'})

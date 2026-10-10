@@ -1,0 +1,5 @@
+[
+  {"id": "T-1042", "subject": "Charged twice this month", "body": "Hi, my card was charged $49 two times on October 3 for the Team plan. We only have one workspace. Please refund the second charge.", "queue": "new", "priority": "normal", "tags": [], "notes": []},
+  {"id": "T-1043", "subject": "Can't get in", "body": "Since this morning nothing works for me. I tried twice. Can someone look at it?", "queue": "new", "priority": "normal", "tags": [], "notes": []},
+  {"id": "T-1044", "subject": "Export to CSV fails", "body": "When I export the March report to CSV I get the error 'Export failed (code 502)'. Other reports export fine. Our quarterly review is tomorrow morning.", "queue": "new", "priority": "normal", "tags": [], "notes": []}
+]

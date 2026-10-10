@@ -89,7 +89,6 @@ export async function localMain(args = process.argv.slice(2)) {
   if (command === "inspect") {
     if (!target || parsed.positionals.length !== 2 || !flags.out) throw new Error("Use method inspect RUN_DIRECTORY --out inspection.json.");
     const output = resolve(flags.out);
-    if (output.split(/[\\/]/u).includes("sensitive")) throw new Error("Use an inspection file outside sensitive/.");
     if (existsSync(output)) throw new Error("INSPECTION_EXISTS: choose a new output file.");
     writePrivateJson(output, inspectRun(target, { includeFiles: flags["include-files"] ?? false }));
     process.stdout.write(`Saved run evidence: ${output}\nContains run inputs and results. Load it in the method viewer; no upload occurs.\n`);

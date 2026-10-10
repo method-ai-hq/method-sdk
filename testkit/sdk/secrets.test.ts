@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { importSecrets, listSecrets, resolveSecrets, setSecret } from '../../packages/sdk/src/secrets.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { deviceOnly } from '../../packages/workflow-language/src/inspection.js';
-import { publish } from '../../packages/sdk/src/versions.js';
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); process.exitCode = 0; roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
@@ -22,6 +21,10 @@ it('imports named values from a file the user names, keeps them private, and pri
   expect(resolveSecrets(['ARCHIVE_TOKEN', 'OTHER', 'MISSING'])).toEqual({ ARCHIVE_TOKEN: 'tok en', OTHER: 'x' });
   expect(statSync(join(root, '.config/method/secrets.json')).mode & 0o777).toBe(0o600);
   expect(() => importSecrets(join(root, '.env'), ['NOT_THERE'])).toThrow('Not found');
+  // Any environment variable name works, except the names that the runtime sets for scripts.
+  writeFileSync(join(root, 'lower.env'), 'archive_token=lower\nPATH=/bin\n');
+  expect(importSecrets(join(root, 'lower.env'), ['archive_token']).saved).toEqual(['archive_token']);
+  for (const reserved of ['PATH', 'METHOD_API_KEY', '1TOKEN']) expect(() => importSecrets(join(root, 'lower.env'), [reserved])).toThrow(reserved);
   vi.stubEnv('OTHER', 'from shell');
   expect(resolveSecrets(['OTHER'])).toEqual({ OTHER: 'from shell' });
   expect(listSecrets(['ARCHIVE_TOKEN', 'OTHER', 'MISSING']).map(s => s.source)).toEqual(['this computer', 'shell', 'missing']);
@@ -56,20 +59,3 @@ it('a device-only inspection keeps the run shape and drops its content', () => {
   expect(JSON.stringify(shown)).not.toMatch(/Maeby|private|quote|answer|outputs|prompts|files/);
 });
 
-it('publish checks cases, saves the version, and marks it published', async () => {
-  const root = home();
-  writeFileSync(join(root, 'task.method'), JSON.stringify({ format: 'method/3.3', name: 'Publish', goal: 'Publish a version.', steps: { ask: { ask: 'What is your name?', out: { name: { type: 'text', description: 'Name.' } } } }, result: 'name' }));
-  vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache'));
-  let workflow: any, pack: any;
-  const client: any = { server: 'https://example.test', token: () => 'test-token', transfer: vi.fn(), request: vi.fn(async (path: string, verb: string, body: any) => {
-    if (path === '/api/cli/files/check') return { present: [] };
-    if (path.endsWith('/publish')) return { published_at: '2026-10-09T00:00:00Z', publish_reason: body.reason };
-    if (verb === 'PUT' && path.includes('/versions/')) { workflow = body.workflow; pack = body.package; return { version_id: path.split('/').at(-1), version_number: 1 }; }
-    throw Error(`Unexpected request: ${verb} ${path}`);
-  }) };
-  const published = await publish(client, join(root, 'task.method'), 'First release');
-  expect(published).toMatchObject({ version_id: expect.stringMatching(/^v_[a-f0-9]{32}$/), version_number: 1, published_at: '2026-10-09T00:00:00Z', publish_reason: 'First release' });
-  expect(workflow.id).toBeUndefined(); expect(pack.digest).toMatch(/^[a-f0-9]{64}$/);
-  expect(client.request.mock.calls.at(-1)[0]).toBe(`/api/cli/methods/${published.workflow_id}/versions/${published.version_id}/publish`);
-  await expect(publish(client, join(root, 'task.method'), undefined, ['case_one'])).rejects.toThrow('Give --reason with --accept-failing-case');
-});

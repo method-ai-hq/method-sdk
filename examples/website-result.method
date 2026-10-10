@@ -1,4 +1,4 @@
-format: method/3.1
+format: method/3.4
 name: Publish a project update as a website
 goal: Turn the supplied project update into a website that can be read and downloaded from the run page.
 inputs:

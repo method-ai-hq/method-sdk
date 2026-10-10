@@ -12,7 +12,7 @@ export const fileHash = (data: Uint8Array) => createHash('sha256').update(data).
 export function contained(root: string, name: string) {
   packagePath(name);
   const path = realpathSync(resolve(root, name)), rel = relative(realpathSync(root), path);
-  if (isAbsolute(rel) || rel.startsWith('..') || path.split(/[\\/]/).includes('sensitive')) throw Error(`File leaves the Method folder: ${name}`);
+  if (isAbsolute(rel) || rel.startsWith('..')) throw Error(`File leaves the Method folder: ${name}`);
   return path;
 }
 /** The files that a saved package holds: declared files, script entrypoints, and dependency lockfiles. */
@@ -24,9 +24,11 @@ export function packageFileNames(root: string, workflow: any): string[] {
 }
 /**
  * The files of the Method's cases/ folder. A Method with account run data saves its cases with each version; a Method
- * with device run data keeps them on this computer. Hidden files, sensitive folders, and links are not included.
+ * with device run data keeps them on this computer. Hidden files and links are not included. A file over the package
+ * limit of 20 MB is not included; its name goes to tooLarge, so the save can say so.
  */
-export function caseFileNames(root: string): string[] {
+export const maxPackageFileBytes = 20_000_000;
+export function caseFileNames(root: string, tooLarge: string[] = []): string[] {
   const names: string[] = [];
   const walk = (relativeDir: string) => {
     const folder = resolve(root, relativeDir);
@@ -36,7 +38,7 @@ export function caseFileNames(root: string): string[] {
       if (entry.name.startsWith('.')) continue;
       try { packagePath(name); } catch { continue; }
       if (entry.isDirectory()) walk(name);
-      else if (entry.isFile() && statSync(resolve(root, name)).size <= 20_000_000) names.push(name);
+      else if (entry.isFile()) (statSync(resolve(root, name)).size <= maxPackageFileBytes ? names : tooLarge).push(name);
     }
   };
   walk('cases');
@@ -46,14 +48,15 @@ export function caseFileNames(root: string): string[] {
  * The saved package of a local Method: its declared files, script entrypoints, and dependency lockfiles. Reads files on
  * this computer only; the outbox uploads them later.
  */
-export async function buildPackage(file: string, workflow: any): Promise<{ pack: MethodPackage; sources: Record<string, string> }> {
+export async function buildPackage(file: string, workflow: any): Promise<{ pack: MethodPackage; sources: Record<string, string>; tooLarge: string[] }> {
   const root = dirname(resolve(file));
   await lockDependencies(root);
-  const names = [...new Set([...packageFileNames(root, workflow), ...(workflow.run_data === 'device' ? [] : caseFileNames(root))])].sort();
+  const tooLarge: string[] = [];
+  const names = [...new Set([...packageFileNames(root, workflow), ...(workflow.run_data === 'device' ? [] : caseFileNames(root, tooLarge))])].sort();
   const sources: Record<string, string> = {};
   const files = names.map(path => { const source = contained(root, path), bytes = readFileSync(source), sha256 = fileHash(bytes); sources[sha256] = source; return {path, sha256, size: bytes.length}; });
   const pack = MethodPackageSchema.parse({schema:'method-package/1', runtime:runtimeVersion, files, digest:packageDigest(workflow, {runtime:runtimeVersion, files})});
-  return { pack, sources };
+  return { pack, sources, tooLarge };
 }
 export async function restorePackage(saved: {workflow_id:string; version_id:string; workflow:any; package?:MethodPackage|null}, root: string, client:MethodClient) {
   if (!saved.package) return false;

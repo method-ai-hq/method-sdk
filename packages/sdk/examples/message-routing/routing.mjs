@@ -1,5 +1,5 @@
 export function chooseDestination(category) {
-  const ids = ['billing', 'technical', 'other'];
+  const ids = ['billing', 'technical', 'unclear'];
   if (!category || !ids.includes(category.choice)) {
     throw new Error('Expected a declared category.');
   }
@@ -16,11 +16,11 @@ export function chooseDestination(category) {
   }
   const required = 0.90;
   const observed = probabilities[category.choice];
-  const automatic = category.choice !== 'other' && observed >= required;
+  const automatic = category.choice !== 'unclear' && observed >= required;
   return {
     routing: {
       destination: automatic ? category.choice : 'manual_review',
-      rule_applied: category.choice === 'other' ? 'other_requires_review' :
+      rule_applied: category.choice === 'unclear' ? 'unclear_requires_review' :
         automatic ? 'selected_category_meets_threshold' : 'below_threshold',
       selected_probability: observed,
       required_probability: required

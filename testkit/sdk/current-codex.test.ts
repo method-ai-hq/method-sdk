@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
 import { startMethodTools } from '@withmethod/runtime/codex.js';
-import { validateConfig } from '@withmethod/runtime/validate.js';
+import { executeProcess } from '@withmethod/runtime/io.js';
+import { createRequire } from 'node:module';
 
 const roots: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
@@ -55,10 +56,9 @@ it('stops a Codex process when its step times out', async () => {
   const start=Date.now(); expect((await f.run()).status).toBe('failed');
   expect(Date.now()-start).toBeLessThan(4000);
 });
-it('requires local process permission for Codex and accepts the explicit API alternative', async () => {
+it('requires local process permission for Codex', async () => {
   const f=fixture(''); f.config.allow_local_processes=false;
   await expect(f.run()).rejects.toThrow('Local agents require allow_local_processes');
-  expect(()=>validateConfig({ ...f.config, models: { writer: { backend:'openai-responses', model:'example', api_key_env:'TEST_KEY', max_output_tokens:100 } } })).not.toThrow();
 });
 it('rejects unauthenticated and undeclared tool calls', async () => {
   let calls=0;
@@ -93,7 +93,7 @@ it('keeps explicit Responses profiles on the API path', async () => {
   expect(readFileSync(join(f.root,'run/events.jsonl'),'utf8')).not.toContain('codex.started');
 });
 
-it('saves public Codex progress while the process is still running', async () => {
+it('saves public Codex progress while the process is still running, and relays a child through the CLI, never private reasoning', async () => {
   const f=fixture(client+`(async()=>{
     console.log(JSON.stringify({type:'item.completed',item:{type:'reasoning',text:'private reasoning'}}));
     console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Reading the supplied records.'}}));
@@ -111,4 +111,10 @@ it('saves public Codex progress while the process is still running', async () =>
     }
   }});
   expect(result.status).toBe('completed');
+  // A child Codex relays the same public updates through the CLI, and none of them reach stdout.
+  const values: unknown[]=[];
+  const relayed=await executeProcess({command:process.execPath,args:['--import',createRequire(import.meta.url).resolve('tsx'),'packages/sdk/src/method.ts','progress','--codex','--child','Researcher'],cwd:process.cwd(),env:process.env,
+    input:[{type:'item.completed',item:{type:'reasoning',text:'hidden'}},{type:'item.completed',item:{type:'agent_message',text:'Reading the next document.'}},{type:'item.completed',item:{type:'agent_message',text:'{"answer":"final"}'}}].map(e=>JSON.stringify(e)).join('\n'),rawInput:true,
+    signal:AbortSignal.timeout(5000),maxBytes:10000,onProgress:async(value:unknown)=>{values.push(value);}});
+  expect(relayed.output).toBe('');expect(values).toEqual([{message:'Reading the next document.',child:'Researcher'}]);
 });

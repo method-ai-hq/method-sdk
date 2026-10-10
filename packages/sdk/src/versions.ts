@@ -80,11 +80,12 @@ export type PreparedVersion = { method_id: string; version_id: string; url: stri
 export async function prepareVersion(client: MethodClient, outbox: Outbox, file: string, reason?: string): Promise<PreparedVersion> {
   const id = ensureMethodId(file);
   const workflow = loadWorkflow(methodContent(readDocument(file)));
-  const { pack, sources } = await buildPackage(file, workflow);
+  const { pack, sources, tooLarge } = await buildPackage(file, workflow);
   const versionId = versionIdFor(id, pack.digest);
   const url = `${client.server}/methods/${id}?version=${versionId}`;
   if (savedVersions(client.server)[versionId]) return { method_id: id, version_id: versionId, url, unchanged: true, workflow };
   const previous = lastSaved(client.server, id);
+  if (tooLarge.length) process.stderr.write(`Not saved with this version (over 20 MB each; they stay on this computer): ${tooLarge.join(', ')}\n`);
   for (const f of pack.files) outbox.add({ kind: 'file', server: client.server, sha256: f.sha256, size: f.size }, sources[f.sha256]);
   outbox.add({ kind: 'version', server: client.server, method_id: id, version_id: versionId, file: authoringPath(file), body: {
     workflow, package: pack, ...(previous && previous.version_id !== versionId ? { parent_version_id: previous.version_id } : {}),
@@ -107,7 +108,7 @@ export function savedLine(client: MethodClient, outbox: Outbox, version: Prepare
  */
 export async function publish(client: MethodClient, file: string, reason?: string, accepted: string[] = []) {
   if (accepted.length && !reason) throw Error('Give --reason with --accept-failing-case. The reason is saved with the published version.');
-  const { explain, waitForExplain } = await import('./explain.js');
+  const { startBackgroundExplain, waitForExplain } = await import('./explain.js');
   await waitForExplain(file);
   // Only errors block a publish; the open warnings and notes are listed with the result.
   const { publishIssues } = await import('./method-issues.js');
@@ -117,11 +118,10 @@ export async function publish(client: MethodClient, file: string, reason?: strin
   await outbox.drain();
   if (!await outbox.whenSaved(version.version_id)) throw Error(`${outbox.failure(version.version_id) ?? 'Method cannot be reached, so the version is not uploaded yet.'} Nothing was published. Run method publish again.`);
   const gate = await (await import('./quality.js')).caseGate(authoringPath(file), accepted, reason);
-  // Script cards come before publishing. A failed check shows on its card and never blocks the publish.
-  try { await explain(client, file, { write: line => process.stderr.write(`Script card: ${line}\n`) }); }
-  catch (error) { process.stderr.write(`Script cards not made: ${(error as Error).message}\n`); }
   const publishReason = [reason ?? 'Published.', gate.line].filter(Boolean).join(' ');
   const published = await client.request<any>(`/api/cli/methods/${encodeURIComponent(version.method_id)}/versions/${encodeURIComponent(version.version_id)}/publish`, 'POST', { reason: publishReason });
+  // Script cards never hold up a publish: cards that a run did not make yet are made in the background.
+  startBackgroundExplain(file, version.workflow, version.version_id, client.server);
   return { workflow_id: version.method_id, version_id: version.version_id, version_number: published.version_number ?? savedVersions(client.server)[version.version_id]?.version_number,
     url: version.url, unchanged: version.unchanged, ...(gate.line ? { cases: gate.line } : {}), ...issues, published_at: published.published_at, publish_reason: published.publish_reason };
 }

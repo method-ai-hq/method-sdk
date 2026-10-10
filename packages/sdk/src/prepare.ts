@@ -10,18 +10,36 @@ const exec = promisify(execFile);
 export const methodCache = () => process.env.METHOD_CACHE_DIR ?? join(homedir(), '.cache', 'method');
 export const runFolderDays = 30;
 /**
- * Delete the run folders that the SDK keeps under the cache when nothing in them changed for 30 days. A project's own
- * .method-runs folder is not touched. A folder that cannot be read or removed is left as it is.
+ * Delete the run folders that the SDK keeps under the cache when nothing in them changed for 30 days and the account
+ * has the run. A folder is kept when it is the only copy of the run: a device-only run, a run that was never sent, or
+ * a run that still waits in the outbox. A project's own .method-runs folder is not touched. A folder that cannot be
+ * read or removed is left as it is.
  */
 export function pruneCachedRuns(root = join(methodCache(), 'runs'), now = Date.now()) {
   const cutoff = now - runFolderDays * 86_400_000;
   let entries: string[];
   try { entries = readdirSync(root); } catch { return; }
+  let waiting: Set<string> | undefined;
+  const unsent = (folder: string) => {
+    if (!waiting) {
+      waiting = new Set();
+      const outbox = join(methodCache(), 'outbox');
+      let names: string[] = [];
+      try { names = readdirSync(outbox).filter(name => name.endsWith('.json')); } catch { /* An empty outbox. */ }
+      for (const name of names) {
+        try { const item = JSON.parse(readFileSync(join(outbox, name), 'utf8')); if (item?.kind === 'run') waiting.add(resolve(item.run_dir)); }
+        catch { /* Unreadable: a later command removes or sends it. */ }
+      }
+    }
+    return waiting.has(resolve(folder));
+  };
   for (const name of entries) {
     const folder = join(root, name);
     try {
       const info = lstatSync(folder);
       if (!info.isDirectory()) continue;
+      const sync = JSON.parse(readFileSync(join(folder, 'method-sync.json'), 'utf8'));
+      if (sync.device === true || !sync.dashboard_id || unsent(folder)) continue;
       const latest = Math.max(info.mtimeMs, ...readdirSync(folder).map(entry => lstatSync(join(folder, entry)).mtimeMs));
       if (latest < cutoff) rmSync(folder, { recursive: true, force: true });
     } catch { /* Left for a later run. */ }
@@ -85,7 +103,7 @@ export async function prepareRuntime(root:string,config:any,method:any) {
 async function prepareOnce(root: string, config: any, method: any) {
   const files = ['package.json','package-lock.json','pyproject.toml','uv.lock'];
   const hasNode = existsSync(join(root,'package.json')), hasPython = existsSync(join(root,'pyproject.toml'));
-  if (hasNode && !existsSync(join(root,'package-lock.json')) || hasPython && !existsSync(join(root,'uv.lock'))) throw Error('Save this Method with its dependency lockfiles before running it.');
+  await lockDependencies(root);
   const nodePackage = hasNode ? JSON.parse(readFileSync(join(root,'package.json'),'utf8')) : {};
   const hasNodeDependencies = ['dependencies','devDependencies','optionalDependencies'].some(key => Object.keys(nodePackage[key] ?? {}).length > 0);
   const runtimes = {...config.runtimes};

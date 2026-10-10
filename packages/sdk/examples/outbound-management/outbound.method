@@ -57,6 +57,8 @@ steps:
   read_email:
     name: Read campaign email
     no_effect_reason: Reads the mailbox in the browser; sends, replies to, and deletes nothing.
+    accept:
+      untrusted_content_can_act: The agent needs the signed-in mailbox to read campaign email. The prompt asks it only to search and read; nothing is sent until a person reviews the tasks.
     changes: [environment.browser]
     in:
       mailbox_url: target.mailbox_url
@@ -91,6 +93,8 @@ steps:
   find_prospects:
     name: Find prospects in Happenstance
     no_effect_reason: Searches Happenstance in the browser; sends no messages or introduction requests.
+    accept:
+      untrusted_content_can_act: The agent needs the signed-in Happenstance account to search the network. The prompt asks it only to search; no message or introduction request is sent.
     changes: [environment.browser]
     after: read_email
     in:
@@ -127,6 +131,8 @@ steps:
   enrich:
     name: Check each prospect's pages
     no_effect_reason: Reads company and LinkedIn pages in the browser; sends no messages or connection requests.
+    accept:
+      untrusted_content_can_act: The agent needs the signed-in browser to read LinkedIn profiles. The prompt asks it only to read pages; no message or connection request is sent.
     changes: [environment.browser]
     after: find_prospects
     each: {prospect: prospects}
@@ -218,6 +224,11 @@ steps:
         Skip contacts whose status is customer, closed, or opted_out.
         Set action to the next action, due_date to next_action_date or {{day}} when it is empty, and reason to one sentence.
         Write a short draft email that uses the contact's facts and this offer: {{offer}} Leave draft empty when the task is not an email, such as a meeting.
+        Two tasks written the way they should be, for other contacts:
+        - A reply that asked for pricing: action "Send pricing", reason "Jordan asked for pricing on 2026-09-15.",
+          draft "Hi Jordan, thanks for asking. Pricing starts at $400 a month for one workflow; I attached the one-page summary. Would a 20-minute call next week help?"
+        - A new prospect: action "Ask Sam for an introduction", reason "New prospect; Sam knows Priya from their time at Bayside Freight.",
+          draft "Hi Sam, could you introduce me to Priya at Coastline Logistics? Her team still handles customer requests by hand, and I think our workflows could help."
     out:
       day_tasks:
         type: list

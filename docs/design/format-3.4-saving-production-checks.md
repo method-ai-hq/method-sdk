@@ -46,10 +46,8 @@ steps:
 - Runtimes (python, node) are found on PATH; the run record notes the version. `allow_local_processes` is true for
   the user's own Methods.
 - The sidecar `FILE.method.json`, the `FILE.lock` file, and the `pending` save state are deleted.
-- One-time converter, this release only: the first run, validate, or publish of a Method that has a runtime.json or
-  a sidecar moves `models` into the Method (format 3.4), moves environment paths into `computer.json` bindings, writes
-  the `id:` line from the sidecar's `workflow_id`, deletes both files, and prints one line. The next release deletes
-  the converter.
+- No converter. A runtime.json or a sidecar next to a Method is the error `legacy_runtime_json` or `legacy_sidecar`
+  in `method validate` and `method run`; the fix says what to move where, and validate changes no file.
 
 ## 3. Saving by content
 

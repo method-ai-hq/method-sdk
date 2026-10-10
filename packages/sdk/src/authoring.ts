@@ -1,9 +1,10 @@
 import { preflight } from "@withmethod/runtime/preflight.js";
 import { configSchema,methodSchema } from "@withmethod/runtime/schema.js";
+import { isModelId } from "@withmethod/runtime/semantics.js";
 import { localSetup } from "./local-setup.js";
 /** Deterministic local authoring. No model calls, network calls, or workflow execution. */
-import { closeSync,existsSync,mkdirSync,openSync,readFileSync,realpathSync,unlinkSync } from "node:fs";
-import { dirname,resolve,sep } from "node:path";
+import { closeSync,existsSync,mkdirSync,openSync,readFileSync,unlinkSync } from "node:fs";
+import { dirname,resolve } from "node:path";
 
 import { renameSync,writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -15,12 +16,7 @@ import { authoringGuide,methodHelp } from "./method-help.js";
 export const authoringHelp = authoringGuide();
 
 export function authoringPath(path: string): string {
-  const full = resolve(path);
-  if (full.split(sep).includes("sensitive")) throw Error("Use a path outside sensitive/.");
-  let existing = full;
-  while (!existsSync(existing)) existing = dirname(existing);
-  if (realpathSync(existing).split(sep).includes("sensitive")) throw Error("Use a path outside sensitive/.");
-  return full;
+  return resolve(path);
 }
 export const readDocument = (file: string): any => parseDocumentValue(readFileSync(authoringPath(file), "utf8"));
 const own = (v: any, k: string) => v !== null && typeof v === "object" && Object.hasOwn(v, k);
@@ -129,8 +125,8 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
       const missingSecrets = declared.filter(name => !secrets[name]);
       const ownKey = (await import("./own-model-key.js")).ownKeyEnv();
       const steps = Object.entries(workflow.steps).map(([id, step]: [string, any]) => {
-        const exec = step.do, named = (workflow as any).models?.[exec?.model] ?? (/^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/.test(exec?.model ?? "") ? exec.model : undefined);
-        const profile = named ? { backend: "method", model: typeof named === "string" ? named : named.model } : config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
+        const exec = step.do, named = (workflow as any).models?.[exec?.model] ?? (isModelId(exec?.model) ? exec.model : undefined);
+        const profile = named?.agent ? { backend: named.agent, model: named.model } : named ? { backend: "method", model: typeof named === "string" ? named : named.model } : config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
         const runs = step.ask ? "asks the user"
           : exec.kind === "run" ? `${exec.runtime} ${exec.entrypoint}`
           : exec.kind === "classify" ? (config.classification?.api_key_env || ownKey ? "Jev through OpenRouter with your own key" : "Method's classifier")
@@ -176,7 +172,7 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
           else {
             const kind = v.kind ?? "agent";
             const execution = kind === "run" ? { kind, runtime: v.runtime, entrypoint: v.entrypoint } : { kind, model: v.model ?? "default", prompt: v["instructions-file"] ? readFileSync(authoringPath(v["instructions-file"]), "utf8") : undefined, ...(kind === "agent" ? { tools: [] } : {}) };
-            doc.steps[v.id] = CurrentStepSchema.parse({ ...(v.name ? { name: v.name } : {}), ...(v.purpose ? {purpose: v.purpose} : {}), do: execution, limits: { ...(v["timeout-ms"] ? { timeout_ms: Number(v["timeout-ms"])} : {}), ...(v["max-agent-turns"] ? { max_agent_turns: Number(v["max-agent-turns"]) } : {}), ...(v["max-model-requests"] ? { max_model_requests: Number(v["max-model-requests"]) } : {}) } });
+            doc.steps[v.id] = CurrentStepSchema.parse({ ...(v.name ? { name: v.name } : {}), ...(v.purpose ? {purpose: v.purpose} : {}), do: execution });
           }
         }
       } else {

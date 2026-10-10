@@ -1,7 +1,7 @@
 ---
 date: 2026-05-11
 timezone: America/Chicago
-title: May 11 — planning research workers on Modal
+title: May 11 — planning the Spring Glaze Workshop
 ---
 
 # Monday, May 11
@@ -12,50 +12,40 @@ This sample contains one complete 28-message ChatGPT conversation. It covers par
 
 ## TL;DR
 
-**You explored how to give temporary research workers access to a shared dataset, then asked for a prompt to move your DigitalOcean setup to Modal.** You wanted workers to read the same files without changing them. Each worker would have separate space for scripts and results. After comparing storage options, you clarified that the dataset was about one terabyte. ChatGPT then recommended trying a Modal Volume directly. [Your opening request](source:chatgpt-0001) · [Dataset size](source:chatgpt-0018) · [Revised recommendation](source:chatgpt-0019)
+**You planned a four-week glaze workshop for eight people around one kiln, chose a price of $195, and wrote the text to announce it.** ChatGPT set one bisque firing after week 2 and one glaze firing after week 3. You rejected the first class description as “too salesy”, and the second one explains the limit of eight places by the kiln load. [Your opening question](source:chatgpt-0001) · [Schedule](source:chatgpt-0005) · [Plain description](source:chatgpt-0017)
 
-By 11:16 AM, you had asked for a migration prompt that used Codex CLI. At 11:30, you turned to the output: could a worker create and publish a Jupyter notebook, and could you watch the research happen? The conversation ended with a proposed design for live progress and finished reports. It does not show a completed migration or a published notebook. [Migration request](source:chatgpt-0024) · [Notebook question](source:chatgpt-0026) · [Final proposal](source:chatgpt-0028)
+At 11:12 AM, you came back with an invitation from Dana at the Millbrook library to do a free demo night. ChatGPT wrote a sign-up form and confirmed that six demo bowls can share the workshop’s glaze load if they are bisqued in time. The conversation does not show that the email was sent or that the demo night has a date. [Demo night](source:chatgpt-0022) · [Sign-up form](source:chatgpt-0025#L1-L3) · [Shared kiln load](source:chatgpt-0028#L1-L2)
 
-**Time estimate:** about 29 minutes across two conversation periods. This estimate uses message timestamps and excludes gaps over 15 minutes. It does not measure continuous attention. The calculation method is given below.
+**Time estimate:** about 28 minutes across two conversation periods. This estimate uses message timestamps and excludes gaps over 15 minutes. It does not measure continuous attention. The calculation method is given below.
 
-## 10:45–10:51 AM: shared files without a long copy
+## 10:42–10:45 AM: the kiln sets the schedule
 
-At 10:45, you asked for tools like Runloop. Your goal was to store datasets on a filesystem and start computers running Claude Code or Codex CLI with read-only access. ChatGPT proposed separate places for the source data, temporary work, and saved results. It compared Runloop with E2B, Daytona, Modal, and Morph Cloud. [Your request](source:chatgpt-0001) · [Initial proposal](source:chatgpt-0003)
+At 10:42, you asked how to plan a four-week evening glaze workshop for 8 people with one kiln, so that everyone’s pieces are fired in time. ChatGPT planned the weeks around two firings: making pieces in week 1, trimming in week 2 with a bisque firing after it, glazing in week 3 with a glaze firing after it, and pickup in week 4. It asked for the kiln size and the firing time. [Your question](source:chatgpt-0001) · [Week-by-week plan](source:chatgpt-0003)
 
-You then asked whether Runloop had permanent storage that could quickly attach to any worker. ChatGPT distinguished saved copies of a worker’s disk from a shared dataset volume. It said Runloop’s support for the latter was less clear and suggested keeping the dataset in separate storage. [Storage question](source:chatgpt-0004) · [Reply](source:chatgpt-0005)
+You answered that the kiln is a 7 cubic foot electric kiln, and that a glaze firing takes about 12 hours plus 10 hours to cool. With a Tuesday class, the glaze load goes in on Wednesday morning and is cool by Thursday afternoon, which leaves almost five days before week 4. ChatGPT estimated that the kiln holds 30 to 40 mugs, so the 16 workshop pieces fit with room to spare. [Kiln details](source:chatgpt-0004) · [Fixed days](source:chatgpt-0005)
 
-At 10:47, you asked whether S3 or R2 could appear as a filesystem. ChatGPT described mounting the storage with tools such as `rclone`. Your next question made the startup requirement clear: “I need the mount to be instant.” You also wanted to treat the data as ordinary Unix files. [Filesystem question](source:chatgpt-0006) · [Mount proposal](source:chatgpt-0007) · [Startup requirement](source:chatgpt-0008)
+For clay, it estimated about 4 lb per person, 32 lb for the class, and suggested buying two 25 lb bags of one mid-fire stoneware. [Clay question](source:chatgpt-0006) · [Estimate](source:chatgpt-0007)
 
-ChatGPT said an `rclone` mount would fetch data as needed, rather than copy the whole dataset first. It also described limits around file locking, renaming, and large numbers of small reads. That distinction led the conversation toward JuiceFS and other shared filesystems. [Reply on copying and filesystem limits](source:chatgpt-0009)
+## 10:45–10:55 AM: price, description, and supplies
 
-At 10:51, you asked whether JuiceFS could support simultaneous workers and keep growing. You also returned to the choice of worker service: Modal, Runloop, or something else. ChatGPT said shared reading was a suitable use, but scaling would still depend on metadata, storage speed, caching, and file layout. It suggested separate result folders for each job. [Your questions](source:chatgpt-0010) · [Reply on shared access and workers](source:chatgpt-0012)
+You gave your costs: about $38 of materials per person and 10 hours of your time. ChatGPT counted $109 per person, including two firings and your time at $40 an hour, and suggested a price from $185 to $220. [Your costs](source:chatgpt-0008) · [Cost table](source:chatgpt-0009)
 
-## 10:53–10:58 AM: a simpler plan for one terabyte
+You asked whether $195 was too much, because the other studio in Millbrook charges $160 for a four-week wheel class without the glaze firing. ChatGPT compared what each class includes. With a glaze firing of about $10 a piece, the other class costs about $180 and has no glaze lesson. It advised saying plainly that both firings and the glazes are included. You chose $195. [Your question](source:chatgpt-0010) · [Comparison](source:chatgpt-0012) · [Decision](source:chatgpt-0013)
 
-At 10:53, you narrowed the choice to Modal Volumes or JuiceFS. You asked whether Modal could mount JuiceFS. ChatGPT recommended starting with Modal’s own storage. It said support for the permissions needed by a JuiceFS mount would need confirmation. [Your comparison](source:chatgpt-0013) · [Recommendation](source:chatgpt-0015)
+The first description started with “Discover the magic of glaze!” You asked for a shorter, plain text that gives the reason for eight places. The second version says that the class is limited to 8 people “so that everyone's pieces fit in one kiln load and come back in time for the last evening.” [First draft](source:chatgpt-0015) · [Your correction](source:chatgpt-0016) · [Second draft](source:chatgpt-0017)
 
-You then asked whether several workers could use a Modal Volume at once, and what advantage that offered over your DigitalOcean setup. ChatGPT described the benefit as starting many workers when needed and stopping them afterward. It also warned that workers should not depend on changes to shared files becoming visible immediately. [DigitalOcean comparison](source:chatgpt-0016) · [Reply](source:chatgpt-0017)
+You then asked what to buy before the first session, and for a short email to your mailing list. The checklist names the clay, eight tool sets, ware boards, tested glazes, and about 20 test tiles. The email gives the evenings, the price, and the eight places, and asks people to reply to save one. [Supply list](source:chatgpt-0019) · [Email draft](source:chatgpt-0021)
 
-At 10:56, you challenged the need for more storage layers: your data already lived on a DigitalOcean volume, and “it's not that big (1 TB)”. ChatGPT adjusted its recommendation. For that size and a workload based mainly on reading, it proposed trying a Modal Volume directly. The plan kept the shared data at `/data`, temporary work at `/workspace`, and results in a separate folder for each job. [Your clarification](source:chatgpt-0018) · [Simplified plan](source:chatgpt-0019)
+## 11:12–11:28 AM: a demo night at the library
 
-At 10:58, you checked whether Modal workers had enough computing power to run Codex CLI or Claude Code. ChatGPT said the worker could be given more CPU and memory as needed. It pointed to a Claude Code example and described how Codex could fit into the same arrangement. This was a proposed setup; the conversation contains no worker test. [Capacity question](source:chatgpt-0020) · [Reply](source:chatgpt-0021)
+At 11:12, you said that Dana at the Millbrook library wanted you to do a free demo night. ChatGPT suggested showing rather than teaching, bringing pieces at each stage, and having one sign-up sheet. It advised scheduling the demo about two weeks before the workshop. [Invitation](source:chatgpt-0022) · [Suggestions](source:chatgpt-0023)
 
-## 11:15–11:30 AM: from migration instructions to reports
+You asked for a short sign-up form with name, email, and one question about experience with clay. The form asks “Have you worked with clay before?” with three answers. [Your request](source:chatgpt-0024) · [Form text](source:chatgpt-0025)
 
-At 11:15, you returned to ask how the workers would receive credentials. ChatGPT proposed Modal Secrets, with credentials supplied through environment variables. It also explained that an agent with shell access could inspect those variables. It suggested a separate model service with limited job tokens if the provider keys needed to stay outside the worker. [Credentials question](source:chatgpt-0022) · [Reply](source:chatgpt-0023)
-
-At 11:16, you asked for a prompt that your coding agent could use to make the change from DigitalOcean to Modal. You specified Codex CLI. ChatGPT supplied the prompt, including shared dataset storage, separate work folders, saved logs, and result folders identified by job. [Your request](source:chatgpt-0024) · [Migration prompt](source:chatgpt-0025)
-
-The prompt also called for a controlled transfer: copy the data, check file counts and sizes, read sample files, and run a small test job. It instructed the coding agent to keep the DigitalOcean path working until the Modal path was proven. These were instructions for later work, not evidence that the transfer or tests had happened. [Transfer and test requirements](source:chatgpt-0025)
-
-At 11:30, you asked whether a Modal worker could create and publish a Jupyter notebook. You immediately identified a gap: “although i guess you wouldnt see the research as it happens.” [Notebook question](source:chatgpt-0026)
-
-ChatGPT proposed a worker that would create a notebook, execute it, export an HTML report, and publish the result. The notebook would retain the research question, inspected data, methods, code, findings, and limits. For progress during the run, it suggested streaming logs and events into the interface. The saved conversation ends with that design: a finished report for reading, a notebook for checking the work, and live updates while the worker runs. [Report and progress proposal](source:chatgpt-0028)
+At 11:27, you asked whether six small bowls from the demo night could go into the same glaze load as the workshop. ChatGPT said yes, if the bowls are bisqued in the week 2 firing and glazed before week 3. It said to leave out a bowl that is still damp at the bisque firing, because it can crack and damage the pieces next to it. [Your question](source:chatgpt-0026) · [Answer](source:chatgpt-0028)
 
 ## Time estimate and record limits
 
-The Method calculator used all 28 messages, from `chatgpt-0001` through `chatgpt-0028`. The user messages are direct questions and requests; none is an automated prompt. Assistant replies were included as part of those exchanges.
+The calculator grouped all 28 message times at gaps over 15 minutes. The first period ran from 10:42 to 10:55 AM, and the second from 11:12 to 11:27 AM. The 17-minute gap between them is not counted. [Calculation](source:time-estimates)
 
-With a new period at each gap over 15 minutes, the calculator found two periods: approximately 10:45–10:58 AM and 11:15–11:30 AM. Their combined span was 28.54 minutes, rounded to **about 29 minutes**. [First period start](source:chatgpt-0001) · [First period end](source:chatgpt-0021) · [Second period start](source:chatgpt-0022) · [Second period end](source:chatgpt-0028)
-
-These spans can include reading, waiting, and breaks. They do not establish time spent implementing the plan. The sample does not support estimates for the rest of May 11.
+The sample has no records from the rest of the day, so no other activities are estimated.

@@ -11,7 +11,9 @@ import { openUrl } from './method-client.js';
  * Method servers never receive them. A value exported in the shell takes precedence.
  */
 const storeFile = () => join(homedir(), '.config', 'method', 'secrets.json');
-const name = /^[A-Z][A-Z0-9_]*$/;
+/** Any environment variable name, except the names that the runtime sets for scripts (PATH, LANG, HOME, METHOD_*). */
+const valid = (key: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) && key.length <= 80 && !['PATH', 'LANG', 'HOME'].includes(key) && !key.startsWith('METHOD_');
+const checkName = (key: string) => { if (!valid(key)) throw Error(`Use an environment variable name that the runtime does not set (not PATH, LANG, HOME, or METHOD_...): ${key}`); };
 function readStore(): Record<string, string> {
   const file = storeFile();
   return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
@@ -52,12 +54,12 @@ function parseEnv(text: string): Record<string, string> {
 
 export function importSecrets(file: string, names: string[]) {
   if (!names.length) throw Error('Name the secrets to copy: method secret import FILE NAME...');
-  for (const key of names) if (!name.test(key)) throw Error(`Use a capitalized secret name: ${key}`);
+  names.forEach(checkName);
   const values = parseEnv(readFileSync(resolve(file), 'utf8'));
   const missing = names.filter(key => !values[key]);
   if (missing.length) throw Error(`Not found in ${file}: ${missing.join(', ')}. No secret was copied.`);
   save(Object.fromEntries(names.map(key => [key, values[key]!])));
-  return { saved: names, store: storeFile() };
+  return { saved: names };
 }
 
 const keyFile = /^(?:\.env(?:\..+)?|.+\.env|secrets?\.env)$/i;
@@ -113,10 +115,10 @@ export function listSecrets(names?: string[]) {
 
 /** Ask for one value in a private browser form on this computer. The value never passes through chat or a terminal. */
 export async function setSecret(key: string, open: (url: string) => void = openUrl, timeoutMs = 10 * 60_000) {
-  if (!name.test(key)) throw Error(`Use a capitalized secret name: ${key}`);
+  checkName(key);
   const token = randomBytes(24).toString('base64url');
   const page = (body: string) => `<!doctype html><meta charset="utf-8"><title>Method secret</title><body style="font:16px system-ui;max-width:32rem;margin:4rem auto">${body}</body>`;
-  return new Promise<{ saved: string[]; store: string }>((done, fail) => {
+  return new Promise<{ saved: string[] }>((done, fail) => {
     const server = createServer(async (request, response) => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
       const supplied = Buffer.from(url.pathname.slice(1)), expected = Buffer.from(token);
@@ -134,7 +136,7 @@ export async function setSecret(key: string, open: (url: string) => void = openU
       save({ [key]: value });
       response.writeHead(200, { 'content-type': 'text/html' }).end(page(`<p>Saved ${key}. You can close this tab.</p>`));
       clearTimeout(timer); server.close();
-      done({ saved: [key], store: storeFile() });
+      done({ saved: [key] });
     });
     const timer = setTimeout(() => { server.close(); fail(Error(`No value was entered for ${key}. Run method secret set ${key} again.`)); }, timeoutMs);
     server.listen(0, '127.0.0.1', () => {
@@ -157,7 +159,7 @@ export async function secretCommand(args: string[]) {
 
 /** The secrets that a Method declares: the named file, or the only Method in this folder. */
 async function declaredSecrets(file?: string) {
-  const path = file ?? (() => { const methods = readdirSync(process.cwd()).filter(entry => entry.endsWith('.method')); return methods.length === 1 ? methods[0] : undefined; })();
+  const path = file ?? (() => { const methods = readdirSync(process.cwd(), { withFileTypes: true }).filter(entry => entry.isFile() && entry.name.endsWith('.method')).map(entry => entry.name); return methods.length === 1 ? methods[0] : undefined; })();
   if (!path) return [];
   const { readDocument } = await import('@withmethod/runtime/io.js');
   return Object.keys((await readDocument(resolve(path)) as { secrets?: Record<string, string> }).secrets ?? {});

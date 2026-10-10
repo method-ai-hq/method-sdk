@@ -17,6 +17,8 @@ environment:
 steps:
   gather_sources:
     no_effect_reason: Reads posts and papers in the browser; sends, posts and submits nothing.
+    accept:
+      untrusted_content_can_act: The agent needs the signed-in browser to read Grok, alphaXiv, and LinkedIn. The prompt asks it only to search and read, and a person reads the briefing before it is shared.
     name: Find and read sources
     changes:
       - environment.browser
@@ -76,7 +78,7 @@ steps:
       sources: sources
       research_notes: research_notes
     do:
-      kind: agent
+      kind: call
       model: default
       prompt: |
         Write a briefing from the collected sources. Start with:
@@ -95,6 +97,8 @@ steps:
         Include useful LinkedIn posts in the same style. Describe disagreements
         when the sources show them. Use the collected quotes and put links beside
         each claim. Keep quotes to at most 25 words per source in total.
+        When a source has no quote, describe it without quotation marks. When
+        research_notes name a site that could not be read, say so in the last sentence.
     out:
       briefing:
         type: text

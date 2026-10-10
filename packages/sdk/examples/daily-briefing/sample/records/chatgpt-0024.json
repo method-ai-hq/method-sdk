@@ -6,8 +6,8 @@
     "source_order": 23,
     "event_kind": "conversation",
     "actor_role": "user_written",
-    "title": "Hosting Datasets with Runloop",
-    "text": "Great can you write up a prompt for my coding agent to make the change from digital ocean to modal ? Codex CLI not claude code ,but otherwise mimick laude that coding agent example you said. ",
+    "title": "Planning the Spring Glaze Workshop",
+    "text": "Great, can you write the text for a sign-up form for the library demo night? Keep it to name, email, and one question about their experience with clay.",
     "url": null,
     "stream": "chatgpt",
     "browser": null,
@@ -16,13 +16,13 @@
     "post_author": null,
     "evidence_status": "user_message",
     "time": {
-      "instant": "2026-05-11T16:16:43.753000+00:00",
+      "instant": "2026-05-11T16:13:40.715000+00:00",
       "end": null,
-      "local": "2026-05-11T11:16:43.753000-05:00",
+      "local": "2026-05-11T11:13:40.715000-05:00",
       "day": "2026-05-11",
       "basis": "original_message_create_time",
       "precision": "microsecond",
-      "original": "2026-05-11T16:16:43.753000+00:00"
+      "original": "2026-05-11T16:13:40.715000+00:00"
     },
     "text_basis": "saved_source_text",
     "profile": null,
@@ -38,7 +38,7 @@
     "url_key": null,
     "media": [],
     "attributes": {
-      "topic": "Hosting Datasets with Runloop",
+      "topic": "Planning the Spring Glaze Workshop",
       "turn_started_at": null,
       "channel": null,
       "thread_id": "example-thread-id-0001",

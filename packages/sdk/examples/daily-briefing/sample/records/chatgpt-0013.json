@@ -6,8 +6,8 @@
     "source_order": 12,
     "event_kind": "conversation",
     "actor_role": "user_written",
-    "title": "Hosting Datasets with Runloop",
-    "text": "modal with modal volumes or juiceFS ? can modal mount juiceFS ? ",
+    "title": "Planning the Spring Glaze Workshop",
+    "text": "ok go with $195. write the class description for my website",
     "url": null,
     "stream": "chatgpt",
     "browser": null,
@@ -16,13 +16,13 @@
     "post_author": null,
     "evidence_status": "user_message",
     "time": {
-      "instant": "2026-05-11T15:53:25.864000+00:00",
+      "instant": "2026-05-11T15:50:24.315000+00:00",
       "end": null,
-      "local": "2026-05-11T10:53:25.864000-05:00",
+      "local": "2026-05-11T10:50:24.315000-05:00",
       "day": "2026-05-11",
       "basis": "original_message_create_time",
       "precision": "microsecond",
-      "original": "2026-05-11T15:53:25.864000+00:00"
+      "original": "2026-05-11T15:50:24.315000+00:00"
     },
     "text_basis": "saved_source_text",
     "profile": null,
@@ -38,7 +38,7 @@
     "url_key": null,
     "media": [],
     "attributes": {
-      "topic": "Hosting Datasets with Runloop",
+      "topic": "Planning the Spring Glaze Workshop",
       "turn_started_at": null,
       "channel": null,
       "thread_id": "example-thread-id-0001",

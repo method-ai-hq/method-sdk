@@ -25,13 +25,13 @@ it.skipIf(process.platform === "win32").each(["timeout", "failed exit"])("stops 
   const script = `const fs = require('node:fs');
     process.on('SIGTERM', () => {});
     fs.writeFileSync(${JSON.stringify(descendant)}, String(process.pid));
-    setTimeout(() => fs.writeFileSync(${JSON.stringify(receipt)}, 'unexpected late write'), 1800);
+    setTimeout(() => fs.writeFileSync(${JSON.stringify(receipt)}, 'unexpected late write'), 700);
     setInterval(() => {}, 1000);`;
-  const parent = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(script)}], {stdio:'ignore'}); ${mode === "failed exit" ? "setTimeout(() => process.exit(7), 1000);" : "setInterval(() => {}, 1000);"}`;
+  const parent = `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(script)}], {stdio:'ignore'}); ${mode === "failed exit" ? "setTimeout(() => process.exit(7), 500);" : "setInterval(() => {}, 1000);"}`;
   try {
-    await expect(runProcess({ command: process.execPath, args: ["-e", parent], cwd: root, timeout_ms: mode === "timeout" ? 1000 : 5000 }, "")).rejects.toThrow(mode === "timeout" ? "PROCESS_TIMEOUT" : "exited 7");
+    await expect(runProcess({ command: process.execPath, args: ["-e", parent], cwd: root, timeout_ms: mode === "timeout" ? 500 : 5000 }, "")).rejects.toThrow(mode === "timeout" ? "PROCESS_TIMEOUT" : "exited 7");
     expect(existsSync(descendant)).toBe(true);
-    await new Promise(resolve => setTimeout(resolve, 1100));
+    await new Promise(resolve => setTimeout(resolve, 600));
     expect(existsSync(receipt)).toBe(false);
   } finally {
     if (existsSync(descendant)) {

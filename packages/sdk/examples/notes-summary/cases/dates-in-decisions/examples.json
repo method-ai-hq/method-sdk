@@ -1,0 +1,16 @@
+[
+  {
+    "run": "failing",
+    "labels": {
+      "c1": false
+    },
+    "value": "/work/notes-summary/out/weekly.md"
+  },
+  {
+    "run": "passing",
+    "labels": {
+      "c1": true
+    },
+    "value": "/work/notes-summary/out/weekly.md"
+  }
+]

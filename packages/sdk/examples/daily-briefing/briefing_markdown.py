@@ -23,7 +23,7 @@ const target=(href,image=false)=>{
  if (/^(https?:|#)/.test(href)) return;
  if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('/')) throw Error(`Unsupported file target: ${href}`);
  const path=decodeURIComponent(href.split(/[?#]/)[0]);
- if (path.split(/[\\/]/).some(x=>x==='..'||x==='sensitive'||x==='.git'||x.startsWith('.env'))) throw Error(`Unsafe file target: ${href}`);
+ if (path.split(/[\\/]/).some(x=>x==='..'||x==='.git'||x.startsWith('.env'))) throw Error(`Unsafe file target: ${href}`);
  if(path)local_files.push({path,image});
 };
 marked.use({renderer:{

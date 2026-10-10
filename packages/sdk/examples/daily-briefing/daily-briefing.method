@@ -1,7 +1,7 @@
 format: method/3.4
 tools:
   calculate_activity_times:
-    description: Calculate activity times and save time-plan.json and time-estimates.json in this run. Each successful call replaces both files; supply the complete plan each time. Calculate only the activities supplied in the plan. Choose records for the activities. Check whether messages are automated prompts before counting them as work. Record selection and exclusion reasons in the calculation plan. Gaps and playback do not measure continuous attention. Leave activities without enough evidence unestimated.
+    description: Calculate activity times and save time-plan.json and time-estimates.json in this run. Each successful call replaces both files, so supply the complete plan each time. Only the activities in the plan are calculated; choose the records for each. Before you count a message as work, check whether it is an automated prompt. Record in the plan why each record was selected or excluded. Gaps between records and media playback do not show continuous attention. Leave an activity unestimated when the records do not support an estimate.
     in:
       day:
         type: text

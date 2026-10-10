@@ -1,6 +1,6 @@
 # Worked example: notes-summary
 
-The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call, and saves a summary file. The folder is observed automatically.
+The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call that shows two good items, and saves a summary file. A recorded case keeps one correction.
 
 ## TASK.md
 
@@ -40,8 +40,16 @@ steps:
       prompt: |
         From these meeting notes, list every decision and every action item.
         For each item, give the note file it comes from. For an action item,
-        give the owner, and the due date as YYYY-MM-DD when the notes give one;
-        otherwise use an empty due. Do not add anything that the notes do not say.
+        give the owner and the due date. Write every date as YYYY-MM-DD, also
+        inside a decision; take the year from the note's file name. When the
+        notes give no due date, leave due empty. Do not add anything that the
+        notes do not say.
+
+        Two items from other notes, written the way they should be:
+        - "Decision: ship the beta on 3 Nov." in 2026-10-28-review.md is the decision
+          text "Ship the beta on 2026-11-03.", source "2026-10-28-review.md".
+        - "Lee will book the venue." in 2026-10-28-review.md is the action
+          "Book the venue.", owner "Lee", due "", source "2026-10-28-review.md".
 
         {{material}}
     out:
@@ -82,22 +90,83 @@ writeFileSync(path, lines.join('\n'));
 console.log(JSON.stringify({path}));
 ```
 
+## cases/dates-in-decisions/case.json
+
+```json
+{
+  "format": "method-case/1",
+  "id": "dates-in-decisions",
+  "status": "active",
+  "method_file": "notes-summary.method",
+  "note": "The demo date in the decision says 14 Oct. Write dates in decisions as YYYY-MM-DD too, like the due dates.",
+  "author": null,
+  "created": "2026-10-10T02:18:15.490Z",
+  "source": {
+    "run_dir": "/work/notes-summary/run2",
+    "execution_id": "e8348baa-6be6-421e-b50d-0f86e4df765f",
+    "method_sha256": "a444edf4f50b1263e1a0b1037a26ba2db91a95f3508e2e6f11747f44d468fa7d",
+    "passing_run_dir": "/work/notes-summary/run3"
+  },
+  "expect": [
+    {
+      "kind": "rubric",
+      "ref": "outputs.path",
+      "criteria": [
+        {
+          "id": "c1",
+          "text": "Every date in a decision is written as YYYY-MM-DD."
+        }
+      ]
+    }
+  ],
+  "runs": null,
+  "min_pass": null,
+  "supersedes": [],
+  "superseded_by": null,
+  "files": {
+    "/work/notes-summary/out/weekly.md": "files/0"
+  },
+  "retention_until": "2027-10-10",
+  "redacted": true
+}
+```
+
 ## README.md
 
-```markdown
+````markdown
 # Weekly summary from meeting notes
 
 The smallest complete Method: a script reads a folder, one model call finds the items, and a script saves a file.
 
+- The folders `notes/` and `out/` beside the Method are its two files connections, so they need no binding. `out/` is empty until the first run.
 - The save step declares `changes: [environment.out]`. Nothing else is needed: the runtime reads the folder before and after the step, and the run fails if the step returns `out/weekly.md` but that file did not change.
+- The prompt shows two items written the way they should be. They come from other notes, so the model copies their form, not their content.
 - Run it: `method run notes-summary.method`.
-- When the user corrects the summary, fix the Method, run it again, and keep the rule as a case: `method case new notes-summary.method --id ... --run BAD_RUN --passing-run NEW_RUN --note "..." --rubric "..."`, then `method test notes-summary.method`.
+
+## The case in cases/
+
+The first version of the prompt asked for due dates as YYYY-MM-DD but said nothing about other dates. Its run wrote the decision "Move the client demo to 14 Oct." The correction was: write dates in decisions as YYYY-MM-DD too. The prompt now says so, and it shows an example decision with a date. The run after the change wrote "Move the client demo to 2026-10-14."
+
+That correction is kept as a case. It was made from the two runs:
+
+```sh
+method case new notes-summary.method --id dates-in-decisions \
+  --run BAD_RUN --passing-run FIXED_RUN \
+  --note "The demo date in the decision says 14 Oct. Write dates in decisions as YYYY-MM-DD too, like the due dates." \
+  --rubric "Every date in a decision is written as YYYY-MM-DD."
 ```
+
+`method test notes-summary.method` runs it again: the summarize step changed since the bad run, so it runs live, and a model judges the saved summary against the rubric. `method publish` runs the cases first. Add a case in the same way for each correction that a later version must keep.
+````
 
 ## Installed files
 
 - notes-summary/README.md
 - notes-summary/TASK.md
+- notes-summary/cases/dates-in-decisions/case.json
+- notes-summary/cases/dates-in-decisions/examples.json
+- notes-summary/cases/dates-in-decisions/files/0
+- notes-summary/cases/dates-in-decisions/recording.json
 - notes-summary/notes-summary.method
 - notes-summary/notes/2026-10-05-standup.md
 - notes-summary/notes/2026-10-07-planning.md

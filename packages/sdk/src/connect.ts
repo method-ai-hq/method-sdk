@@ -46,9 +46,19 @@ function example(document: any, language: Language, methodId: string, hasAsk: bo
       "from withmethod import Method",
       "",
       "method = Method()  # reads METHOD_API_KEY from the environment or .env",
-      ...(hasAsk ? ["", "def on_ask(question):", "    # question.step, question.question, question.form (JSON Schema of the answer)", "    return None  # return the answer, or call question.answer(...) later; None sends it to the team inbox", ""] : [""]),
-      `run = method.run("${methodId}", {${values}}${hasAsk ? ", on_ask=on_ask" : ""}, idempotency_key=...)  # one key for each event`,
-      `result = run["result"]`,
+      "",
+      ...(hasAsk ? [
+        "# The Method asks a person before it finishes, so start the run and answer it later.",
+        `method.worker.start(methods=["${methodId}"])  # once, when the app starts: runs this Method's runs here`,
+        `run_id = method.runs.start("${methodId}", {${values}}, idempotency_key=...)["run_id"]  # one key for each event; keep run_id`,
+        "",
+        "# Where the person decides (for example an approve endpoint):",
+        "method.runs.answer(run_id, {...})  # the ask step's out fields",
+        'result = method.runs.wait(run_id)["result"]',
+      ] : [
+        `run = method.run("${methodId}", {${values}}, idempotency_key=...)  # one key for each event`,
+        `result = run["result"]`,
+      ]),
     ].join("\n");
   }
   const values = inputs.map(([name]) => name).join(", ");
@@ -57,8 +67,18 @@ function example(document: any, language: Language, methodId: string, hasAsk: bo
     "",
     "const method = new Method(); // reads METHOD_API_KEY from the environment or .env",
     "",
-    `const run = await method.run({ method: "${methodId}", inputs: { ${values} }, idempotencyKey: ...${hasAsk ? ",\n  onAsk: async ({ step, question, form }) => undefined /* return the answer, or call answer() later */" : ""} });`,
-    "const result = run.result;",
+    ...(hasAsk ? [
+      "// The Method asks a person before it finishes, so start the run and answer it later.",
+      `method.worker.start({ methods: ["${methodId}"] }); // once, when the app starts: runs this Method's runs here`,
+      `const { run_id } = await method.runs.start({ method: "${methodId}", inputs: { ${values} }, idempotencyKey: ... }); // keep run_id`,
+      "",
+      "// Where the person decides (for example an approve endpoint):",
+      "await method.runs.answer(run_id, { ... }); // the ask step's out fields",
+      "const result = (await method.runs.wait(run_id)).result;",
+    ] : [
+      `const run = await method.run({ method: "${methodId}", inputs: { ${values} }, idempotencyKey: ... });`,
+      "const result = run.result;",
+    ]),
   ].join("\n");
 }
 /** Add KEY=VALUE to .env, or replace the line that sets KEY. */

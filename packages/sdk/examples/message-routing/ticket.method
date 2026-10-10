@@ -16,7 +16,7 @@ steps:
       options:
         billing: Billing — invoices, charges, refunds, and payments.
         technical: Technical support — errors and problems using the product.
-        other: Other — no listed team fits, or more information is needed.
+        unclear: Unclear — the message does not say enough to choose, or no listed team fits.
     out: message_category
   choose_destination:
     name: Choose the destination
@@ -51,7 +51,7 @@ steps:
     do:
       kind: run
       runtime: node
-      entrypoint: retry/create-ticket.mjs
+      entrypoint: create-ticket.mjs
     changes:
       - environment.ticket_service
     out:

@@ -1,0 +1,195 @@
+{
+  "format": "method-recording/1",
+  "method_sha256": "a444edf4f50b1263e1a0b1037a26ba2db91a95f3508e2e6f11747f44d468fa7d",
+  "execution_id": "e8348baa-6be6-421e-b50d-0f86e4df765f",
+  "inputs": {},
+  "initial_state": {},
+  "environment": {
+    "notes": "/work/notes-summary/notes",
+    "out": "/work/notes-summary/out"
+  },
+  "keys": {
+    "read": "1fd58db074013c4e48e962c51903c64713d8ec03deee94801a84b5efe34297d9",
+    "summarize": "0639fb3e5ebc18181b7b7dc63d11cea0cc23238540c3b7953ec4b53ff16e51d7",
+    "save": "92f29d344b66c6e90a7af14ead1f3942b3a2bb93e2d7553b863c27e8e419307c"
+  },
+  "iterations": {
+    "summarize": [
+      {
+        "inputs": {
+          "material": "## 2026-10-05-standup.md\n# Standup 5 Oct\n- Dana: the invoice export is late; she will finish it by 8 Oct.\n- Decision: move the client demo to 14 Oct.\n- Sam will ask legal about the new NDA template.\n\n\n## 2026-10-07-planning.md\n# Planning 7 Oct\n- Decision: drop the PDF export from this release.\n- Priya owns the onboarding email rewrite, due 10 Oct.\n"
+        },
+        "candidate": {
+          "summary": {
+            "decisions": [
+              {
+                "text": "Move the client demo to 14 Oct.",
+                "source": "2026-10-05-standup.md"
+              },
+              {
+                "text": "Drop the PDF export from this release.",
+                "source": "2026-10-07-planning.md"
+              }
+            ],
+            "actions": [
+              {
+                "action": "Finish the invoice export.",
+                "owner": "Dana",
+                "due": "2026-10-08",
+                "source": "2026-10-05-standup.md"
+              },
+              {
+                "action": "Ask legal about the new NDA template.",
+                "owner": "Sam",
+                "due": "",
+                "source": "2026-10-05-standup.md"
+              },
+              {
+                "action": "Rewrite the onboarding email.",
+                "owner": "Priya",
+                "due": "2026-10-10",
+                "source": "2026-10-07-planning.md"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "save": [
+      {
+        "inputs": {
+          "summary": {
+            "decisions": [
+              {
+                "text": "Move the client demo to 14 Oct.",
+                "source": "2026-10-05-standup.md"
+              },
+              {
+                "text": "Drop the PDF export from this release.",
+                "source": "2026-10-07-planning.md"
+              }
+            ],
+            "actions": [
+              {
+                "action": "Finish the invoice export.",
+                "owner": "Dana",
+                "due": "2026-10-08",
+                "source": "2026-10-05-standup.md"
+              },
+              {
+                "action": "Ask legal about the new NDA template.",
+                "owner": "Sam",
+                "due": "",
+                "source": "2026-10-05-standup.md"
+              },
+              {
+                "action": "Rewrite the onboarding email.",
+                "owner": "Priya",
+                "due": "2026-10-10",
+                "source": "2026-10-07-planning.md"
+              }
+            ]
+          },
+          "out": "/work/notes-summary/out"
+        },
+        "candidate": {
+          "path": "/work/notes-summary/out/weekly.md"
+        }
+      }
+    ]
+  },
+  "observations": {},
+  "method": {
+    "format": "method/3.4",
+    "id": "wf_e1a98901bb45007eba9d8653bf08c98f",
+    "name": "Weekly summary from meeting notes",
+    "goal": "Read this week's meeting notes and save a summary with the decisions and the action items, each with its owner, due date and source note.",
+    "environment": {
+      "notes": {
+        "type": "files",
+        "description": "Folder of Markdown meeting notes."
+      },
+      "out": {
+        "type": "files",
+        "description": "Folder where the summary is saved."
+      }
+    },
+    "steps": {
+      "read": {
+        "name": "Read the notes",
+        "purpose": "Reads every Markdown file in the notes folder, oldest name first, and returns their text headed by the file name.",
+        "in": {
+          "notes": "environment.notes"
+        },
+        "do": {
+          "kind": "run",
+          "runtime": "node",
+          "entrypoint": "read-notes.mjs"
+        },
+        "out": {
+          "material": {
+            "type": "text",
+            "description": "All notes, each headed by its file name."
+          }
+        }
+      },
+      "summarize": {
+        "name": "Find decisions and action items",
+        "in": {
+          "material": "material"
+        },
+        "do": {
+          "kind": "call",
+          "model": "default",
+          "prompt": "From these meeting notes, list every decision and every action item.\nFor each item, give the note file it comes from. For an action item,\ngive the owner, and the due date as YYYY-MM-DD when the notes give one;\notherwise use an empty due. Do not add anything that the notes do not say.\n\n{{material}}\n"
+        },
+        "out": {
+          "summary": {
+            "type": "record",
+            "fields": {
+              "decisions": {
+                "type": "list",
+                "fields": {
+                  "text": "text",
+                  "source": "text"
+                }
+              },
+              "actions": {
+                "type": "list",
+                "fields": {
+                  "action": "text",
+                  "owner": "text",
+                  "due": "text",
+                  "source": "text"
+                }
+              }
+            }
+          }
+        }
+      },
+      "save": {
+        "name": "Save the summary",
+        "purpose": "Writes the decisions and action items to out/weekly.md as Markdown and returns the file path.",
+        "in": {
+          "summary": "summary",
+          "out": "environment.out"
+        },
+        "do": {
+          "kind": "run",
+          "runtime": "node",
+          "entrypoint": "save.mjs"
+        },
+        "changes": [
+          "environment.out"
+        ],
+        "out": {
+          "path": {
+            "type": "text",
+            "description": "Path of the saved summary."
+          }
+        }
+      }
+    },
+    "result": "path"
+  }
+}

@@ -17,9 +17,7 @@ export function writePrivateJson(path: string, value: unknown): void {
 export function checkedFile(value: unknown, roots: string[]): { path: string; sha256: string; bytes: Buffer } {
   const artifact = FileArtifactSchema.parse(value);
   if (!isAbsolute(artifact.path)) throw new Error("ARTIFACT_PATH: file paths must be absolute.");
-  if (artifact.path.split(sep).includes("sensitive")) throw new Error("ARTIFACT_PATH: sensitive files are excluded.");
   const path = realpathSync(artifact.path);
-  if (path.split(sep).includes("sensitive")) throw new Error("ARTIFACT_PATH: sensitive files are excluded.");
   if (!roots.some(root => {
     const rel = relative(realpathSync(resolve(root)), path);
     return rel === "" || !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel);

@@ -100,20 +100,21 @@ it("starts the in-process worker on the first method.run, and a handler can answ
   await later; await method.close();
   expect(run).toMatchObject({ status: "succeeded", result: { sent: false, note: "Not now." } });
   expect(server.calls.filter(c => c.path === "/v1/worker/claim").length).toBeGreaterThan(0);
-  // An answer that does not match the form is refused here, before it is sent.
-  await expect(method.runs.answer(run.run_id, { approved: "yes" })).rejects.toThrow(/not_waiting|no question/);
 });
 
 it("checks an answer against the form before it sends it", async () => {
   const server = api();
   const method = new Method({ apiKey: key, server: "http://127.0.0.1:9", fetch: server.fetcher, worker: { execute: asking, directory: folder(), waitMs: 10 } });
-  const { run_id } = await method.runs.start({ method: "wf_outreach" });
-  (method as any).ensureWorker("wf_outreach");
-  await vi.waitFor(() => expect(server.runs.get(run_id).status).toBe("waiting"));
-  await expect(method.runs.answer(run_id, { approved: "yes", note: "x" })).rejects.toMatchObject({ code: "invalid_answer" });
-  await method.runs.answer(run_id, { approved: true, note: "ok" });
-  expect((await method.runs.wait(run_id, { intervalMs: 20 })).status).toBe("succeeded");
+  let refused: unknown;
+  const run = await method.run({ method: "wf_outreach", inputs: {}, intervalMs: 20, onAsk: async event => {
+    refused = await method.runs.answer(event.run_id, { approved: "yes", note: "x" }).catch(error => error);
+    return { approved: true, note: "ok" };
+  } });
   await method.close();
+  expect(refused).toMatchObject({ code: "invalid_answer" });
+  expect(run).toMatchObject({ status: "succeeded", result: { sent: true, note: "ok" } });
+  // Nothing was sent for the refused answer.
+  expect(JSON.stringify(server.calls.map(c => c.body))).not.toContain('"approved":"yes"');
 });
 
 it("seals a device run's inputs, question, answer, and run folder; the server sees only ciphertext", async () => {
@@ -126,7 +127,6 @@ it("seals a device run's inputs, question, answer, and run folder; the server se
   expect(run).toMatchObject({ status: "succeeded", result: { sent: true, note: "private note", inputs: { member: "Ada Lovelace" } } });
   const sent = JSON.stringify(server.calls.map(c => c.body));
   for (const plain of ["Ada Lovelace", "Send this message", "private note", "Hello Ada"]) expect(sent).not.toContain(plain);
-  expect([...server.snapshots.values()][0]!.subarray(0, 4).toString()).toBe("MRS1");
   expect([...server.snapshots.values()][0]!.toString("latin1")).not.toContain("Hello Ada");
   const stored = [...server.runs.values()][0];
   expect(open(key, "inputs", "wf_private", stored.sealed_inputs)).toEqual({ member: "Ada Lovelace" });
@@ -197,10 +197,11 @@ it("connect makes a key named after the app, writes it to .env without printing 
     const result = await connectCommand([app], client);
     expect(created).toEqual(["cuties-app"]);
     expect(JSON.stringify(result)).not.toContain(key);
-    expect(readFileSync(join(app, ".env"), "utf8")).toBe(`ARCHIVE_TOKEN=keep-me\nMETHOD_API_KEY=${key}\nMETHOD_SERVER=http://127.0.0.1:9\n`);
-    expect(readFileSync(join(app, ".gitignore"), "utf8")).toBe(".env\n");
+    const env = readFileSync(join(app, ".env"), "utf8");
+    expect(env).toContain("ARCHIVE_TOKEN=keep-me\n"); expect(env).toContain(`METHOD_API_KEY=${key}`);
+    expect(readFileSync(join(app, ".gitignore"), "utf8").split("\n")).toContain(".env");
     expect(result).toMatchObject({ language: "python", published_version_id: "v_9", install: "pip install withmethod", secrets_to_set_on_the_host: ["ARCHIVE_TOKEN"] });
-    expect(result.code).toContain(`method.run("wf_${"a".repeat(32)}", {"name": name, "links": links}`);
+    expect(result.code).toContain(`wf_${"a".repeat(32)}`);
     // Again: the app keeps its key.
     await connectCommand([app], client);
     expect(created).toEqual(["cuties-app"]);

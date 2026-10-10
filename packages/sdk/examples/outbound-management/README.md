@@ -20,6 +20,15 @@ Each model step does one task. The shape of each output is declared in `out`, so
 the prompts say only what to do and what to leave empty when a source does not
 have the answer.
 
+The `draft_tasks` prompt shows two tasks written the way they should be, for
+contacts that are not in the CRM: a reply to a pricing question and an
+introduction request. Replace them with two drafts that you sent and liked.
+
+The three browser steps accept the `untrusted_content_can_act` warning: each
+agent reads pages with a signed-in browser that could also send, and the
+`accept:` line on each step gives the reason to keep it. Nothing is sent until
+you review the tasks.
+
 ## Sources
 
 - **Email:** opens your mailbox in the browser and reads received and sent
@@ -47,20 +56,20 @@ with your webmail URL if needed. Use the intended signed-in account.
 mkdir -p work/crm
 cp starter/crm.json work/crm/crm.json
 method validate outbound.method
-method publish outbound.method --reason "First version"
+method publish outbound.method --reason "First version"   # prints the Method ID
 python3 - <<'PY' > work/state.json
 import json
 from pathlib import Path
 print(json.dumps({'crm': Path('work/crm/crm.json').read_text()}))
 PY
 chmod 600 work/state.json
-method state WORKFLOW_ID --enable --file work/state.json
-method run WORKFLOW_ID --version VERSION_ID --inputs inputs.json
+method state METHOD_ID --enable --file work/state.json
+method run outbound.method --inputs inputs.json
 ```
 
-Use the IDs returned by `save`. Set `day` and `from_date` in `inputs.json` before
+Use the Method ID that `publish` printed; it is also the `id:` line in the file. Set `day` and `from_date` in `inputs.json` before
 each run. Use an overlap with the last run so late replies are included.
-Method connects the browser and uses the calling agent. Follow its setup request
+Method connects the browser. Follow its setup request
 if email, Happenstance, or LinkedIn needs sign-in.
 
 Open the returned `tasks.md` and `receipt.json`. Updates are saved in shared
@@ -74,8 +83,8 @@ daily plans. Already resolved email IDs are skipped. Unclear senders remain for
 review. Customers and opt-outs stay out of outreach tasks.
 
 A checked plan returns a replacement for `state.crm`. Method accepts that state
-only after the save check passes. Shared account state uses a run lock and revision
-checks so local and production runs use one current CRM. If the CRM changed during
+only after the save check passes. Shared account state uses revision checks, so local
+and production runs use one current CRM. If the CRM changed during
 research, the save stops. Repeating the same save does not repeat its updates.
 The receipt records the saved state hash. Keep shared state enabled for normal use.
 

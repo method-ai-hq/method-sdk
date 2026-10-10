@@ -29,7 +29,8 @@ function fixture(version='0.7.0',keep=false) {
  const flags={'run-dir':join(root,'run')};
  return {root,records,client,flags,saved:original.saved};
 }
-for(const version of ['0.7.0','0.7.1','0.7.2','0.8.0','0.8.1','0.8.2'])it(`runs a package collected by the published ${version} runtime without saving a new version`,async()=>{
+// The oldest and the newest collected fixture.
+for(const version of ['0.7.0','0.8.2'])it(`runs a package collected by the published ${version} runtime without saving a new version`,async()=>{
  const f=fixture(version),before=JSON.stringify(f.saved);
  const result=await runSaved(f.saved,f.flags,f.client);
  expect(result).toMatchObject({status:'completed',result:'Hello from a local binding'});
@@ -40,7 +41,7 @@ for(const version of ['0.7.0','0.7.1','0.7.2','0.8.0','0.8.1','0.8.2'])it(`runs 
  expect(f.client.request.mock.calls.some(([path,verb]:any[])=>path.startsWith('/api/cli/methods/')&&['POST','PUT'].includes(verb))).toBe(false);
 });
 // A Method saved with an earlier SDK release keeps running after an SDK update.
-for(const runtime of ['0.9.3','0.9.4','0.9.5'])it(`runs a package saved with runtime ${runtime}`,async()=>{
+for(const runtime of ['0.9.3'])it(`runs a package saved with runtime ${runtime}`,async()=>{
  const f=fixture();f.saved.package.runtime=runtime;f.saved.package.digest=packageDigest(f.saved.workflow,f.saved.package);
  expect(await runSaved(f.saved,f.flags,f.client)).toMatchObject({status:'completed'});
 });

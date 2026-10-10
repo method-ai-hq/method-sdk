@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chooseDestination } from './routing.mjs';
-const classify = (choice, billing, technical, other) =>
-  ({choice, probabilities: {billing, technical, other}});
+const classify = (choice, billing, technical, unclear) =>
+  ({choice, probabilities: {billing, technical, unclear}});
 test('accepts the exact threshold', () => {
   const r = chooseDestination(classify('billing', .90, .08, .02)).routing;
   assert.equal(r.destination, 'billing');
@@ -13,10 +13,10 @@ test('routes below the threshold to manual review', () => {
   assert.equal(r.destination, 'manual_review');
   assert.equal(r.rule_applied, 'below_threshold');
 });
-test('other always requires review', () => {
-  const r = chooseDestination(classify('other', 0, 0, 1)).routing;
+test('unclear always requires review', () => {
+  const r = chooseDestination(classify('unclear', 0, 0, 1)).routing;
   assert.equal(r.destination, 'manual_review');
-  assert.equal(r.rule_applied, 'other_requires_review');
+  assert.equal(r.rule_applied, 'unclear_requires_review');
 });
 test('routes technical support independently', () => {
   assert.equal(chooseDestination(classify('technical', .03, .95, .02)).routing.destination, 'technical');

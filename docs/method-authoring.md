@@ -3,12 +3,12 @@
 # Build a Method
 
 1. **Sign in first.** Run `method status`. If it is not signed in, run `method login` and let the user approve in the browser. Signed in, model and classification steps need no keys, each run saves a version when the file changed, and runs appear on the dashboard.
-2. **Each model or classifier request is its own step**: `call`, `agent`, or `classify`, with its prompt in the Method. Then the user can change one prompt, run again, and compare. A script never calls a model API. When the user already has code that does the work, keep its fixed logic as `run` steps and move each prompt and rubric into its own step. "The same thing" means the same behavior with steps, not a wrapper around the code. If a request cannot become a step because Method lacks a feature, tell the user what is missing. Do not wrap the code.
-3. **Show the design, then build it in the same turn.** Show each step with its type, purpose, and output, and the table of prompts and rubrics in the user's work with the step that holds each one. Do not wait for approval unless the user asked to approve first. Ask only for information that you cannot find and that would change the design.
+2. **Each model or classifier request is its own step**: `call`, `agent`, or `classify`, with its prompt in the Method, so the user can change one prompt, run again, and compare. A script never calls a model API. When the user already has code that does the work, keep its fixed logic as `run` steps and move each prompt and rubric into its own step; do not wrap the code. "The same thing" means the same behavior in steps. If a request cannot become a step because Method lacks a feature, tell the user what is missing.
+3. **Show the design, then build it in the same turn.** Show each step with its type, purpose, and output, and a table of the prompts and rubrics in the user's existing work, each with the step that holds it. Do not wait for approval unless the user asked to approve first. Ask only for information that you cannot find and that would change the design.
 4. **Run early and often.** Write the first steps, validate, run, then add the next steps. Fix errors. Fix each warning, or accept it with the user's reason. Never add a check only to remove a warning. A new run reuses every step whose definition and inputs did not change, so each run executes only what changed. `--rerun STEP` runs a step again anyway; `--fresh` runs every step.
 5. **Keep the inputs of the existing code.** If the code takes an ID and looks up the record, the Method takes the same ID and looks it up the same way.
-6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so the user's model and classifier keys are not needed. To keep the model that existing code uses, add `models: {writer: provider/model}` to the Method and use `model: writer` in the steps (or `model: provider/model` on the step); it needs no key. Run content goes to the user's account; set `run_data: device` only when the user asks to keep it on this computer. `run_data: device` keeps the run records on this computer, but model steps still send their inputs to the model. Tell the user this in one line and keep running. Do not ask the user to choose and do not wait: change this only if the user says that no data may leave this computer. Say these defaults in one line and continue.
-7. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose; every script of the Method receives all of its declared secrets. Run `method secret find` in the Method's folder: it lists the key files nearby and the names in each, never the values, and prints the import command. Name the file to the user, ask once, then run that command. If it finds nothing, ask the user to run `method secret set NAME`, which opens a private form in their browser. Never open, print, or search a key file (`cat`, `grep`, an editor): its values would go into the chat. Never ask for a value in chat.
+6. **Use the defaults without asking.** Model steps use the account's hosted models and `classify` uses Method's classifier, so no model or classifier keys are needed. To keep the model that existing code uses, add `models: {writer: provider/model}` to the Method and use `model: writer` in the steps (or `model: provider/model` on the step); it needs no key. Keep the models that the Method or the existing code names: when a model step fails, show the error and ask before you change its model. Run records go to the user's account. When the user asks that run data stay on this computer or not be uploaded, set `run_data: device`: the run's inputs, outputs, and files stay here, and the account keeps only each step's status and timing. Model steps still send each step's input to the model to answer it; nothing is kept. Tell the user that in one line, then run again.
+7. **Keys stay out of chat.** Declare each key that a script needs under `secrets:` with its purpose; every script of the Method receives all of its declared secrets. Run `method secret find` in the Method's folder: it lists the key files nearby and the names in each, never the values, and prints the import command. Name the file to the user, ask once, then run that command. If it finds nothing, ask the user to run `method secret set NAME`, which opens a private form in their browser. Never open, print, or search a key file (`cat`, `grep`, an editor), including Method's own secret store, and never ask for a value in chat: the values would go into the chat.
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand. If you cannot run, say so.
 10. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
@@ -120,13 +120,12 @@ method run tickets.method --inputs inputs.json   # reuses read, urgency and join
 
 - Look at failed and unconfirmed runs on the dashboard. A run that needs attention says which step failed and why.
 - For classify, watch how often the choice is `unclear` or below your threshold. A rise means the inputs changed.
-- `method publish` runs the Method's cases before it marks a version published.
 - For slow effects such as email delivery, schedule `method observe --pending`.
 
 # After it works
 
 - **Put it in an app:** `method connect APP_FOLDER` publishes it and prints the code to add.
-- **Improve from a correction:** `method improve FILE --note TEXT` makes a proposal; `method apply FILE` merges it.
+- **Improve the results:** for a correction or a request to make the results better, `method improve FILE --note TEXT` makes a proposal from the recent runs; `method apply FILE` merges it.
 - **Explain the scripts:** `method explain FILE` writes a card for each script step.
 
 # Field reference
@@ -148,7 +147,7 @@ DATA   {type: text | number | boolean | record | list | file, description,
         default: VALUE}        A bare type such as text works inside fields and items.
 REF    inputs.NAME | an output NAME | NAME.field | state.NAME | environment.NAME
 
-STEP   name, purpose          a run step needs both: its rules, result, and external changes
+STEP   name, purpose          give a run step both; purpose states its rules, result, and external changes
        in: {ALIAS: REF}       the values that the step receives
        each: {ITEM: LIST_REF} run once per item; ITEM is given to the step, so do not repeat it in in
        concurrency: 1-32      items at once, for an each step that changes nothing
@@ -162,7 +161,7 @@ STEP   name, purpose          a run step needs both: its rules, result, and exte
          {kind: classify, question: TEXT, options: {ID: description}}   value: {choice, probabilities}
          {kind: classify, question: TEXT, answer: yes_no}                value: {answer, probability} (of yes)
          {kind: classify, question: TEXT, levels: [LOW, ..., HIGH]}      value: {level, score, probabilities}; 2-10 levels
-             Do counting, math, and date comparisons in a run step; Jev reads the question literally. Choose thresholds from a few labeled samples.
+             Do counting, math, and date comparisons in a run step; the classifier reads the question literally. Choose thresholds from a few labeled samples.
        ask: TEXT              in place of do: a question for the user
        out: {NAME: DATA}      (classify: out: NAME)
        changes: [state.NAME | environment.NAME]; a service change needs effects or no_effect_reason
@@ -170,6 +169,7 @@ STEP   name, purpose          a run step needs both: its rules, result, and exte
        accept: {CODE: reason}   keep a warning or note with the user's reason
 
 models: {NAME: provider/model | {model, max_output_tokens, reasoning_effort}}   hosted models; no key. A step without model uses the account default.
+        NAME: {agent: codex | claude, model, reasoning_effort}   a step with model: NAME runs on that local agent (it must be installed); --agent still overrides.
 limits: {timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_concurrency, ..., step: {timeout_ms, max_agent_turns, max_model_requests}}
 tools:  {NAME: {description, in, out, run, effects}}   script tools that agent steps list in tools
 id: wf_...   written by the CLI at the first signed-in save; keep it. method new-id FILE makes a copy a new Method.
@@ -191,7 +191,7 @@ Issues: errors block; warnings and notes do not.
 
 For browser work, declare a browser environment and select it with do.browser: environment.NAME; see method authoring example social-briefing.
 
-Add a check only when it catches a failure that matters to the result. Local file writes need no check. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back. When you convert existing code, do not keep its checks and tests only because they exist. The rules are in method authoring concepts.
+Add a check only when it catches a failure that matters to the result. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back; local file writes need neither. When you convert existing code, do not keep its checks and tests only because they exist. The rules are in method authoring concepts.
 
 Use when for conditions, each for collections, repeat for bounded iteration, and after for order without a data dependency. Split steps for a check, a retry, a human decision, or an external change.
 
@@ -200,11 +200,12 @@ Use method schema for field definitions, method authoring concepts for the forma
 
 # Example catalog
 
-- `method authoring example notes-summary`: The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call, and saves a summary file. The folder is observed automatically. Teaches: files connection, call, saving script.
-- `method authoring example daily-briefing`: Turns prepared records into a cited briefing website using an approved writing example, a source check, and rendering scripts. Teaches: example input, script tool, source check, website result.
-- `method authoring example social-briefing`: Researches a topic through Grok, alphaXiv, and LinkedIn in the browser, then writes a briefing with quotes and source links. Teaches: browser agent, no_effect_reason.
-- `method authoring example outbound-management`: Reads email and prospect sources, updates persistent CRM state, and saves daily tasks and outreach drafts for review. Teaches: state across runs, script checks, fixtures.
-- `method authoring example message-routing`: Classifies a customer message with Jev, then applies a script rule to choose a support destination. Teaches: classify threshold, retry without a duplicate write.
+- `method authoring example notes-summary`: The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call that shows two good items, and saves a summary file. A recorded case keeps one correction. Teaches: files connection, call with examples of good output, a recorded case in cases/.
+- `method authoring example message-routing`: Classifies a customer message with Method's classifier, then a script rule chooses a support destination. ticket.method adds one ticket write that a retry does not repeat. Teaches: classify with an unclear option, a threshold in a script, an effect that reads the ticket back, retry without a duplicate write.
+- `method authoring example support-triage`: Reads a help desk ticket, classifies its team, refund request, and urgency, drafts a first reply, updates the ticket, and asks a person when the team is unclear. Teaches: models and secrets, classify with options, yes_no and levels, an unclear path, ask, effects with an http observer, a committed case, run_data: device, method connect.
+- `method authoring example outbound-management`: Reads email and prospect sources, updates persistent CRM state, and saves daily tasks and outreach drafts for review. Teaches: state across runs, script checks, examples of good output, accept, fixtures.
+- `method authoring example social-briefing`: Researches a topic through Grok, alphaXiv, and LinkedIn in the browser, then writes a briefing with quotes and source links. Teaches: browser agent, call, no_effect_reason, accept.
+- `method authoring example daily-briefing`: Turns prepared records of one fictional day into a cited briefing website, using an approved writing example, a source check, and rendering scripts. Teaches: approved example as an input, script tool, source check, website result.
 
 After choosing the step types, read the examples that fit the design. Use their syntax; choose the steps for this task yourself.
 
@@ -215,13 +216,11 @@ Before describing execution cost, check how the model steps run. With hosted mod
 
 # Checks
 
-Default to no additional task check. Add a check only when it detects a concrete failure that matters to the requested result. Do not add checks merely because a value can be checked. Do not repeat validation already supplied by output types or the runtime.
+Add a check only when it catches a concrete failure that matters to the result. Output types and the runtime already validate shapes; do not repeat them. Do not check wording, headings, keywords, lengths, or counts unless the task requires them: "write accurate prose" is not a reason to match strings.
 
-Do not enforce wording, headings, keywords, lengths, or counts unless the task requires them. An instruction to write accurate prose does not justify string matching.
+Use the simplest check that proves the fact: a built-in equals, count, present, or file check, a script, or an agent check. Local file writes need no check: the runtime observes files connections itself. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back, because a receipt or a 200 status shows only that the request was accepted. Use a built-in observer (http, sqlite, file) when one fits. When a change cannot or need not be observed, such as a browser step that only reads, write no_effect_reason instead.
 
-When a check is needed, use the simplest check that establishes the required fact. Built-in equals, count, present, and file checks, scripts, and agent checks are options, not a checklist. Local file writes need no check: the runtime observes files connections itself. A change to a service, an API, email, or a browser that sends needs an effect that reads the result back, because a receipt or a 200 status shows only that the request was accepted. Use a built-in observer (http, sqlite, file) when one fits. When a change cannot or need not be observed, such as a browser step that only reads, write no_effect_reason instead.
-
-Existing checks and tests are implementation choices, not user requirements. Remove checks that are unnecessary, duplicate existing validation, or enforce an invented requirement. Delete tests and instructions that exist only to support the removed check. Do not preserve a check merely because it already exists, and do not change useful output merely to satisfy it. Remove an unnecessary check without replacing it.
+Existing checks and tests are implementation choices, not user requirements. Remove a check that is unnecessary, repeats other validation, or enforces a requirement that nobody asked for. Delete the tests and instructions that exist only for it, and do not replace it. Do not change useful output only to satisfy a check.
 
 
 # Contrasting design outlines
@@ -230,14 +229,14 @@ These are design outlines, not runnable Method files.
 
 | Request | Design | Explanation |
 | --- | --- | --- |
-| Summarize supplied text | call → return summary | The model receives all source text. No additional task check is needed by default. Add a save step only if a saved file is requested. Use an agent if it must find or inspect additional sources. |
-| Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. A planning step does not require a task check merely because it returns structured data. When the user requires that the findings say only what the sources say, add an agent check on the assess step (method authoring recipes). |
+| Summarize supplied text | call → return summary | The model receives all source text. Add a save step only if a saved file is requested. Use an agent if it must find or inspect additional sources. |
+| Investigate a claim | agent to research and assess → return findings | Add a separate planning, checking, or saving step only when the task needs that boundary or result. When the user requires that the findings say only what the sources say, add an agent check on the assess step (method authoring recipes). |
 | Route a message with human review for low confidence | classify → threshold run → conditional ask | Classification returns probabilities. Code applies the threshold. Human input resolves cases below the threshold. Add a separate action with an effect if the Method must send or change anything. |
 | Send a daily summary email | call to write → run to send, with an effect | The send script puts METHOD_OPERATION_ID in the Message-ID. A mail.delivery effect searches the bounce mailbox through its own read-only connection until a 5-day horizon. A bounce fails the run; no bounce by the horizon is unrefuted, not proven. |
 
 
 A method has format, name, goal, steps, and result, and optional id, inputs, secrets, state, environment, files, models, limits, tools, run_data, run_label, and run_prompt (see the field reference in method authoring).
-Each step uses do or ask. The do kinds are run, call, agent, and classify. Script actions require name and purpose; script checks require reading.check. A classify action takes bound inputs, a question, and one of options (a named choice with probabilities), answer: yes_no (answer and the probability of yes), or levels (2-10 ordered names; the most likely level, an expected level index as score, and probabilities). Use a script to apply business rules to that result.
+Each step uses do or ask. The do kinds are run, call, agent, and classify. Give script actions a name and a purpose; describe script checks in reading.check. A classify action takes bound inputs, a question, and one of options (a named choice with probabilities), answer: yes_no (answer and the probability of yes), or levels (2-10 ordered names; the most likely level, an expected level index as score, and probabilities). Use a script to apply business rules to that result.
 run uses runtime and entrypoint; call uses model and prompt; agent can select browser: environment.NAME and optional custom tools.
 Optional run_label selects one saved text, number, or boolean value, such as inputs.topic or steps.prepare.outputs.plan.date. Step references must select a step without each or repeat. Choose a short non-sensitive value. The site uses the current Method's reference with each run's recorded inputs or outputs; absent or empty values keep timestamps. Set it with method set task.method /run_label --json '"steps.prepare.outputs.plan.date"'.
 
@@ -246,7 +245,7 @@ Optional run_prompt is plain text for the outside agent that starts a saved Meth
 Model and human prompts use {{date}} for the step input declared as in.date. Nested fields such as {{customer.name}} are allowed. Only text, numbers, and booleans can be inserted; pass lists and records as structured inputs. Whitespace inside braces is allowed. Escape a literal placeholder with a backslash before its opening braces (use a YAML block scalar). Values are inserted once, never evaluated or expanded again. Unknown variables, invalid paths, and non-scalar values fail validation. Missing runtime values fail before model execution. Defaults belong in input declarations. Human ask text uses the same scope; agent check prompts use {{inputs.date}} and {{outputs.answer}}. Script commands, labels, and tool descriptions are not templates. Single braces are ordinary text.
 Runs record prompt.rendered with the template and expanded instructions for each invocation and phase; the run page shows the recorded expansion, with templates in technical details. Model and agent work uses finite default limits; steps can override them.
 An optional step reading object explains inputs, outputs, condition, and check in plain text for the reading page. These descriptions do not alter execution. Describe the declared data and actual checks; keep them in sync when editing the step. The page always shows the exact do and check instructions as well. Give a separate executable check a short reading.check_name, such as “Compare saved text”, and use reading.check to explain what it checks. These fields change presentation only. Do not imply that a file or reference check verifies facts, or add a check just to fill the display.
-Inputs and outputs have a type. Script outputs require descriptions; other data descriptions are optional. Types: text, number, boolean, record, list, file. Records need fields; lists need items or fields. Files have path and sha256.
+Inputs and outputs have a type. Describe the outputs of script steps; other descriptions are optional. Types: text, number, boolean, record, list, file. Records need fields; lists need items or fields. Files have path and sha256.
 Online runs upload declared file outputs separately, up to 20,000 files and 100 MB total, with 25 MB per file. Hash-checked receipts let interrupted transfers resume with only missing files. The single-file inspect export retains its separate 20 MB compressed-data limit. For a website, declare format: method-website and write a JSON file {schema: "method-website/1", title, entrypoint, files: [{path, sha256, media_type}]}. Paths in the file list are relative to that file; list every asset and identify an HTML start page. The run page opens the website only when all listed assets are attached. It can also download the complete website as a ZIP. No workspace scan occurs. See docs/result-files.md for the full contract. method sync RUN_DIRECTORY uploads files without executing steps again.
 Bind step inputs with in aliases and use named outputs as downstream references. These references set execution order. Use after for required order without a data reference, such as operations that share a browser session. Every output has one producer.
 Checks use equals, count, present, file, a script, or a bounded agent. Checker output is {status: pass|fail|unknown, reason, evidence}. Unknown never passes.
@@ -317,8 +316,8 @@ A Method needs no configuration file. What changes the result is in the Method: 
 
 ## Models
 
-A call or agent step names model: NAME from the Method's models: ({NAME: provider/model | {model, max_output_tokens, reasoning_effort}}), a model ID such as openai/gpt-6-luna, or default. A step without model uses default: the account's default model. Hosted models need no key and no local agent. They are private by default: requests go only to providers that do not train on them and keep no copy (zero data retention). method models lists those models; validate warns with model_not_private when a step names another, and hosted runs refuse it. Hosted models and classification share the account's model credit; the run summary reports usage.cost_usd. When the credit is used, run method config model-key: hosted model and classify steps on this computer then call OpenRouter with your own key.
---agent codex|claude, or method config agent codex|claude, runs every model step with a local Codex or Claude agent. Declared tools reach the agent through a temporary local MCP connection; no persistent agent configuration is edited. The model choice of a run stays fixed on resume.
+A call or agent step names model: NAME from the Method's models: ({NAME: provider/model | {model, max_output_tokens, reasoning_effort}}), a model ID such as openai/gpt-6-luna, or default. A step without model uses default: the account's default model. Hosted models need no key and no local agent. They are private by default: requests go only to providers that do not train on them and keep no copy (zero data retention). method models lists those models; validate warns with model_not_private when a step names another, and hosted runs refuse it. Hosted models and classification share the account's model credit; the run summary reports usage.cost_usd. When the credit is used, run method config model-key: hosted model and classify steps on this computer then call OpenRouter with the user's own key.
+A models: entry {agent: codex | claude, model, reasoning_effort} runs the steps that name it with that local agent, which must be installed on the computer that runs the Method. --agent codex|claude, or method config agent codex|claude, runs every model step with a local Codex or Claude agent. Declared tools reach the agent through a temporary local MCP connection; no persistent agent configuration is edited. The model choice of a run stays fixed on resume.
 
 ## Classification
 
@@ -326,7 +325,7 @@ classify uses Method's classifier (Jev) through the account, with no key and no 
 
 ## Browser
 
-An agent with browser: environment.NAME receives the standard direct browser-use controls. Codex or Claude chooses the browser actions. Method opens the selected browser, retains its sign-ins privately, and reuses the session across steps. On macOS, Method copies your last-used Chrome profile and runs headless. Sign in through Chrome before running the Method. If a task requires a visible browser, show it only for that task, then return to headless mode. Use method browser connect --cdp URL to attach to a Chrome session that permits control. Validation does not open a browser. Each run has a separate profile; resume reads the current page, not a saved web snapshot.
+An agent with browser: environment.NAME receives the standard direct browser-use controls. The agent chooses the browser actions. Method opens the selected browser, keeps its sign-ins private, and reuses the session across steps. On macOS, Method copies the user's last-used Chrome profile and runs headless, so ask the user to sign in to the sites in Chrome before the run. For a visible browser, attach a Chrome session that permits control with method browser connect --cdp URL. Validation does not open a browser. Each run has a separate profile; resume reads the current page, not a saved web snapshot.
 
 ## Secrets, scripts, and tools
 
@@ -343,7 +342,7 @@ Defaults: one hour per run, ten minutes per step, 100 model requests, 100 step i
 
 A version includes declared files, script and tool entrypoints, dependency lockfiles, and the runtime release. Run accepts a Method ID or dashboard URL and restores that version.
 Use method inspect RUN_DIRECTORY --out inspection.json for a saved run; online runs sync to the same Method dashboard.
-Use method bind FILE NAME --file FOLDER to remember an input on this computer. Add --upload only to save that selected input folder privately in the account. Bundled examples stay in the version; day records stay separate.
+Use method bind FILE NAME --file FOLDER to remember an input on this computer. Add --upload only to save that selected input folder privately in the account.
 Use method state ID --enable --file state.json to opt into shared account state. Concurrent runs cannot overwrite it. Account state is JSON; an uploaded SQLite input is a snapshot, not a shared database. Use a live service connection for a shared database. A stopped run keeps ownership until continued or explicitly released with method state ID --release RUN_ID after inspecting its actions.
 CLI runs of local files and saved Methods have their own process. Use --background to return immediately, method run-status DIR, method wait DIR, or method cancel DIR. New runs accept package runtime versions explicitly tested by the installed SDK. The saved package stays unchanged; run records identify the executor used. Resume the same Method version and exact executor with --resume --run-dir DIR. Use method sync DIR to retry uploads without repeating work.
 
@@ -382,9 +381,8 @@ A case checks future versions of the Method: method test and method publish run 
   reading: {check_name: Only what the sources say, check: Fails when the report states something the sources do not give.}
 Check prompts insert the step's inputs as {{inputs.NAME}} and its outputs as {{outputs.NAME}}. Never edit or delete a case to make a change pass. When a rule really changed, retire the old case: method case retire FILE ID --reason TEXT.
 
-Use a script for exact file transforms and exports. Use a call for a structured model response: one model request without tools. Use an agent only when bounded tool use is needed.
 For incremental exports, keep a declared state ledger of source IDs and evidence hashes. Compare new evidence to that ledger and rebuild only changed days. Supply the prior run's state.json with --state for a new run.
-Resume continues the same input set and saved version. A new run can collect new files. A separate database is optional application state, not a workaround required to resume Method.
+Resume continues the same input set and saved version. A new run can collect new files.
 To edit a failed method, read its exact saved version and logs, compare the current version, change it, and run it. Publish with --reason when the user wants to share the repair.
 
 
@@ -490,7 +488,7 @@ method inspect runs/example --out inspection.json
 
 ## prompt
 
-Read the document as instructions.
+Print the Method as plain-text instructions.
 
 Usage:
 
@@ -727,7 +725,7 @@ method authoring example EXAMPLE_ID
 ```
 
 Arguments and defaults:
-Default topic: start, with the design procedure, contrasting design outlines, proposal requirements, concepts, and example catalog. Choose relevant examples after choosing the design. A named example prints its complete lesson and installed file paths. all prints the shared reference and catalog.
+Default topic: start, with the build steps, prompt rules, a complete example, the field reference, the step types, and the example catalog. concepts, execution, recipes, recovery, and commands hold the rest. Choose examples after choosing the design. A named example prints its complete lesson and installed file paths. all prints every topic except the example lessons.
 
 Result and changes:
 Markdown text on stdout. No changes.
@@ -852,7 +850,7 @@ method step add FILE --id ID --value-file STEP.yaml
 ```
 
 Arguments and defaults:
-Supply do or ask and the bindings and outputs needed by the step in STEP.yaml. Script actions require name and purpose, and their outputs require descriptions. Script checks require reading.check. Checks and limit overrides are optional. Alternatively use --kind run --runtime PROFILE --entrypoint FILE. Agents can use --kind agent --instructions-file FILE; the default is the calling coding agent.
+Supply do or ask and the bindings and outputs needed by the step in STEP.yaml. Give a run step a name and a purpose, and describe its outputs. Checks and limit overrides are optional. Without a value file, use --kind run --runtime python|node --entrypoint FILE, or --kind agent|call|classify --instructions-file FILE; the model is default (the account's hosted model).
 
 Result and changes:
 JSON {file, workflow}. The workflow field contains the method. Writes the local draft.
@@ -1224,14 +1222,14 @@ List the proposals of a Method.
 Usage:
 
 ```sh
-method proposals FILE [--server URL]
+method proposals FILE [--wait] [--server URL]
 ```
 
 Arguments and defaults:
-Lists the proposals in your account and the local proposals beside the file.
+Lists the proposals in your account and the local proposals beside the file. --wait: when an improvement is running, wait until it ends (usually a few minutes), printing each step it reaches.
 
 Result and changes:
-JSON list of proposals with id, source, status, kind, cause, and steps. No changes.
+JSON list of proposals with id, source, status, kind, cause, and steps, and the newest improvement that has no proposal yet, with its status. No changes.
 
 Example:
 
@@ -1677,16 +1675,16 @@ Models come from the Method's models: (or the account default); --agent codex|cl
 
 --inputs FILE: JSON input values.
 --run-dir DIR: the folder for this run's records (new runs too; default .method-runs/ID).
---agent codex|claude: select an agent for unconfigured profiles in a new run.
+--agent codex|claude: run every model step of a new run with this local agent.
 --resume: continue the same saved run with its saved agent.
 --rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
 --fresh: run every step; reuse nothing.
---human FILE: saved human answers for the current runtime.
+--human FILE: answers for ask steps, as {steps: {"STEP:ITERATION": {outputs: {...}}}}.
 --verbose: print runtime events.
 Use method doctor to check the installed Node and configured tools.
 
 Result and changes:
-Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Current runs exit 0 on completion, 1 on failure, 2 when human input is needed, and 3 when an observer could not confirm an external change (unconfirmed).
+Progress and final status text; local result.json and run evidence; dashboard run link when synced. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Runs exit 0 on completion, 1 on failure, 2 when human input is needed, and 3 when an observer could not confirm an external change (unconfirmed).
 
 Errors:
 Missing inputs/access, failed check, timeout, unsafe resume/version mismatch, upload failure. See recovery. Never retry a business write without inspecting its saved changes.
@@ -1783,7 +1781,7 @@ method case new FILE --id ID --note TEXT (--run BAD_RUN | --passing-run GOOD_RUN
 ```
 
 Arguments and defaults:
---run is the run that went wrong; the case must fail on it. --passing-run is the run the person accepted after the fix; the case must pass on it. With only --passing-run, the case pins behaviour that is already right. --rubric is a plain sentence that must be true of the output (repeatable); a model judges it with quotes. --ref selects the output to judge; the default is the Method's result. --context REF gives the judge other values to check against, such as the sources or the person's words (outputs.NAME or inputs.NAME); they are read, not judged. --expect FILE gives exact checks instead: {kind: equals, ref: outputs.NAME, value}, {kind: status, in: [STATUS]}, {kind: effect, effect: STEP/ITERATION/NAME, verdict: [VERDICT]}, or {kind: predicate, runtime: node, entrypoint: check.mjs}. --redact FILE maps recorded text to replacements. Cases from sensitive/ are refused.
+--run is the run that went wrong; the case must fail on it. --passing-run is the run the person accepted after the fix; the case must pass on it. With only --passing-run, the case pins behaviour that is already right. --rubric is a plain sentence that must be true of the output (repeatable); a model judges it with quotes. --ref selects the output to judge; the default is the Method's result. --context REF gives the judge other values to check against, such as the sources or the person's words (outputs.NAME or inputs.NAME); they are read, not judged. --expect FILE gives exact checks instead: {kind: equals, ref: outputs.NAME, value}, {kind: status, in: [STATUS]}, {kind: effect, effect: STEP/ITERATION/NAME, verdict: [VERDICT]}, or {kind: predicate, runtime: node, entrypoint: check.mjs}. --redact FILE maps recorded text to replacements.
 
 Result and changes:
 The saved case, with its result on each run. A case that the bad run already meets is refused: it does not capture the problem, or the note does not match the run.

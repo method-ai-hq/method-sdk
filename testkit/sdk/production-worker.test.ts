@@ -114,5 +114,8 @@ it("verifies webhook signatures with the key's webhook secret", () => {
   expect(verifyWebhook(body, header, "whsec_other")).toBe(false);
   expect(verifyWebhook(body, header, secret, { now: (t + 301) * 1000 })).toBe(false);
   expect(verifyWebhook(body, "v1=abc", secret)).toBe(false);
-  expect(() => new Method({ apiKey: "method_device" })).toThrow(/service key/);
+});
+
+it("refuses a device sign-in key in place of a service key", () => {
+  expect(() => new Method({ apiKey: "method_device" })).toThrow();
 });

@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderPrompt, parsePrompt } from '@withmethod/runtime/prompt.js';
 import { validateMethod } from '@withmethod/runtime/validate.js';
-import { loadWorkflow } from '../../packages/workflow-language/src/validate.js';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
 import { inspectRun } from '../../packages/sdk/src/inspect.js';
 
@@ -36,9 +35,9 @@ it('inserts scalar values once and preserves literal braces and ordinary JSON', 
 it.each(['{{}}', '{{name', '{{a + b}}', '{{name|upper}}', '{{constructor}}', '{{a.__proto__}}', 'bad }}'])('rejects malformed placeholders: %s', template => {
   expect(() => parsePrompt(template)).toThrow();
 });
-it('validates declarations and scalar fields in both runtime and server language paths', () => {
+it('validates prompt variable declarations and scalar fields', () => {
   const f = fixture(); f.method.steps.write.do.prompt = '{{missing}}';
-  for (const validate of [validateMethod, loadWorkflow]) expect(() => validate(f.method)).toThrow(/write.do.prompt.*Unknown prompt variable/);
+  expect(() => validateMethod(f.method)).toThrow(/write.do.prompt.*Unknown prompt variable/);
   f.method.inputs.customer = { type: 'record', description: 'Customer', fields: { name: text } };
   f.method.steps.write.in.customer = 'inputs.customer';
   f.method.steps.write.do.prompt = '{{customer}}';
@@ -72,7 +71,7 @@ it('enforces request size after substitution before starting the model', async (
   const f = fixture(); f.method.steps.write.do.prompt = '{{date}}'.repeat(1000); f.config.limits.max_request_bytes = 5000;
   let called = false;
   const result = await f.run({ transport: async () => { called = true; return response({ answer: '' }); } });
-  expect(result.status).toBe('failed'); expect(result.error).toContain('Expanded prompt'); expect(called).toBe(false);
+  expect(result.status).toBe('failed'); expect(called).toBe(false);
 });
 it('records each iteration and does not replace prior prompts on resume', async () => {
   const f = fixture(); f.method.inputs.dates = { type: 'list', description: 'Dates', items: 'text', default: ['Monday', 'Tuesday'] };

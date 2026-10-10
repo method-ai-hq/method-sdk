@@ -158,7 +158,12 @@ class ProductionAskTest(unittest.TestCase):
         sealed = method._run_data("seal", "question", "wf_private", {"question": "Publish Ada's profile?", "form": FORM})
         STATE["runs"][run_id].update(status="waiting", question={"id": "q", "run_id": run_id, "step": "review:0", "answered_by": "app",
                                                                  "asked_at": "now", "expires_at": "later", "sealed": sealed})
-        threading.Timer(1.5, lambda: STATE["runs"][run_id].update(status="succeeded")).start()
+        # The run finishes once the answer arrives.
+        def finish():
+            while not STATE["runs"][run_id].get("answer"):
+                time.sleep(0.02)
+            STATE["runs"][run_id].update(status="succeeded")
+        threading.Thread(target=finish, daemon=True).start()
         self.assertEqual(method.runs.wait(run_id, timeout=20, interval=0.1)["status"], "succeeded")
         answer = STATE["runs"][run_id]["answer"]
         self.assertNotIn("answer", answer)

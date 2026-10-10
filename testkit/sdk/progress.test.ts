@@ -3,7 +3,6 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PassThrough } from 'node:stream';
-import { createRequire } from 'node:module';
 import { executeProcess, readLines } from '@withmethod/runtime/io.js';
 import { codexProgress, progressMessage } from '@withmethod/runtime/progress.js';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
@@ -25,7 +24,8 @@ it('only accepts public fields and counts that agree', () => {
   expect(progressMessage({message:'Rendered pages',completed:2,total:3,unit:'pages',child:'Renderer'})).toEqual({message:'Rendered pages',completed:2,total:3,unit:'pages',child:'Renderer'});
   expect(codexProgress({type:'item.completed',item:{type:'reasoning',text:'private'}})).toBeNull();
   expect(codexProgress({type:'item.completed',item:{type:'agent_message',text:'{"result":"final"}'}})).toBeNull();
-  expect(codexProgress({type:'item.started',item:{type:'command_execution',id:'one',command:'secret command',aggregated_output:'private'}})).toEqual({message:'Running a command.',call_id:'one'});
+  expect(codexProgress({type:'item.started',item:{type:'command_execution',id:'one',command:'secret command',aggregated_output:'private'}})).toMatchObject({call_id:'one'});
+  expect(JSON.stringify(codexProgress({type:'item.started',item:{type:'command_execution',id:'one',command:'secret command',aggregated_output:'private'}}))).not.toMatch(/secret command|private/);
   expect(codexProgress({type:'item.started',item:{type:'mcp_tool_call',server:'method_step',tool:'read'}})).toBeNull();
 });
 it('reports a script and its child before exit, keeps final JSON intact, and stamps events in order', async () => {
@@ -69,10 +69,3 @@ it('stops a silent process on cancellation without inventing updates', async () 
   expect(seen).toEqual([]);
 });
 
-it('relays child Codex updates through the CLI without putting them in stdout', async () => {
-  const values: unknown[]=[];
-  const result=await executeProcess({command:process.execPath,args:['--import',createRequire(import.meta.url).resolve('tsx'),'packages/sdk/src/method.ts','progress','--codex','--child','Researcher'],cwd:process.cwd(),env:process.env,
-    input:[{type:'item.completed',item:{type:'reasoning',text:'hidden'}},{type:'item.completed',item:{type:'agent_message',text:'Reading the next document.'}},{type:'item.completed',item:{type:'agent_message',text:'{"answer":"final"}'}}].map(e=>JSON.stringify(e)).join('\n'),rawInput:true,
-    signal:AbortSignal.timeout(5000),maxBytes:10000,onProgress:async(value:unknown)=>{values.push(value);}});
-  expect(result.output).toBe('');expect(values).toEqual([{message:'Reading the next document.',child:'Researcher'}]);
-});

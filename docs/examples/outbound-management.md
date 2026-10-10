@@ -74,6 +74,8 @@ steps:
   read_email:
     name: Read campaign email
     no_effect_reason: Reads the mailbox in the browser; sends, replies to, and deletes nothing.
+    accept:
+      untrusted_content_can_act: The agent needs the signed-in mailbox to read campaign email. The prompt asks it only to search and read; nothing is sent until a person reviews the tasks.
     changes: [environment.browser]
     in:
       mailbox_url: target.mailbox_url
@@ -108,6 +110,8 @@ steps:
   find_prospects:
     name: Find prospects in Happenstance
     no_effect_reason: Searches Happenstance in the browser; sends no messages or introduction requests.
+    accept:
+      untrusted_content_can_act: The agent needs the signed-in Happenstance account to search the network. The prompt asks it only to search; no message or introduction request is sent.
     changes: [environment.browser]
     after: read_email
     in:
@@ -144,6 +148,8 @@ steps:
   enrich:
     name: Check each prospect's pages
     no_effect_reason: Reads company and LinkedIn pages in the browser; sends no messages or connection requests.
+    accept:
+      untrusted_content_can_act: The agent needs the signed-in browser to read LinkedIn profiles. The prompt asks it only to read pages; no message or connection request is sent.
     changes: [environment.browser]
     after: find_prospects
     each: {prospect: prospects}
@@ -235,6 +241,11 @@ steps:
         Skip contacts whose status is customer, closed, or opted_out.
         Set action to the next action, due_date to next_action_date or {{day}} when it is empty, and reason to one sentence.
         Write a short draft email that uses the contact's facts and this offer: {{offer}} Leave draft empty when the task is not an email, such as a meeting.
+        Two tasks written the way they should be, for other contacts:
+        - A reply that asked for pricing: action "Send pricing", reason "Jordan asked for pricing on 2026-09-15.",
+          draft "Hi Jordan, thanks for asking. Pricing starts at $400 a month for one workflow; I attached the one-page summary. Would a 20-minute call next week help?"
+        - A new prospect: action "Ask Sam for an introduction", reason "New prospect; Sam knows Priya from their time at Bayside Freight.",
+          draft "Hi Sam, could you introduce me to Priya at Coastline Logistics? Her team still handles customer requests by hand, and I think our workflows could help."
     out:
       day_tasks:
         type: list
@@ -830,6 +841,15 @@ Each model step does one task. The shape of each output is declared in `out`, so
 the prompts say only what to do and what to leave empty when a source does not
 have the answer.
 
+The `draft_tasks` prompt shows two tasks written the way they should be, for
+contacts that are not in the CRM: a reply to a pricing question and an
+introduction request. Replace them with two drafts that you sent and liked.
+
+The three browser steps accept the `untrusted_content_can_act` warning: each
+agent reads pages with a signed-in browser that could also send, and the
+`accept:` line on each step gives the reason to keep it. Nothing is sent until
+you review the tasks.
+
 ## Sources
 
 - **Email:** opens your mailbox in the browser and reads received and sent
@@ -857,20 +877,20 @@ with your webmail URL if needed. Use the intended signed-in account.
 mkdir -p work/crm
 cp starter/crm.json work/crm/crm.json
 method validate outbound.method
-method publish outbound.method --reason "First version"
+method publish outbound.method --reason "First version"   # prints the Method ID
 python3 - <<'PY' > work/state.json
 import json
 from pathlib import Path
 print(json.dumps({'crm': Path('work/crm/crm.json').read_text()}))
 PY
 chmod 600 work/state.json
-method state WORKFLOW_ID --enable --file work/state.json
-method run WORKFLOW_ID --version VERSION_ID --inputs inputs.json
+method state METHOD_ID --enable --file work/state.json
+method run outbound.method --inputs inputs.json
 ```
 
-Use the IDs returned by `save`. Set `day` and `from_date` in `inputs.json` before
+Use the Method ID that `publish` printed; it is also the `id:` line in the file. Set `day` and `from_date` in `inputs.json` before
 each run. Use an overlap with the last run so late replies are included.
-Method connects the browser and uses the calling agent. Follow its setup request
+Method connects the browser. Follow its setup request
 if email, Happenstance, or LinkedIn needs sign-in.
 
 Open the returned `tasks.md` and `receipt.json`. Updates are saved in shared
@@ -884,8 +904,8 @@ daily plans. Already resolved email IDs are skipped. Unclear senders remain for
 review. Customers and opt-outs stay out of outreach tasks.
 
 A checked plan returns a replacement for `state.crm`. Method accepts that state
-only after the save check passes. Shared account state uses a run lock and revision
-checks so local and production runs use one current CRM. If the CRM changed during
+only after the save check passes. Shared account state uses revision checks, so local
+and production runs use one current CRM. If the CRM changed during
 research, the save stops. Repeating the same save does not repeat its updates.
 The receipt records the saved state hash. Keep shared state enabled for normal use.
 

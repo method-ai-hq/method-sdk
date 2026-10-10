@@ -1,24 +1,23 @@
 import {expect,it} from 'vitest';
-import {readFileSync,existsSync} from 'node:fs';
-import {resolve} from 'node:path';
+import {readFileSync,readdirSync} from 'node:fs';
 import {authoringExamples,exampleDirectory,renderExample} from '../../packages/sdk/src/authoring-example.js';
 import {loadWorkflow} from '../../packages/workflow-language/src/validate.js';
 import {preflight} from '@withmethod/runtime/preflight.js';
-import {authoringPrompt} from '../../packages/sdk/src/authoring-prompt.js';
-it('ships five complete packages with valid definitions, source descriptions, and every declared helper',async()=>{
+it('ships every catalog example as a complete package: each Method in it loads with the current loader and has every declared helper',async()=>{
  const files=JSON.parse(readFileSync('packages/sdk/examples/files.json','utf8')) as string[];
  for(const example of authoringExamples){
   const {directory}=exampleDirectory(example.id);
-  const workflow=loadWorkflow(readFileSync(directory+example.entrypoint,'utf8'));
-  expect(['method/3.3','method/3.4']).toContain(workflow.format);
-  const config={allow_local_processes:true};
-  const result=await preflight(workflow,config,directory,{allowMissingSetup:true});
-  for(const name of [...result.files,...example.lessonFiles]){
+  const methods=readdirSync(directory).filter(name=>name.endsWith('.method'));
+  expect(methods).toContain(example.entrypoint);
+  const declared:string[]=[];
+  for(const name of methods){
+   const workflow=loadWorkflow(readFileSync(directory+name,'utf8'));
+   expect((workflow as any).id).toBeUndefined();
+   declared.push(...(await preflight(workflow,{allow_local_processes:true},directory,{allowMissingSetup:true})).files);
+  }
+  for(const name of [...declared,...example.lessonFiles]){
    expect(files).toContain(example.directory+'/'+name);
-   expect(existsSync(resolve('packages/sdk/dist/packages/sdk/examples',example.directory,name))).toBe(true);
   }
   expect(renderExample(example.id)).toContain('# Request');
  }
- // Sign-in comes before authoring, so that models, versions, and runs work from the first run.
- expect(authoringPrompt.indexOf('method login')).toBeLessThan(authoringPrompt.indexOf('method authoring'));
 });

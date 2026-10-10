@@ -8,7 +8,7 @@ export function copyPublicExamples(destination) {
   cpSync(resolve(source, 'files.json'), resolve(destination, 'files.json'));
 
   for (const name of files) {
-    if (name.split('/').some(part => ['..', 'sensitive', '.git', 'node_modules', '__pycache__', 'approved-output', '.method-runs'].includes(part)) || /(?:runtime\.sh|\.method\.json|\.env(?:\..*)?)$/.test(name)) throw Error('Not a public example file: ' + name);
+    if (name.split('/').some(part => ['..', '.git', 'node_modules', '__pycache__', 'approved-output', '.method-runs'].includes(part)) || /(?:runtime\.sh|\.method\.json|\.env(?:\..*)?)$/.test(name)) throw Error('Not a public example file: ' + name);
     const target = resolve(destination, name);
     mkdirSync(dirname(target), {recursive:true});
     cpSync(resolve(source, name), target);

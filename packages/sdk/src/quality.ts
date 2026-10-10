@@ -11,6 +11,7 @@ import { authoringPath, editDocument, readDocument } from "./authoring.js";
 import { localSetup } from "./local-setup.js";
 import { resolveAgentProfiles, checkAgents, accountNeeds } from "./capabilities.js";
 import { managedModels } from "./hosted-models.js";
+import { managedClassification } from "./classification-client.js";
 import { MethodClient } from "./method-client.js";
 import { prepareRuntime, methodCache } from "./prepare.js";
 import { writePrivateJson } from "./files.js";
@@ -34,10 +35,13 @@ export async function preparedConfig(file: string, flags: { workspace?: string; 
   }
   config.models = await resolveAgentProfiles(method, config, setup.agent, hostedModel);
   if (judge && hostedModel) config.models.judge = { backend: "method", model: hostedModel };
+  // Classify steps that run live use the account's classifier, as method run does.
+  const classification = accountNeeds(method, config, setup.agent).classification && signedIn ? managedClassification(client) : undefined;
+  if (classification) config.classification = await classification.resolve(new AbortController().signal);
   await checkAgents(config.models);
   const prepared = await prepareRuntime(setup.sourceRoot, config, method);
   const hostedModels = Object.values(prepared.config.models ?? {}).some((profile: any) => profile.backend === 'method') ? managedModels(client) : undefined;
-  return { config: prepared.config, sourceRoot: setup.sourceRoot, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(hostedModels ? { hostedModels } : {}) };
+  return { config: prepared.config, sourceRoot: setup.sourceRoot, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(hostedModels ? { hostedModels } : {}), ...(classification ? { classification } : {}) };
 }
 
 /** Run directories that this computer's Method runs use by default. */
@@ -92,11 +96,17 @@ export async function casesNotice(file: string) {
   return `${cases.length} case${cases.length === 1 ? "" : "s"} not checked since this Method changed: method test ${file}`;
 }
 
+/** The Method's declared secrets from this computer or the environment, as method run gives them. */
+async function declaredSecrets(file: string) {
+  const { resolveSecrets } = await import("./secrets.js");
+  return resolveSecrets(Object.keys((readDocument(file) as any)?.secrets ?? {}));
+}
+
 /** Run the cases of a Method with the same preparation as method run. */
 export async function runCases(file: string, flags: { workspace?: string; agent?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[] } = {}) {
   const prepared = await preparedConfig(file, flags, { judge: true });
   const report = await testSuite(file, prepared.config, { ...options,
-    runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(flags.agent ? { agent: flags.agent } : {}) } });
+    runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, secrets: await declaredSecrets(file), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(flags.agent ? { agent: flags.agent } : {}) } });
   if (!options.ids && !options.casesDir) recordChecked(file, report);
   return report;
 }
@@ -151,7 +161,7 @@ export async function caseCommand(args: string[]) {
     id: values.id, note: values.note, author: values.author ?? null, rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
     retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, config: prepared.config,
-    options: { runOptions: { processPath: prepared.processPath, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(values.agent ? { agent: values.agent } : {}) } } }));
+    options: { runOptions: { processPath: prepared.processPath, secrets: await declaredSecrets(methodFile), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(values.agent ? { agent: values.agent } : {}) } } }));
 }
 
 /**

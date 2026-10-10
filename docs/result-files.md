@@ -1,6 +1,6 @@
 # Results on the run page
 
-Online Method runs attach declared file outputs to their run record. The CLI reads only file outputs and assets named in a website manifest. It does not scan the workspace or upload input folders. Each uploaded file must match the recorded SHA-256 hash. Files under `sensitive/` are excluded.
+Online Method runs attach declared file outputs to their run record. The CLI reads only file outputs and assets named in a website manifest. It does not scan the workspace or upload input folders. Each uploaded file must match the recorded SHA-256 hash.
 
 A run can upload up to 20,000 files, with 100 MB total content and 25 MB per file. Method sends file bytes separately from the run record. It checks each hash and saves a receipt, so a retry sends only missing files. Files can be downloaded. A missing, changed, or disallowed file leaves the upload pending; the CLI explains which file needs attention. Completed steps do not run again.
 

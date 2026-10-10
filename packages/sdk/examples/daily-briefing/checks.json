@@ -1,40 +1,19 @@
 {
-  "sample_run": {
-    "date": "2026-09-17",
-    "input": "sample/ (28 messages)",
-    "status": "completed",
-    "elapsed_seconds": 105.7,
-    "steps": 3,
-    "tool_calls": 8,
+  "sample_output": {
+    "date": "2026-10-09",
+    "input": "sample/ (28 messages, fictional)",
+    "draft": "sample-report.md",
+    "made_by": "Written for this example from the sample records. The example's own scripts then ran on it: calculate_activity_times (briefing_times.py) made the time files, the write_briefing check (briefing_validation.py) passed, and render_and_save (briefing_render.py) built the website in sample-output.zip.",
     "source_check": {
       "status": "pass",
       "reason": "Source links and supporting files are valid.",
       "evidence": [
-        "35 citations checked.",
+        "29 citations checked.",
         "2 supporting files checked."
       ]
     },
-    "browser": {
-      "errors": [],
-      "viewports": [
-        {
-          "width": 1440,
-          "source_controls": 35,
-          "overflow": false
-        },
-        {
-          "width": 390,
-          "source_controls": 35,
-          "overflow": false
-        }
-      ]
-    },
-    "report": "sample-report.md",
-    "website": "sample-output.zip",
-    "report_sha256": "8c9d9339961e7cf71f62d46ad13c0bfc69d1ce7f9b6bf2c03032fe9132e60186",
-    "archive_sha256": "b064399c03bd68ac70962472c8c584d3618aaa17d0afc91216626cadde91c195",
-    "writing_status": "draft",
-    "final_helper_replay": "Source check passed; rendering returned the same files and hashes."
+    "report_sha256": "b37e90f1515c7a052f7b1cdb9188c7f0e070297194f2f1d3b00e37a662fef068",
+    "archive_sha256": "288f4428a1f13ce08a762f5e6e9e52ca50d1e5f528826aa12d9328a74b316d48"
   },
-  "approved_report_sha256": "223c33d22e349c837aabf79fad774ad2435ca7c4c152334a573222d4e62ca145"
+  "approved_report_sha256": "588d744b83c0ea53322c8c6d33b1eba50bfdc817b1ae5459118d9d409dce2e3c"
 }

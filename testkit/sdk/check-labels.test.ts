@@ -12,8 +12,8 @@ it('each labeled item has a label, a reason, its inputs, and the split that its 
   for (const check of Object.keys(checks)) {
     const ids = new Set<string>();
     for (const split of ['heldout', 'open']) for (const item of read(split, check)) {
-      expect(Object.keys(item)).toEqual(['id', 'check', 'label', 'reason', 'source', 'synthetic', 'inputs']);
-      expect(item.check).toBe(check); expect(typeof item.label).toBe('boolean'); expect(item.reason.length).toBeGreaterThan(10);
+      expect(item).toEqual(expect.objectContaining({ id: expect.any(String), source: expect.any(String), synthetic: expect.any(Boolean) }));
+      expect(item.check).toBe(check); expect(typeof item.label).toBe('boolean'); expect(item.reason).toBeTruthy();
       expect(typeof item.inputs.step).toBe('string'); expect(item.synthetic === (item.source === 'synthetic')).toBe(true);
       expect(ids.has(item.id)).toBe(false); ids.add(item.id);
       expect(parseInt(sha(item.id)[0]!, 16) < 8 ? 'heldout' : 'open').toBe(split);

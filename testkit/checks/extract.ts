@@ -1,14 +1,14 @@
 /**
  * Print check candidates from Method files as JSON lines, with the exact inputs that the SDK sends to Jev.
  * Usage: npx tsx testkit/checks/extract.ts FILE.method... > candidates.jsonl
- * It reads only the Method files and the scripts they name; it never reads .env files or anything under sensitive/.
+ * It reads only the Method files and the scripts they name; it never reads .env files.
  */
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { basename, dirname, resolve, sep } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { parseDocumentValue } from '../../packages/workflow-language/src/validate.js';
 import { checkTargets } from '../../packages/sdk/src/model-checks.js';
+import { refused } from '../../packages/sdk/src/method-issues.js';
 
-const refused = (path: string) => path.split(sep).includes('sensitive') || /^\.env(\.|$)/.test(basename(path));
 for (const file of process.argv.slice(2)) {
   const full = realpathSync(resolve(file));
   if (refused(full)) continue;

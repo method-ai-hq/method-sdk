@@ -1,0 +1,40 @@
+{
+  "format": "method-case/1",
+  "id": "double-charge-to-billing",
+  "status": "active",
+  "method_file": "support-triage.method",
+  "note": "A customer charged twice asks for the second charge back. The ticket goes to Billing with the refund_request tag, and no person is asked.",
+  "author": null,
+  "created": "2026-10-10T02:31:11.810Z",
+  "source": {
+    "run_dir": "/work/support-triage/run2",
+    "execution_id": "6707d77c-38bc-4e10-a5f3-cebd56ddeb71",
+    "method_sha256": "bbbb45763b9b8db47305c6af4940052c2282f4b8a1e607b36eb6732b97a41fb9",
+    "passing_run_dir": "/work/support-triage/run2"
+  },
+  "expect": [
+    {
+      "kind": "equals",
+      "ref": "outputs.decision.queue",
+      "value": "billing"
+    },
+    {
+      "kind": "equals",
+      "ref": "outputs.decision.tags",
+      "value": [
+        "refund_request"
+      ]
+    },
+    {
+      "kind": "equals",
+      "ref": "outputs.decision.needs_person",
+      "value": false
+    }
+  ],
+  "runs": null,
+  "min_pass": null,
+  "supersedes": [],
+  "superseded_by": null,
+  "retention_until": "2027-10-10",
+  "redacted": true
+}

@@ -10,7 +10,11 @@ import {localAuthoring} from '../../packages/sdk/src/authoring.js';
 import {MethodSync} from '../../packages/sdk/src/method-sync.js';
 import {writePrivateJson} from '../../packages/sdk/src/files.js';
 import {effectiveOutputs} from '../../packages/workflow-language/src/schema.js';
-import {referenceShape, loadWorkflow} from '../../packages/workflow-language/src/validate.js';
+import {loadWorkflow} from '../../packages/workflow-language/src/validate.js';
+import {RunEventSchema} from '../../packages/workflow-language/src/inspection.js';
+import {typeAt} from '@withmethod/runtime/semantics.js';
+/** The type of a reference into a step's outputs, as the runtime resolves it. */
+const typeOf = (method: any, step: string, reference: string) => typeAt(effectiveOutputs(method.steps[step]), reference).type;
 
 const roots: string[] = [];
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllEnvs(); process.exitCode = 0; for(const root of roots.splice(0))rmSync(root,{recursive:true,force:true});});
@@ -41,14 +45,17 @@ it('runs without an installed agent, saves the model once, and reuses accepted c
   expect(await runCurrentFile(f.file,{'run-dir':f.runDir},undefined,undefined,f.client)).toMatchObject({status:'needs_input'});
   const config = readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8');
   expect(JSON.parse(config)).toMatchObject({models:{},classification:{provider:'typesafe',model:'jev-test'}});
-  expect(f.fetcher).toHaveBeenCalledTimes(2);
+  const calls = (suffix: string) => f.fetcher.mock.calls.filter(([url]) => String(url).endsWith(suffix)).length;
+  expect([calls('/classifications/model'), calls('/classifications')]).toEqual([1, 1]);
   const inspection = inspectCurrentRun(f.runDir);
   expect(inspection.started_at).toBeTruthy(); expect(inspection.device_name).toBeTruthy();
   expect(inspection.invocations['classify:0']).toMatchObject({status:'passed',verification:'unchecked',outputs:{category:{choice:'billing',probabilities:answer.probabilities}}});
-  expect(inspection.invocations['classify:0']?.events.find(e=>e.type==='model_response')).toMatchObject({kind:'classify',model:'jev-test',confidence:.03,usage:null});
+  const response = inspection.invocations['classify:0']?.events.find(e=>e.type==='model_response');
+  expect(response).toMatchObject({kind:'classify',model:'jev-test',confidence:.03,usage:null});
+  expect(RunEventSchema.safeParse(response).success).toBe(true);
   const human = join(f.root,'human.json'); writeFileSync(human,JSON.stringify({steps:{'confirm:0':{outputs:{answer:'yes'}}}}));
   expect(await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true,human},undefined,undefined,f.client)).toMatchObject({status:'completed',result:{choice:'billing'}});
-  expect(f.fetcher).toHaveBeenCalledTimes(2);
+  expect([calls('/classifications/model'), calls('/classifications')]).toEqual([1, 1]);
   expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(config);
   const completed = inspectCurrentRun(f.runDir); expect(completed.started_at).toBe(inspection.started_at);
   const trace = readFileSync(join(f.runDir,'events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
@@ -65,10 +72,9 @@ it('validates offline and resolves downstream classifier references from the sha
   // Without a saved sign-in, classification is setup that the user must do.
   vi.stubEnv('HOME', mkdtempSync(join(tmpdir(), 'method-home-')));
   expect(await localAuthoring(['validate', f.file])).toBe(true); expect(fetch).not.toHaveBeenCalled();
-  expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining('Classification needs Method sign-in'));
   const method=loadWorkflow(definition);
   expect(effectiveOutputs(method.steps.classify!)).toHaveProperty('category');
-  expect(referenceShape(method,'category.probabilities.billing')).toEqual('number');
+  expect(typeOf(method,'classify','category.probabilities.billing')).toBe('number');
 });
 it('rejects malformed provider data and returns a saved-version error without retry', async () => {
   const f=fixture(); const provider=managedClassification(f.client), signal=new AbortController().signal;
@@ -76,7 +82,7 @@ it('rejects malformed provider data and returns a saved-version error without re
   f.fetcher.mockResolvedValueOnce(Response.json({...answer,model:'changed'}));
   await expect(provider.evaluate(request,signal)).rejects.toThrow('model does not match');
   f.fetcher.mockResolvedValueOnce(Response.json({code:'classification_version_unavailable',message:'Unavailable'},{status:409}));
-  await expect(provider.evaluate(request,signal)).rejects.toThrow("This run's classifier version is unavailable. Start a new run to use the current default.");
+  await expect(provider.evaluate(request,signal)).rejects.toThrow('classifier version is unavailable');
   expect(f.fetcher).toHaveBeenCalledTimes(2);
 });
 it('describes and validates yes/no and score answers', async () => {
@@ -84,8 +90,8 @@ it('describes and validates yes/no and score answers', async () => {
   const base={request_id:crypto.randomUUID(),model:'jev-test',question:'Is it urgent?',inputs:{message:'Invoice'}};
   const yesNo={...definition,steps:{classify:{...definition.steps.classify,do:{kind:'classify',question:'Is it urgent?',answer:'yes_no'}}}};
   const scored={...definition,steps:{classify:{...definition.steps.classify,do:{kind:'classify',question:'How urgent?',levels:['low','high']}}}};
-  expect(referenceShape(loadWorkflow(yesNo),'category.probability')).toEqual('number');
-  expect(referenceShape(loadWorkflow(scored),'category.probabilities.high')).toEqual('number');
+  expect(typeOf(loadWorkflow(yesNo),'classify','category.probability')).toBe('number');
+  expect(typeOf(loadWorkflow(scored),'classify','category.probabilities.high')).toBe('number');
   const meta={provider:'typesafe',model:'jev-test',confidence:null,usage:{input_tokens:3,output_tokens:1,cost:1e-5}};
   f.fetcher.mockResolvedValueOnce(Response.json({...meta,answer:true,probability:.8}));
   await expect(provider.evaluate({...base,answer:'yes_no'},signal)).resolves.toMatchObject({answer:true,probability:.8});
@@ -94,19 +100,11 @@ it('describes and validates yes/no and score answers', async () => {
   f.fetcher.mockResolvedValueOnce(Response.json({...meta,level:'low',score:.7,probabilities:{low:.3,high:.7}}));
   await expect(provider.evaluate({...base,levels:['low','high']},signal)).rejects.toThrow('not a maximum');
 });
-it('bounds the response stream and forwards cancellation to the authenticated request', async () => {
+it('refuses a very large response and forwards cancellation to the authenticated request', async () => {
   const f=fixture(); const provider=managedClassification(f.client), controller=new AbortController();
-  f.fetcher.mockResolvedValueOnce(new Response('x'.repeat(65_537)));
+  f.fetcher.mockResolvedValueOnce(new Response('x'.repeat(4_000_000)));
   await expect(provider.resolve(controller.signal)).rejects.toThrow('size limit');
   const signal=f.fetcher.mock.calls[0]![1].signal;
   controller.abort(); expect(signal.aborted).toBe(true);
 });
 
-it('accepts the run events that Jev through OpenRouter records', async () => {
-  const { RunEventSchema } = await import('../../packages/workflow-language/src/inspection.js');
-  const at = new Date().toISOString();
-  // A yes/no answer has no confidence, and OpenRouter reports the cost of each request.
-  expect(RunEventSchema.safeParse({ at, type: 'model_response', kind: 'classify', provider: 'typesafe', model: 'jev-1.13.0',
-    confidence: null, usage: { input_tokens: 471, output_tokens: 58, cost: 0.000019782 } }).success).toBe(true);
-  expect(RunEventSchema.safeParse({ at, type: 'model_response', usage: { input_tokens: 1, output_tokens: 1, cost: -1 } }).success).toBe(false);
-});

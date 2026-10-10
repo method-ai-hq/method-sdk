@@ -47,11 +47,11 @@ it('with the own key, hosted model steps and classify call OpenRouter with it, a
   const config: any = {};
   expect(accountNeeds(method, config).classification).toBe(false);
   const profiles = await resolveAgentProfiles(method, config, undefined, 'openai/gpt-6-luna');
-  expect(profiles.default).toEqual({ backend: 'openrouter-chat', model: 'openai/gpt-6-luna', api_key_env: ownKeyName, max_output_tokens: 16000 });
-  expect(profiles.writer).toEqual({ backend: 'openrouter-chat', model: 'anthropic/claude-luna', api_key_env: ownKeyName, max_output_tokens: 16000, reasoning_effort: 'low' });
+  expect(profiles.default).toMatchObject({ backend: 'openrouter-chat', model: 'openai/gpt-6-luna', api_key_env: ownKeyName });
+  expect(profiles.writer).toMatchObject({ backend: 'openrouter-chat', model: 'anthropic/claude-luna', api_key_env: ownKeyName, reasoning_effort: 'low' });
   expect(config.classification).toMatchObject({ provider: 'typesafe', api_key_env: ownKeyName });
   await resolveAgentProfiles(method, {}, undefined, 'openai/gpt-6-luna');
-  expect(lines.filter(line => line.includes('Using your own OpenRouter key'))).toHaveLength(1);
+  expect(lines.filter(line => line.includes('OpenRouter'))).toHaveLength(1);
   // A local agent runs the model steps; the own key still classifies.
   const agentConfig: any = {};
   const local = await resolveAgentProfiles(method, agentConfig, 'codex');

@@ -3,20 +3,23 @@ import {readFileSync, existsSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
 export const authoringExamples = [
-  {id:'notes-summary', description:'The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call, and saves a summary file. The folder is observed automatically.', teaches:'files connection, call, saving script', directory:'notes-summary', entrypoint:'notes-summary.method', lessonFiles:[
-    'TASK.md','notes-summary.method','read-notes.mjs','save.mjs','README.md',
+  {id:'notes-summary', description:'The smallest complete Method: reads a folder of meeting notes, finds decisions and action items with one model call that shows two good items, and saves a summary file. A recorded case keeps one correction.', teaches:'files connection, call with examples of good output, a recorded case in cases/', directory:'notes-summary', entrypoint:'notes-summary.method', lessonFiles:[
+    'TASK.md','notes-summary.method','read-notes.mjs','save.mjs','cases/dates-in-decisions/case.json','README.md',
   ]},
-  {id:'daily-briefing', description:'Turns prepared records into a cited briefing website using an approved writing example, a source check, and rendering scripts.', teaches:'example input, script tool, source check, website result', directory:'daily-briefing', entrypoint:'daily-briefing.method', lessonFiles:[
-    'TASK.md','daily-briefing.method','approved-report.md','briefing_check_inputs.py','briefing_files.py','briefing_artifacts.py','briefing_times.py','briefing_sessions.py','briefing_validation.py','briefing_render.py','briefing_manifest.py','briefing_markdown.py','briefing_website.py','briefing_progress.py','reader/reader.css','reader/reader.js','inputs.json','sample-report.md','README.md',
+  {id:'message-routing', description:"Classifies a customer message with Method's classifier, then a script rule chooses a support destination. ticket.method adds one ticket write that a retry does not repeat.", teaches:'classify with an unclear option, a threshold in a script, an effect that reads the ticket back, retry without a duplicate write', directory:'message-routing', entrypoint:'message-routing.method', lessonFiles:[
+    'TASK.md','message-routing.method','routing.mjs','choose-destination.mjs','inputs.json','result.fixture.json','ticket.method','create-ticket.mjs','README.md',
   ]},
-  {id:'social-briefing', description:'Researches a topic through Grok, alphaXiv, and LinkedIn in the browser, then writes a briefing with quotes and source links.', teaches:'browser agent, no_effect_reason', directory:'social-briefing', entrypoint:'social-briefing.method', lessonFiles:[
-    'TASK.md','social-briefing.method','inputs.json','result.fixture.json','README.md',
+  {id:'support-triage', description:'Reads a help desk ticket, classifies its team, refund request, and urgency, drafts a first reply, updates the ticket, and asks a person when the team is unclear.', teaches:'models and secrets, classify with options, yes_no and levels, an unclear path, ask, effects with an http observer, a committed case, run_data: device, method connect', directory:'support-triage', entrypoint:'support-triage.method', lessonFiles:[
+    'TASK.md','support-triage.method','triage.mjs','helpdesk.mjs','read-ticket.mjs','route.mjs','set-ticket.mjs','triage.test.mjs','inputs.json','cases/double-charge-to-billing/case.json','README.md',
   ]},
-  {id:'outbound-management', description:'Reads email and prospect sources, updates persistent CRM state, and saves daily tasks and outreach drafts for review.', teaches:'state across runs, script checks, fixtures', directory:'outbound-management', entrypoint:'outbound.method', lessonFiles:[
+  {id:'outbound-management', description:'Reads email and prospect sources, updates persistent CRM state, and saves daily tasks and outreach drafts for review.', teaches:'state across runs, script checks, examples of good output, accept, fixtures', directory:'outbound-management', entrypoint:'outbound.method', lessonFiles:[
     'TASK.md','outbound.method','read_crm.py','crm.py','check_sources.py','check_plan.py','save_day.py','starter/crm.json','inputs.json','fixtures/crm.json','fixtures/observations.json','fixtures/plan.json','fixtures/tasks.md','fixtures/receipt.json','fixtures/state.json','README.md',
   ]},
-  {id:'message-routing', description:'Classifies a customer message with Jev, then applies a script rule to choose a support destination.', teaches:'classify threshold, retry without a duplicate write', directory:'message-routing', entrypoint:'message-routing.method', lessonFiles:[
-    'TASK.md','message-routing.method','routing.mjs','choose-destination.mjs','inputs.json','result.fixture.json','README.md',
+  {id:'social-briefing', description:'Researches a topic through Grok, alphaXiv, and LinkedIn in the browser, then writes a briefing with quotes and source links.', teaches:'browser agent, call, no_effect_reason, accept', directory:'social-briefing', entrypoint:'social-briefing.method', lessonFiles:[
+    'TASK.md','social-briefing.method','inputs.json','result.fixture.json','README.md',
+  ]},
+  {id:'daily-briefing', description:'Turns prepared records of one fictional day into a cited briefing website, using an approved writing example, a source check, and rendering scripts.', teaches:'approved example as an input, script tool, source check, website result', directory:'daily-briefing', entrypoint:'daily-briefing.method', lessonFiles:[
+    'TASK.md','daily-briefing.method','approved-report.md','briefing_check_inputs.py','briefing_files.py','briefing_artifacts.py','briefing_times.py','briefing_sessions.py','briefing_validation.py','briefing_render.py','briefing_manifest.py','briefing_markdown.py','briefing_website.py','briefing_progress.py','reader/reader.css','reader/reader.js','inputs.json','sample-report.md','README.md',
   ]},
 ] as const;
 export function exampleDirectory(id: string) {

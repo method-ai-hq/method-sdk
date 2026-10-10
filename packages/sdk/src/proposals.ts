@@ -162,7 +162,7 @@ function manualStep(file: string, proposal: ProposalRecord) {
   const evidence = proposal.evidence ?? {};
   if (evidence.case_suggestion) {
     const c = evidence.case_suggestion, quote = (value: string) => JSON.stringify(value);
-    return `Record the case: method case new ${file} --id ${c.id} --note ${quote(c.note)}${c.run_id ? ` --run ${c.run_id}` : ''}${(c.rubric ?? []).map((r: string) => ` --rubric ${quote(r)}`).join('')}`;
+    return `Record the case: method case new ${file} --id ${c.id} --note ${quote(c.note)} --run RUN_FOLDER${(c.rubric ?? []).map((r: string) => ` --rubric ${quote(r)}`).join('')}, where RUN_FOLDER is the folder of the run that went wrong. Then run method improve ${file} --case ${c.id}, show the proposal, apply it, and run again.`;
   }
   if (evidence.script_change) return `Change the script, then run method test ${file}: ${evidence.script_change}`;
   return 'This proposal has no change to apply.';
@@ -176,7 +176,7 @@ function summary(p: ProposalRecord) {
 /** `method improve`, `method proposals`, and `method apply`. */
 export async function proposalCommand(args: string[], clientFactory: (server: string) => MethodClient) {
   if (args[0] === 'improve') return (await import('./improve.js')).improveCommand(args.slice(1), clientFactory);
-  const { values, positionals } = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, resolved: { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, resolved: { type: 'boolean' }, wait: { type: 'boolean' } } });
   const [target, wanted] = positionals;
   if (!target || positionals.length > (args[0] === 'apply' ? 2 : 1)) throw Error(args[0] === 'apply' ? 'Use method apply FILE [PROPOSAL_ID] [--resolved].' : 'Use method proposals FILE.');
   const file = authoringPath(target), id = readDocument(file).id;
@@ -186,8 +186,30 @@ export async function proposalCommand(args: string[], clientFactory: (server: st
   if (args[0] === 'proposals') {
     const local = localProposals(file).map(summary);
     if (!methodId || !signedIn) return print({ file, method_id: methodId, proposals: local, ...(methodId ? { next: 'Run method login to see the proposals in your account too.' } : {}) });
-    const { proposals } = await client.request<{ proposals: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/proposals`);
-    return print({ file, method_id: methodId, proposals: [...(proposals ?? []).map(p => summary({ ...p, source: 'account' })), ...local].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))) });
+    const read = async () => {
+      const [{ proposals }, { improvements }] = await Promise.all([
+        client.request<{ proposals: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/proposals`),
+        client.request<{ improvements: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/improvements`)]);
+      // The newest improvement that has no proposal yet: still running, or failed. The agent needs to know which.
+      const latest = (improvements ?? []).find(i => !i.proposal_id);
+      return { proposals, pending: latest && (latest.created_at ?? '') > String((proposals ?? [])[0]?.created_at ?? '') ? latest : undefined };
+    };
+    let { proposals, pending } = await read();
+    // --wait: one line each time the improvement reaches a new step, until it ends.
+    let shown = '';
+    while (values.wait && pending && ['queued', 'running'].includes(pending.status)) {
+      const step = pending.steps?.find((s: any) => s.status === 'running')?.step_id ?? pending.status;
+      if (step !== shown) { process.stderr.write(`Improvement ${pending.id}: ${step}\n`); shown = step; }
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      ({ proposals, pending } = await read());
+    }
+    const failedStep = pending?.steps?.find((s: any) => s.status === 'failed')?.step_id;
+    const next = !pending ? undefined
+      : ['queued', 'running'].includes(pending.status) ? `Improvement ${pending.id} is ${pending.status}. Run method proposals ${target} --wait: it returns when the proposal is ready.`
+      : pending.status === 'failed' || pending.status === 'cancelled' ? `Improvement ${pending.id} ${pending.status}${failedStep ? ` at step ${failedStep}` : ''}${pending.error?.message ? `: ${pending.error.message}` : ''}. Run method improve ${target} again, or record the correction with method case new.`
+      : undefined;
+    return print({ file, method_id: methodId, proposals: [...(proposals ?? []).map(p => summary({ ...p, source: 'account' })), ...local].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
+      ...(pending ? { improvement: { id: pending.id, status: pending.status, ...(failedStep ? { failed_step: failedStep } : {}), ...(pending.error ? { error: pending.error } : {}) } } : {}), ...(next ? { next } : {}) });
   }
   const local = localProposals(file);
   let proposal: ProposalRecord | undefined = wanted ? local.find(p => p.id === wanted) : undefined;

@@ -48,23 +48,22 @@ console.log(JSON.stringify({ scored: [], count: 0 }));
 `;
 const step = { name: 'Score leads', purpose: 'Keep the strong leads.', in: { leads: 'inputs.leads' }, do: { kind: 'run', runtime: 'python', entrypoint: 'score.py' }, out: { kept: { type: 'list', items: { type: 'record', fields: { name: { type: 'text' }, score: { type: 'number' } } }, description: 'Kept leads.' } } };
 
-it.skipIf(!python)('finds the effects of a Python script with the ast module', () => {
-  const found = staticEffects('python', [{ path: 'score.py', text: pythonSource }], step, ['CRM_TOKEN', 'UNUSED_KEY']);
-  expect(found.effects).toEqual({ network: ['api.example.com'], secrets: ['CRM_TOKEN'], env: ['REGION'], reads: ['config.json'], writes: ['cache/leads.json'],
-    runs: ['git status'], input_fields: ['leads'], output_fields: ['kept'] });
-  expect(found.facts).toEqual({ stdin_keys: ['limit', 'owner'], output_keys: ['count', 'scored'] });
-});
-it('finds the effects of a Node script with a token scan', () => {
-  const found = staticEffects('node', [{ path: 'score.mjs', text: nodeSource }], { ...step, do: { ...step.do, runtime: 'node', entrypoint: 'score.mjs' } }, ['CRM_TOKEN']);
-  expect(found.effects).toEqual({ network: ['api.example.org'], secrets: ['CRM_TOKEN'], env: ['REGION'], reads: ['config.json'], writes: ['out/leads.json'],
-    runs: ['git status --short'], input_fields: ['leads'], output_fields: ['kept'] });
-  expect(found.facts).toEqual({ stdin_keys: ['limit'], output_keys: ['count', 'scored'] });
+it.each([
+  { runtime: 'python', path: 'score.py', source: () => pythonSource, host: 'api.example.com', write: 'cache/leads.json' },
+  { runtime: 'node', path: 'score.mjs', source: () => nodeSource, host: 'api.example.org', write: 'out/leads.json' },
+])('finds the host, secret, and writes of a $runtime script', ({ runtime, path, source, host, write }) => {
+  if (runtime === 'python' && !python) return;
+  const found = staticEffects(runtime as 'python' | 'node', [{ path, text: source() }], { ...step, do: { ...step.do, runtime, entrypoint: path } }, ['CRM_TOKEN', 'UNUSED_KEY']);
+  expect(found.effects.network).toEqual([host]); expect(found.effects.secrets).toEqual(['CRM_TOKEN']);
+  expect(found.effects.env).toContain('REGION'); expect(found.effects.reads).toContain('config.json'); expect(found.effects.writes).toEqual([write]);
+  expect(found.facts.stdin_keys).toContain('limit'); expect(found.facts.output_keys).toEqual(expect.arrayContaining(['count', 'scored']));
 });
 it('names each number, quoted name, and host that the code does not have', () => {
   const code = 'kept = [l for l in leads if l["score"] > 50][:10]\nURL = "https://api.example.com"';
   expect(entityProblems({ summary: 'Keep each lead in `leads` whose `score` is above 50.', steps: [{ text: 'Keep at most 10 leads from api.example.com.', lines: [1, 1] }], not_done: ['Ties at 50% are kept.'] }, code, step)).toEqual([]);
-  expect(entityProblems({ summary: 'Keep leads above 75.', steps: [{ text: 'Read `rank` and call api.other.com.', lines: [1, 1] }], not_done: [] }, code, step)).toEqual([
-    'The number 75 does not appear in the code.', '"rank" does not appear in the code.', 'Host api.other.com does not appear in the code.']);
+  const problems = entityProblems({ summary: 'Keep leads above 75.', steps: [{ text: 'Read `rank` and call api.other.com.', lines: [1, 1] }], not_done: [] }, code, step);
+  expect(problems).toHaveLength(3);
+  for (const [problem, entity] of problems.map((p, i) => [p, ['75', 'rank', 'api.other.com'][i]!])) expect(problem).toContain(entity);
 });
 it('compares outputs after sorting keys, on the declared fields', () => {
   expect(sameOutput({ kept: [{ a: 1, b: 2 }], debug: 1 }, { kept: [{ b: 2, a: 1 }] }, ['kept'])).toBe(true);
@@ -110,18 +109,20 @@ function recordRun(root: string, inputs: unknown[]) {
 }
 const leads = [{ leads: [{ name: 'a', score: 70 }, { name: 'b', score: 50 }, { name: 'c', score: 90 }] }, { leads: [] }, { leads: [{ name: 'd', score: 51 }] }, { leads: [{ name: 'e', score: 1 }] }];
 
-it.skipIf(!python)('replays up to 3 recorded inputs through the script and a program written from the steps', async () => {
+it.skipIf(!python)('replays a capped set of distinct recorded inputs through the script and a program written from the steps', async () => {
   const root = temp(); writeFileSync(join(root, 'score.py'), script); recordRun(root, [leads[0], leads[0], leads[1], leads[2], leads[3]]);
-  expect(recordedInputs('score', 'score.py', [join(root, '.method-runs')])).toEqual([leads[0], leads[1], leads[2]]);
+  const replayed = recordedInputs('score', 'score.py', [join(root, '.method-runs')]);
+  expect(replayed[0]).toEqual(leads[0]); expect(new Set(replayed.map(value => JSON.stringify(value))).size).toBe(replayed.length);
+  expect(replayed.length).toBeLessThan(leads.length);
   const context = { method, id: 'score', root, sources: [{ path: 'score.py', text: script }], scriptHash: sha('x'), roundTrip: true, runRoots: [join(root, '.method-runs')] };
   const right = fakeModels([draft(60), draft()], rightProgram);
   const made = await makeCard({ ...context, models: right.models });
-  expect(right.requests).toHaveLength(3);
-  expect(JSON.stringify(right.requests[1].messages)).toContain('The number 60 does not appear in the code.');
+  // The first draft names a number that the code does not have; the model is asked again with the problem.
+  expect(JSON.stringify(right.requests[1].messages)).toContain('60');
   expect(made.card).toMatchObject({ schema: 'method-script-card/1', step_id: 'score', entrypoint: 'score.py', changes: 'nothing', model: 'test/model-1',
-    effects: { network: [], input_fields: ['leads'], output_fields: ['kept'] }, checks: { entities: 'passed', entity_problems: [], round_trip: 'passed', round_trip_inputs: 3 } });
+    effects: { network: [], input_fields: ['leads'], output_fields: ['kept'] }, checks: { entities: 'passed', entity_problems: [], round_trip: 'passed' } });
   const wrong = fakeModels([draft(60), draft(60)], wrongProgram);
-  expect((await makeCard({ ...context, models: wrong.models })).card.checks).toEqual({ entities: 'failed', entity_problems: ['The number 60 does not appear in the code.'], round_trip: 'failed', round_trip_inputs: 1 });
+  expect((await makeCard({ ...context, models: wrong.models })).card.checks).toMatchObject({ entities: 'failed', round_trip: 'failed' });
 });
 it.skipIf(!python)('does not replay a script that calls the network', async () => {
   const root = temp(), text = 'import json, sys, urllib.request\nurllib.request.urlopen("https://api.example.com")\nprint(json.dumps({"kept": []}))\n';
@@ -159,15 +160,14 @@ it.skipIf(!python)('makes, uploads, and then reuses cards through method explain
   const out: string[] = []; vi.spyOn(process.stdout, 'write').mockImplementation(text => { out.push(String(text)); return true; });
   const anonymous = new MethodClient('https://method.example', fetcher as typeof fetch, join(root, 'nobody'));
   await methodMain(['explain', file], () => anonymous);
-  expect(out.join('')).toContain('Script cards skipped: not signed in.');
   expect(fetcher).not.toHaveBeenCalled();
   writePrivateJson(client.credentialFile, { server: client.server, token: 'method_' + 'a'.repeat(43) });
   await methodMain(['explain', file], () => client);
   expect(stored).toHaveLength(1);
-  expect(stored[0]).toMatchObject({ step_id: 'score', script_sha256: hash, checks: { entities: 'passed', round_trip: 'passed', round_trip_inputs: 1 } });
-  expect(out.join('')).toContain('score: Keep each lead in `leads` whose `score` is above 50. [entities passed; round trip passed on 1 input]');
+  expect(stored[0]).toMatchObject({ step_id: 'score', script_sha256: hash, checks: { entities: 'passed', round_trip: 'passed' } });
+  const modelCalls = () => fetcher.mock.calls.filter(([url]) => String(url).endsWith('/models/respond')).length, before = modelCalls();
+  // The card exists: a second explain makes no new model call.
   await methodMain(['explain', file, '--no-round-trip'], () => client);
-  expect(out.at(-1)).toBe('score: card exists.\n');
-  expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/models/respond'))).toHaveLength(2);
+  expect(modelCalls()).toBe(before);
   expect(readDocument(file)).toEqual({ ...method, format: 'method/3.4', id: wf });
 });

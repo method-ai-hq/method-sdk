@@ -72,12 +72,12 @@ it('saves the same content as the same version, and finds the existing version a
   await s.run('one');
   const first = (await currentVersion(s.file))!;
   expect(first.version_id).toMatch(/^v_[a-f0-9]{32}$/);
-  expect(readFileSync(s.file, 'utf8')).toMatch(/^\{\n {2}"format": "method\/3\.4",\n {2}"id": "wf_[a-f0-9]{32}"/);
-  expect(s.err.join('')).toContain('Saved as version 1');
+  expect(readDocument(s.file)).toMatchObject({ format: 'method/3.4', id: first.method_id });
+  expect(s.err.join('')).toMatch(/Saved as version/);
   await s.run('two');
   expect(s.puts()).toHaveLength(1);
   const original = readFileSync(s.file, 'utf8');
-  writeMethod(s.file, 'second'); writeFileSync(s.file, original.replace('"Echo"', '"Echo"')); writeFileSync(join(s.root, 'echo.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({text: "second"}));');
+  writeFileSync(s.file, original); writeFileSync(join(s.root, 'echo.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({text: "second"}));');
   await s.run('three');
   const second = (await currentVersion(s.file))!;
   expect(second.version_id).not.toBe(first.version_id);
@@ -87,7 +87,6 @@ it('saves the same content as the same version, and finds the existing version a
   expect((await currentVersion(s.file))!.version_id).toBe(first.version_id);
   await s.run('four');
   expect(s.puts()).toHaveLength(2);
-  expect(s.err.join('')).toContain('Saved as version 1');
   expect(s.server.versions.size).toBe(2);
 }, 30_000);
 
@@ -98,9 +97,14 @@ it('starts the run before any save request, and the run never waits for or fails
   s.server.beforeFirst = () => { started = existsSync(join(s.root, 'one', 'events.jsonl')); };
   expect(await s.run('one')).toMatchObject({ status: 'completed', result: 'hello' });
   expect(started).toBe(true);
-  // A server that fails every request: the run completes, and its records wait in the outbox.
+  // A server that fails every request: the run completes at once with the product's 60 s stall limit, and its records
+  // wait in the outbox.
+  vi.stubEnv('METHOD_OUTBOX_STALL_MS', '60000');
   s.server.failing = true; writeFileSync(join(s.root, 'echo.mjs'), 'for await (const c of process.stdin) {}; console.log(JSON.stringify({text: "again"}));');
+  const start = Date.now();
   expect(await s.run('two')).toMatchObject({ status: 'completed', result: 'again' });
+  expect(Date.now() - start).toBeLessThan(5_000);
+  expect(new Outbox(s.client).pending()).toBeGreaterThan(0);
   expect(process.exitCode ?? 0).toBe(0);
   expect(s.err.join('')).toContain('Will save when online.');
 }, 30_000);
@@ -161,19 +165,19 @@ it('a slow upload that keeps moving bytes does not time out; a stalled one stops
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'method-slow-'))); roots.push(root);
   const slow = async (_url: any, init: any) => {
     const reader = (init.body as ReadableStream<Uint8Array>).getReader(); let received = 0;
-    for (;;) { const { done, value } = await reader.read(); if (done) break; received += value.byteLength; await new Promise(r => setTimeout(r, 60)); }
+    for (;;) { const { done, value } = await reader.read(); if (done) break; received += value.byteLength; await new Promise(r => setTimeout(r, 30)); }
     return Response.json({ received });
   };
   const client = new MethodClient('https://method.example', slow as typeof fetch, join(root, 'config'));
   writePrivateJson(client.credentialFile, { server: client.server, token: 'method_' + 'a'.repeat(43) });
   const progress: number[] = [];
-  const bytes = new Uint8Array(1_000_000);
-  // 16 chunks of 64 KiB at 60 ms each: about 1 s in all, with no pause longer than the 300 ms stall limit.
-  const answer = JSON.parse(new TextDecoder().decode(await client.transfer('/api/cli/files/' + 'a'.repeat(64), bytes, { stallMs: 300, onProgress: sent => progress.push(sent), attempts: 1 })));
+  const bytes = new Uint8Array(8 * 65_536);
+  // 8 chunks of 64 KiB at 30 ms each: longer in all than the 150 ms stall limit, with no pause as long as it.
+  const answer = JSON.parse(new TextDecoder().decode(await client.transfer('/api/cli/files/' + 'a'.repeat(64), bytes, { stallMs: 150, onProgress: sent => progress.push(sent), attempts: 1 })));
   expect(answer.received).toBe(bytes.length);
   expect(progress.at(-1)).toBe(bytes.length);
   const stalled = new MethodClient('https://method.example', (async (_url: any, init: any) => { await new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason))); }) as unknown as typeof fetch, join(root, 'config'));
-  await expect(stalled.transfer('/api/cli/files/' + 'a'.repeat(64), bytes, { stallMs: 200, attempts: 1 })).rejects.toThrow('No data moved');
+  await expect(stalled.transfer('/api/cli/files/' + 'a'.repeat(64), bytes, { stallMs: 100, attempts: 1 })).rejects.toThrow('No data moved');
 });
 
 it('publish uploads the current version, publishes that version ID, and needs --reason to accept a failing case', async () => {
@@ -181,6 +185,17 @@ it('publish uploads the current version, publishes that version ID, and needs --
   await methodMain(['publish', s.file, '--reason', 'First release']);
   const version = (await currentVersion(s.file))!;
   expect(s.server.log).toContain(`POST /api/cli/methods/${version.method_id}/versions/${version.version_id}/publish`);
-  expect(s.server.versions.get(version.version_id)?.number).toBe(1);
+  expect(s.server.versions.get(version.version_id)).toMatchObject({ number: 1, workflow: expect.not.objectContaining({ id: expect.anything() }) });
   await expect(methodMain(['publish', s.file, '--accept-failing-case', 'one'])).rejects.toThrow('Give --reason with --accept-failing-case');
 }, 30_000);
+
+it('drain returns when the only item left belongs to another running Method process', async () => {
+  const s = setup();
+  // Another process (alive: the parent of this test) queued a run; this process's outbox must not wait for it.
+  new Outbox(s.client).add({ kind: 'run', server: s.client.server, run_dir: join(s.root, 'run'), version_id: 'v_' + '0'.repeat(32), pid: process.ppid });
+  const outbox = new Outbox(s.client);
+  // Before the fix, drain waited for it until the 60 s stall limit (and a command's process ended in the middle).
+  const started = Date.now();
+  await outbox.drain();
+  expect(Date.now() - started).toBeLessThan(2000);
+}, 5000);

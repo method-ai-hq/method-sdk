@@ -6,8 +6,8 @@
     "source_order": 17,
     "event_kind": "conversation",
     "actor_role": "user_written",
-    "title": "Hosting Datasets with Runloop",
-    "text": "Right now my data lives in a digital ocean volume. What's wrong with a modal volume ? it's not that big (1 TB)",
+    "title": "Planning the Spring Glaze Workshop",
+    "text": "good. what do I need to buy or prepare before the first session?",
     "url": null,
     "stream": "chatgpt",
     "browser": null,
@@ -16,13 +16,13 @@
     "post_author": null,
     "evidence_status": "user_message",
     "time": {
-      "instant": "2026-05-11T15:56:12.807000+00:00",
+      "instant": "2026-05-11T15:53:11.927000+00:00",
       "end": null,
-      "local": "2026-05-11T10:56:12.807000-05:00",
+      "local": "2026-05-11T10:53:11.927000-05:00",
       "day": "2026-05-11",
       "basis": "original_message_create_time",
       "precision": "microsecond",
-      "original": "2026-05-11T15:56:12.807000+00:00"
+      "original": "2026-05-11T15:53:11.927000+00:00"
     },
     "text_basis": "saved_source_text",
     "profile": null,
@@ -38,7 +38,7 @@
     "url_key": null,
     "media": [],
     "attributes": {
-      "topic": "Hosting Datasets with Runloop",
+      "topic": "Planning the Spring Glaze Workshop",
       "turn_started_at": null,
       "channel": null,
       "thread_id": "example-thread-id-0001",

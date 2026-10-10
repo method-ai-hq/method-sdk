@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { canonicalJson, sha256, workflowDocumentDigest } from './identity.js';
 
 export const packagePath = (path: string) => {
-  if (!path || path.length > 500 || path.startsWith('/') || path.includes('\\') || /^[A-Za-z]:/.test(path) || path.split('/').some(p => !p || ['.', '..', 'sensitive', '.git', 'node_modules', '.venv', '.codex', '.claude'].includes(p) || p.startsWith('.env') || p === 'secrets.env')) throw Error(`Invalid package path: ${path}`);
+  if (!path || path.length > 500 || path.startsWith('/') || path.includes('\\') || /^[A-Za-z]:/.test(path) || path.split('/').some(p => !p || ['.', '..', '.git', 'node_modules', '.venv', '.codex', '.claude'].includes(p) || p.startsWith('.env') || p === 'secrets.env')) throw Error(`Invalid package path: ${path}`);
   return path;
 };
 export const PackageFileSchema = z.strictObject({ path: z.string().refine(p => { try { packagePath(p); return true; } catch { return false; } }), sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.number().int().min(0).max(20_000_000) });

@@ -69,7 +69,7 @@ export async function improveCommand(args: string[], clientFactory: (server: str
     if (typeof id !== 'string' || !methodIdPattern.test(id)) throw Error(`${positionals[0]} has no id: line, so your account has no version of it. Run method run ${positionals[0]} once while signed in, then run method improve again.`);
     try {
       const { improvement } = await client.request<{ improvement: any }>(`/api/methods/${encodeURIComponent(id)}/improvements`, 'POST', request);
-      return print({ improvement, url: `${client.server}/methods/${id}`, next: `Method makes a proposal. Run method proposals ${positionals[0]} to see it.` });
+      return print({ improvement, url: `${client.server}/methods/${id}`, next: `Method's improvement agent is working; it takes a few minutes. Run method proposals ${positionals[0]} --wait (give the command 10 minutes): it returns with the proposal. Then show it to the user.` });
     } catch (error: any) { if (error.code !== 'device_data') throw error; }
   }
   return print(await improveOnDevice(client, file, request, run));

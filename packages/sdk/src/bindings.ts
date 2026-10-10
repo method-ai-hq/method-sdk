@@ -18,13 +18,13 @@ export async function bindInput(client:MethodClient,idOrFile:string,name:string,
   if(!/^[a-z][a-z0-9_]*$/.test(name))throw Error('Use the environment binding name.');
   const {id,workflow}=await target(client,idOrFile);
   if(workflow.environment?.[name]?.type!=='files')throw Error('Use the name of a declared files binding.');
-  const root=realpathSync(resolve(path));if(root.split(/[\\/]/).includes('sensitive'))throw Error('Use a folder outside sensitive/.');
+  const root=realpathSync(resolve(path));
   if(!upload){bindConnectionValue(id,name,root);return {saved:true,scope:'this computer',method_id:id,name};}
   const files:Array<{path:string;sha256:string;size:number}>=[];
   async function walk(dir:string,prefix=''){
     for(const entry of readdirSync(dir,{withFileTypes:true})){
       // Do not enumerate protected trees. The upload is only the explicitly chosen folder.
-      if(['sensitive','.git','.codex','.claude','node_modules','.venv'].includes(entry.name)||entry.name.startsWith('.env')||entry.name==='secrets.env')continue;
+      if(['.git','.codex','.claude','node_modules','.venv'].includes(entry.name)||entry.name.startsWith('.env')||entry.name==='secrets.env')continue;
       const name=prefix+entry.name;packagePath(name);const path=join(dir,entry.name);
       if(entry.isSymbolicLink())throw Error(`Input contains a symbolic link: ${name}`);
       if(entry.isDirectory())await walk(path,name+'/');

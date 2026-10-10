@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
@@ -14,25 +14,20 @@ const method={format:'method/3.1',name:'Agent selection',goal:'Keep the same age
 function fixture(){
  const root=mkdtempSync(join(tmpdir(),'method-agent-selection-'));roots.push(root);
  vi.stubEnv('HOME',root);vi.stubEnv('PATH',root);vi.stubEnv('CODEX_THREAD_ID','outer');vi.stubEnv('CLAUDECODE','1');
- const directory=join(root,'.config','method');mkdirSync(directory,{recursive:true});
- const preference=join(directory,'agent.json');writeFileSync(preference,'{"agent":"codex"}');
  for(const agent of ['codex','claude'])writeFileSync(join(root,agent),`#!${process.execPath}\nconst fs=require('node:fs'),args=process.argv.slice(2);if(args[0]==='auth'||args[0]==='login'){console.log(JSON.stringify({loggedIn:true}));process.exit(0);}fs.appendFileSync(${JSON.stringify(join(root,'calls'))},'${agent}\\n');if('${agent}'==='claude')console.log(JSON.stringify({type:'result',subtype:'success',structured_output:{text:'claude'}}));else fs.writeFileSync(args[args.indexOf('--output-last-message')+1],JSON.stringify({text:'codex'}));`,{mode:0o700});
  const file=join(root,'task.method');writeFileSync(file,JSON.stringify(method));
  vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
- return {root,file,preference,runDir:join(root,'run')};
+ return {root,file,runDir:join(root,'run')};
 }
-it('ignores the old machine preference when both callers and agents are present',async()=>{
- const f=fixture();
+it('asks which agent when both callers and agents are present; an explicit agent wins',async()=>{
+ fixture();
  await expect(resolveAgentProfiles(method,{})).rejects.toMatchObject({code:'needs_input'});
- // A malformed obsolete preference must not be read either.
- writeFileSync(f.preference,'invalid JSON');
  await expect(resolveAgentProfiles(method,{},'claude')).resolves.toMatchObject({writer:{backend:'claude'}});
 });
-it('keeps the chosen agent across an actual pause and resume without changing a shared preference',async()=>{
+it('keeps the chosen agent across an actual pause and resume',async()=>{
  const f=fixture();
  const first=await runCurrentFile(f.file,{'run-dir':f.runDir,agent:'claude'});
  expect(first).toMatchObject({status:'needs_input'});
- expect(readFileSync(f.preference,'utf8')).toBe('{"agent":"codex"}');
  const saved=readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8');
  expect(JSON.parse(saved).models.writer.backend).toBe('claude');
  vi.stubEnv('CLAUDECODE','');vi.stubEnv('CODEX_THREAD_ID','another-task');
@@ -41,13 +36,11 @@ it('keeps the chosen agent across an actual pause and resume without changing a 
  expect(result).toMatchObject({status:'completed',result:'claude'});
  expect(readFileSync(join(f.root,'calls'),'utf8')).toBe('claude\n');
  expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(saved);
- expect(readFileSync(f.preference,'utf8')).toBe('{"agent":"codex"}');
 });
 
-it('a fresh Codex run replaces a generic Claude default and preserves an explicit agent choice',async()=>{
+it('the caller environment picks the agent, and --agent wins',async()=>{
  const f=fixture();vi.stubEnv('CLAUDECODE','');
  writeFileSync(f.file,JSON.stringify({...method,steps:{write:{do:{kind:'agent',model:'default',prompt:'Return text.'},out:{text:{type:'text'}}}}}));
- writeFileSync(join(f.root,'runtime.json'),JSON.stringify({allow_local_processes:true,models:{default:{backend:'claude'}}}));
  expect(await runCurrentFile(f.file,{'run-dir':f.runDir})).toMatchObject({status:'completed',result:'codex'});
  expect(await runCurrentFile(f.file,{'run-dir':join(f.root,'explicit'),agent:'claude'})).toMatchObject({status:'completed',result:'claude'});
  expect(readFileSync(join(f.root,'calls'),'utf8')).toBe('codex\nclaude\n');

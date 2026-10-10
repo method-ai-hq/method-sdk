@@ -8,8 +8,8 @@ import type { MethodClient } from './method-client.js';
 
 /**
  * The outbox on this computer holds what must reach the account: package file uploads, version saves, and run records.
- * It sends them in parallel (6 at a time), retries with backoff, and stops only when no bytes moved for 60 s or the
- * server cannot be reached. What is left stays here; any later method command sends it.
+ * It sends them in parallel (6 at a time), retries with backoff, and stops when no bytes moved for 60 s, or after 3
+ * failures in a row that have no response, a server error, or too many requests. What is left stays here; any later method command sends it.
  *
  * Order: a version is sent after its files; a run record after its version. Every request is idempotent, so two
  * processes that send the same item do no harm.
@@ -60,7 +60,10 @@ export class Outbox {
   private wake: (() => void) | undefined;
   private lastProgress = Date.now();
   private networkFailures = 0;
+  /** Set when sending stopped after repeated failures. A later command tries again; this process does not wait again. */
+  private gaveUp = false;
   private stopped = false;
+  private foreground = false;
   private retryAt = new Map<string, { at: number; attempt: number }>();
   private waiters = new Map<string, Array<(saved: boolean) => void>>();
   private failures = new Map<string, string>();
@@ -113,10 +116,15 @@ export class Outbox {
     this.stopped = false;
     this.running = this.loop().catch(() => {}).finally(() => { this.running = undefined; this.settleWaiters(); });
   }
-  /** Send what is left. Resolves when the outbox is empty, no bytes moved for stallMs, or the server is unreachable. */
+  /**
+   * Send what is left. Resolves when the outbox is empty, no bytes moved for stallMs, or the server is unreachable.
+   * After this outbox gave up on a failing server, it resolves at once: the items stay for a later command.
+   */
   async drain() {
+    // A command waits for this: its timers keep the process alive, or Node would end it in the middle.
+    this.foreground = true;
     this.lastProgress = Date.now();
-    this.networkFailures = 0;
+    if (!this.gaveUp) this.networkFailures = 0;
     this.start();
     await this.running;
     return { pending: this.items().filter(item => !(item.kind === 'run' && this.owned.has(itemKey(item)))).length };
@@ -148,16 +156,18 @@ export class Outbox {
       if (!waiting.length || this.stopped) break;
       if (Date.now() - this.lastProgress > stallMs) break;
       // The server is unreachable: stop now and keep the items for a later command.
-      if (this.networkFailures >= 3 && !active.size) break;
+      if (this.networkFailures >= 3 && !active.size) { this.gaveUp = true; break; }
       if (!checked) { checked = true; await this.skipPresent(all.filter((item): item is FileItem => item.kind === 'file')); continue; }
       const now = Date.now();
       const next = waiting.filter(item => !active.has(itemKey(item)) && this.ready(item, all) && (this.retryAt.get(itemKey(item))?.at ?? 0) <= now);
+      // Nothing this process can send now or later (the rest belongs to another running Method process): stop.
+      if (!next.length && !active.size && !waiting.some(item => this.retryAt.has(itemKey(item)) || this.ready(item, all))) break;
       for (const item of next.slice(0, Math.max(0, limit - active.size))) {
         const key = itemKey(item);
         active.set(key, this.send(item).then(() => {
           rmSync(join(outboxDir(), `${key}.json`), { force: true });
           if (item.kind === 'file') rmSync(blobPath(item.sha256), { force: true });
-          this.retryAt.delete(key); this.networkFailures = 0; this.lastProgress = Date.now();
+          this.retryAt.delete(key); this.networkFailures = 0; this.gaveUp = false; this.lastProgress = Date.now();
         }, (error: any) => {
           const status = error?.status ?? Number(/^(\d{3}):/.exec(String(error?.message))?.[1]);
           if (status === 401) {
@@ -176,7 +186,9 @@ export class Outbox {
             (this.options.write ?? (line => process.stderr.write(line + '\n')))(`Not saved to your Method account: ${String(error.message ?? error)}`);
             return;
           }
-          if (networkError(error)) this.networkFailures++;
+          // No response, a server error, or too many requests: after 3 in a row, stop and keep the items for a later
+          // command. A finished run never waits for a server that keeps failing.
+          if (networkError(error) || status >= 500 || status === 429) this.networkFailures++;
           const attempt = (this.retryAt.get(key)?.attempt ?? 0) + 1;
           this.retryAt.set(key, { at: Date.now() + Math.min(30_000, 500 * 2 ** (attempt - 1)), attempt });
         }).finally(() => { active.delete(key); this.settleWaiters(); this.wake?.(); }));
@@ -184,7 +196,7 @@ export class Outbox {
       // Wait for a send to finish, a new item, or the next retry time.
       const due = Math.min(1000, ...[...this.retryAt.values()].map(r => Math.max(10, r.at - Date.now())));
       await new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, due); timer.unref?.();
+        const timer = setTimeout(resolve, due); if (!this.foreground) timer.unref?.();
         this.wake = () => { clearTimeout(timer); resolve(); };
         Promise.race(active.size ? [...active.values()] : [new Promise(() => {})]).then(() => { clearTimeout(timer); resolve(); });
       });
@@ -203,7 +215,10 @@ export class Outbox {
         }
       }
       this.lastProgress = Date.now();
-    } catch (error) { if (networkError(error)) this.networkFailures++; }
+    } catch (error: any) {
+      const status = error?.status ?? Number(/^(\d{3}):/.exec(String(error?.message))?.[1]);
+      if (networkError(error) || status >= 500 || status === 429) this.networkFailures++;
+    }
   }
   private async send(item: Item) {
     const stallMs = this.options.stallMs ?? Number(process.env.METHOD_OUTBOX_STALL_MS || 60_000);

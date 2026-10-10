@@ -9,15 +9,14 @@ function root(){const r=mkdtempSync(join(tmpdir(),'method-browser-'));roots.push
 const browserMethod:any={format:'method/3.1',name:'Browser test',goal:'Read sources',environment:{browser:{type:'browser',description:'Signed-in test site'}},steps:{read:{do:{kind:'agent',model:'default',browser:'environment.browser',prompt:'Read the site.'},changes:['environment.browser'],out:{sources:{type:'list',items:'text'}},check:{count:{value:'sources',min:1}}}},result:'sources'};
 it('registers direct browser-use tools, keeps schemas, and requires no author list',()=>{
  validateMethod(browserMethod);const config=browserConfig(browserMethod,{});expect(config.environment.browser).toBe('method-browser:default');
- expect(config.tools.browser_screenshot.parameters).toHaveProperty('type','object');expect(config.tools.browser_screenshot.effects).toEqual([]);expect(config.tools.browser_click.effects).toEqual(['browser']);
- expect(config.tools).not.toHaveProperty('retry_with_browser_use_agent');expect(config.tools).not.toHaveProperty('browser_extract_content');
+ expect(config.tools.browser_screenshot.parameters).toHaveProperty('type','object');
  expect(()=>browserConfig(browserMethod,{tools:{browser_click:{}}})).toThrow('conflicts');
  expect(()=>browserName({steps:{a:{do:{browser:'environment.a'}},b:{do:{browser:'environment.b'}}}})).toThrow('one browser');
 });
 it('keeps selected session refreshes separate from unrelated sites',async()=>{
  const {mergeSessions}=await import('../../packages/sdk/src/browser.js');
  const state=mergeSessions({cookies:[{domain:'.example.com',name:'old'},{domain:'other.test',name:'kept'}],origins:[]},{cookies:[{domain:'.example.com',name:'fresh'}],origins:[]},['www.example.com']);
- expect(state.cookies.map((c:any)=>c.name)).toEqual(['kept','fresh']);
+ expect(new Set(state.cookies.map((c:any)=>c.name))).toEqual(new Set(['kept','fresh']));
 });
 it('validates a browser Method without starting a browser or installing its libraries',async()=>{
  const r=root();const file=join(r,'task.method');writeFileSync(file,JSON.stringify(browserMethod));

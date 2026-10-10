@@ -1,0 +1,36 @@
+{
+  "format": "method-case/1",
+  "id": "dates-in-decisions",
+  "status": "active",
+  "method_file": "notes-summary.method",
+  "note": "The demo date in the decision says 14 Oct. Write dates in decisions as YYYY-MM-DD too, like the due dates.",
+  "author": null,
+  "created": "2026-10-10T02:18:15.490Z",
+  "source": {
+    "run_dir": "/work/notes-summary/run2",
+    "execution_id": "e8348baa-6be6-421e-b50d-0f86e4df765f",
+    "method_sha256": "a444edf4f50b1263e1a0b1037a26ba2db91a95f3508e2e6f11747f44d468fa7d",
+    "passing_run_dir": "/work/notes-summary/run3"
+  },
+  "expect": [
+    {
+      "kind": "rubric",
+      "ref": "outputs.path",
+      "criteria": [
+        {
+          "id": "c1",
+          "text": "Every date in a decision is written as YYYY-MM-DD."
+        }
+      ]
+    }
+  ],
+  "runs": null,
+  "min_pass": null,
+  "supersedes": [],
+  "superseded_by": null,
+  "files": {
+    "/work/notes-summary/out/weekly.md": "files/0"
+  },
+  "retention_until": "2027-10-10",
+  "redacted": true
+}

@@ -15,8 +15,10 @@ const result = await runMethod('task.method', {allow_local_processes: true}, {in
 console.log(result.status, inspectRun('runs/first'));
 ```
 
-New Methods use method/3.3; existing method/3.1 and method/3.2 documents remain supported. The executor is the pinned @withmethod/runtime dependency. Python uses method-bridge to call the same runtime.
+New Methods use method/3.4: models, limits, tools, secret names, and the Method ID are in the Method file. Documents in method/3.1 to 3.3 load and run unchanged. `runMethod` is the bare runtime: it does not sign in, save versions, or use hosted models; `method run` does. The executor is the pinned @withmethod/runtime dependency. Python uses method-bridge to call the same runtime.
+
+To run a published Method from an app, use `new Method().run({method: 'wf_…', inputs})`. See https://docs.withmethod.ai/guides/production.
 
 Browser-safe document modules are available at `@withmethod/sdk/schema`, `/validate`, `/execution`, `/inspection`, and `/result-files`. Node tools use `/identity`, `/method-package`, `/method-client`, `/method-sync`, and `/process`. Do not import the Node package root into a browser bundle.
 
-Before creating, editing, or proposing a Method, run `method authoring` and read its guidance. Do this before choosing an existing Method as a reference. The package includes reviewed examples. Saving and syncing need a Method account; local validation and execution do not.
+Before creating, editing, or proposing a Method, run `method authoring` and read its guidance. Do this before choosing an existing Method as a reference. The package includes reviewed examples. Saving versions, hosted models, and production runs need a Method account; local validation and script runs do not.
