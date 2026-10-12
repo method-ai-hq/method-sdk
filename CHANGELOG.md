@@ -1,3 +1,7 @@
+# 0.14.2
+
+- The Python library works with Method's production server: it names itself in each request (`withmethod-python/<version>`), because Cloudflare refuses the default Python user agent.
+
 # 0.14.1
 
 - The npm package is now `@method-ai-hq/sdk` (was `@withmethod/sdk`). Update imports and install lines.

@@ -31,6 +31,17 @@ TERMINAL = {"succeeded", "failed", "cancelled"}
 CREDENTIAL = re.compile(r"^(mk_live_|method_)[A-Za-z0-9_-]{43}$")
 
 
+
+def _user_agent() -> str:
+    try:
+        from importlib.metadata import version
+        return f"withmethod-python/{version('withmethod')}"
+    except Exception:
+        return "withmethod-python"
+
+
+USER_AGENT = _user_agent()
+
 class MethodApiError(WorkflowError):
     def __init__(self, status: int, code: str, message: str):
         super().__init__(message)
@@ -382,8 +393,9 @@ class Method:
 
     def _request(self, method: str, path: str, body: Json = None) -> dict[str, Json]:
         data = None if body is None else json.dumps(body).encode("utf-8")
+        # Cloudflare refuses the default Python-urllib user agent, so the library names itself.
         request = urllib.request.Request(self.server + path, data=data, method=method, headers={
-            "authorization": f"Bearer {self.api_key}", **({"content-type": "application/json"} if data is not None else {})})
+            "user-agent": USER_AGENT, "authorization": f"Bearer {self.api_key}", **({"content-type": "application/json"} if data is not None else {})})
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
                 return json.loads(response.read() or b"null")
