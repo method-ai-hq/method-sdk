@@ -4,14 +4,14 @@ After `npm run build`, run the same frozen package with different local file bin
 
 ```sh
 node testkit/portability/runtime-upgrade.mjs testkit/fixtures/runtime-upgrades/0.7.0.json
-npm pack --workspace @withmethod/sdk --ignore-scripts --pack-destination .tmp
+npm pack --workspace @method-ai-hq/sdk --ignore-scripts --pack-destination .tmp
 ```
 
 For Docker, substitute the tarball name from `npm pack` below:
 
 ```sh
 docker run --rm \
-  -v "$PWD/.tmp/withmethod-sdk-0.9.4.tgz:/tmp/sdk.tgz:ro" \
+  -v "$PWD/.tmp/method-ai-hq-sdk-0.14.1.tgz:/tmp/sdk.tgz:ro" \
   -v "$PWD/testkit/portability/runtime-upgrade.mjs:/app/check.mjs:ro" \
   -v "$PWD/testkit/fixtures/runtime-upgrades/0.7.0.json:/app/fixture.json:ro" \
   -w /app node:22-bookworm sh -c 'npm install --ignore-scripts --no-audit --no-fund /tmp/sdk.tgz && node check.mjs fixture.json'

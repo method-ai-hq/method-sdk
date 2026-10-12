@@ -30,7 +30,7 @@ def runtime_command(entry: str = "bridge") -> list[str]:
     installed = shutil.which("method-bridge" if entry == "bridge" else "method")
     if installed:
         return [installed]
-    raise WorkflowError("Install Node.js 22+ and @withmethod/sdk, or set METHOD_BRIDGE to the installed method-bridge executable.")
+    raise WorkflowError("Install Node.js 22+ and @method-ai-hq/sdk, or set METHOD_BRIDGE to the installed method-bridge executable.")
 
 
 def _call(payload: dict[str, Json], on_event: Callback | None = None) -> Json:

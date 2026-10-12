@@ -1,15 +1,15 @@
-# @withmethod/sdk
+# @method-ai-hq/sdk
 
 MIT-licensed JavaScript API and the `method` CLI. Source and releases: https://github.com/method-ai-hq/method-sdk
 
 ```sh
-npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.14.0/withmethod-sdk-0.14.0.tgz
+npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.14.1/method-ai-hq-sdk-0.14.1.tgz
 npx method --version
 ```
 
 ```js
 import {readFileSync} from 'node:fs';
-import {loadMethod, runMethod, inspectRun} from '@withmethod/sdk';
+import {loadMethod, runMethod, inspectRun} from '@method-ai-hq/sdk';
 const method = loadMethod(readFileSync('task.method', 'utf8'));
 const result = await runMethod('task.method', {allow_local_processes: true}, {inputs: {}, runDir: 'runs/first'});
 console.log(result.status, inspectRun('runs/first'));
@@ -19,6 +19,6 @@ New Methods use method/3.4: models, limits, tools, secret names, and the Method 
 
 To run a published Method from an app, use `new Method().run({method: 'wf_…', inputs})`. See https://docs.withmethod.ai/guides/production.
 
-Browser-safe document modules are available at `@withmethod/sdk/schema`, `/validate`, `/execution`, `/inspection`, and `/result-files`. Node tools use `/identity`, `/method-package`, `/method-client`, `/method-sync`, and `/process`. Do not import the Node package root into a browser bundle.
+Browser-safe document modules are available at `@method-ai-hq/sdk/schema`, `/validate`, `/execution`, `/inspection`, and `/result-files`. Node tools use `/identity`, `/method-package`, `/method-client`, `/method-sync`, and `/process`. Do not import the Node package root into a browser bundle.
 
 Before creating, editing, or proposing a Method, run `method authoring` and read its guidance. Do this before choosing an existing Method as a reference. The package includes reviewed examples. Saving versions, hosted models, and production runs need a Method account; local validation and script runs do not.

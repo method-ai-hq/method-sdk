@@ -32,7 +32,7 @@ export function detectLanguage(app: string): Language {
 function installLine(app: string, language: Language) {
   const has = (name: string) => existsSync(join(app, name));
   if (language === "node") {
-    const pack = process.env.METHOD_NODE_PACKAGE || "@withmethod/sdk";
+    const pack = process.env.METHOD_NODE_PACKAGE || "@method-ai-hq/sdk";
     return has("pnpm-lock.yaml") ? `pnpm add ${pack}` : has("yarn.lock") ? `yarn add ${pack}` : has("bun.lockb") || has("bun.lock") ? `bun add ${pack}` : `npm install ${pack}`;
   }
   const pack = process.env.METHOD_PYTHON_PACKAGE || "withmethod";
@@ -63,7 +63,7 @@ function example(document: any, language: Language, methodId: string, hasAsk: bo
   }
   const values = inputs.map(([name]) => name).join(", ");
   return [
-    'import { Method } from "@withmethod/sdk";',
+    'import { Method } from "@method-ai-hq/sdk";',
     "",
     "const method = new Method(); // reads METHOD_API_KEY from the environment or .env",
     "",

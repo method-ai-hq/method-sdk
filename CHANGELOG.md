@@ -1,3 +1,7 @@
+# 0.14.1
+
+- The npm package is now `@method-ai-hq/sdk` (was `@withmethod/sdk`). Update imports and install lines.
+
 # 0.14.0
 
 A first Method needs fewer steps, no keys, and no extra commands (runtime 0.12.0).

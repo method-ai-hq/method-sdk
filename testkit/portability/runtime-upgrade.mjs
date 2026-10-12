@@ -3,7 +3,7 @@ import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createRequire} from 'node:module';
-import {runSaved} from '@withmethod/sdk/run-saved';
+import {runSaved} from '@method-ai-hq/sdk/run-saved';
 const fixture=JSON.parse(readFileSync(process.argv[2],'utf8'));
 const before=JSON.stringify(fixture.saved);
 const root=mkdtempSync(join(tmpdir(),`method-${process.platform}-`));

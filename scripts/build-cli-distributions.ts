@@ -19,7 +19,7 @@ const hash=(b:Buffer)=>createHash('sha256').update(b).digest('hex');
 mkdirSync(cache,{recursive:true});mkdirSync(output,{recursive:true});
 const sdk=join(cache,'sdk');rmSync(sdk,{recursive:true,force:true});mkdirSync(sdk);
 writeFileSync(join(sdk,'package.json'),'{"private":true}');
-execFileSync('npm',['install','--ignore-scripts','--no-audit','--no-fund',join(root,`dist/release/withmethod-sdk-${version}.tgz`)],{cwd:sdk,stdio:'pipe'});
+execFileSync('npm',['install','--ignore-scripts','--no-audit','--no-fund',join(root,`dist/release/method-ai-hq-sdk-${version}.tgz`)],{cwd:sdk,stdio:'pipe'});
 for(const [target,checksum] of Object.entries(targets)){
  const name=`node-v${nodeVersion}-${target}`, archive=join(cache,`${name}.tar.gz`);
  if(!existsSync(archive)||hash(readFileSync(archive))!==checksum){
@@ -31,7 +31,7 @@ for(const [target,checksum] of Object.entries(targets)){
  // Keep Node, npm, and licenses. Headers and documentation are not runtime files.
  for(const name of ['include','share','CHANGELOG.md','README.md'])rmSync(join(stage,name),{recursive:true,force:true});
  cpSync(join(sdk,'node_modules'),join(stage,'sdk/node_modules'),{recursive:true});
- writeFileSync(join(stage,'method'),'#!/bin/sh\nset -eu\nentry="$0"\nwhile [ -L "$entry" ]; do link="$(readlink "$entry")"; case "$link" in /*) entry="$link";; *) entry="$(dirname "$entry")/$link";; esac; done\nbase="$(CDPATH= cd -- "$(dirname -- "$entry")" && pwd)"\nexport METHOD_RELEASE_ROOT="$base"\nexec "$base/bin/node" "$base/sdk/node_modules/@withmethod/sdk/dist/packages/sdk/src/method.js" "$@"\n',{mode:0o755});
+ writeFileSync(join(stage,'method'),'#!/bin/sh\nset -eu\nentry="$0"\nwhile [ -L "$entry" ]; do link="$(readlink "$entry")"; case "$link" in /*) entry="$link";; *) entry="$(dirname "$entry")/$link";; esac; done\nbase="$(CDPATH= cd -- "$(dirname -- "$entry")" && pwd)"\nexport METHOD_RELEASE_ROOT="$base"\nexec "$base/bin/node" "$base/sdk/node_modules/@method-ai-hq/sdk/dist/packages/sdk/src/method.js" "$@"\n',{mode:0o755});
  const packed=join(cache,`method-${version}-${target}.tar.gz`);
  execFileSync('tar',['--no-xattrs','-czf',packed,'-C',stage,'.'],{env:{...process.env,COPYFILE_DISABLE:'1'}});
  const data=readFileSync(packed),lines=[`version ${version}`,`runtime ${runtime}`,`sha256 ${hash(data)}`];

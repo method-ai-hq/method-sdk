@@ -29,7 +29,7 @@ progress('Rendered 12 of 40 pages', 12, 40, 'pages')
 print(json.dumps({'result': 'Final output'}))
 ```
 
-Node scripts can import `reportProgress` from `@withmethod/sdk`. A shell can use `method progress --message 'Rendered 12 of 40 pages' --completed 12 --total 40 --unit pages`.
+Node scripts can import `reportProgress` from `@method-ai-hq/sdk`. A shell can use `method progress --message 'Rendered 12 of 40 pages' --completed 12 --total 40 --unit pages`.
 
 Report real milestones or measured counts, and combine rapid updates at the producer. Use a short public sentence, not raw source contents or secrets. The executor adds the time, sequence, step, iteration, and phase. A message cannot override those fields. Counts must be nonnegative integers with `completed <= total` and `total > 0`. Text is limited to 1,000 characters, a child label to 100, and the unit to 50. Lines over 16 KB, malformed JSON, and bytes after the first 1 MB of progress per process are ignored. The result channel and exit status still work. Existing scripts need no changes if they do not report progress.
 
@@ -39,7 +39,7 @@ A script can start another agent and relay its public updates. It must keep the 
 
 ```js
 import { spawn } from 'node:child_process';
-import { relayCodexProgress } from '@withmethod/sdk';
+import { relayCodexProgress } from '@method-ai-hq/sdk';
 const child = spawn('codex', ['exec', '--json', '--output-last-message', 'result.json', 'Do the requested work.'], {
   stdio: ['ignore', 'pipe', 'inherit'], env: process.env
 });

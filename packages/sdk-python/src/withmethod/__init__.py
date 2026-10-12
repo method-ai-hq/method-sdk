@@ -1,4 +1,4 @@
-"""Python API for Method. Requires Node.js 22 and @withmethod/sdk."""
+"""Python API for Method. Requires Node.js 22 and @method-ai-hq/sdk."""
 from .client import WorkflowError, load_workflow, render_prompt, run_method
 from .production import Method, MethodApiError, Question, Worker, verify_webhook
 

@@ -1,5 +1,5 @@
 name: Publish packages
-# Publishes the exact files of a GitHub release to npm (@withmethod/sdk) and PyPI (withmethod), with trusted
+# Publishes the exact files of a GitHub release to npm (@method-ai-hq/sdk) and PyPI (withmethod), with trusted
 # publishing: npm and PyPI trust this workflow, so no token is stored. A version that is already published is skipped.
 on:
   release:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag, for example v0.14.0
+        description: Release tag, for example v0.14.1
         required: true
 permissions:
   contents: read
@@ -33,12 +33,12 @@ jobs:
       - name: Download the release package
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern 'withmethod-sdk-*.tgz' --dir dist
+        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern 'method-ai-hq-sdk-*.tgz' --dir dist
       - name: Publish to npm
         run: |
-          file=$(ls dist/withmethod-sdk-*.tgz)
+          file=$(ls dist/method-ai-hq-sdk-*.tgz)
           version=${TAG#v}
-          if npm view "@withmethod/sdk@$version" version >/dev/null 2>&1; then echo "@withmethod/sdk@$version is already on npm."; exit 0; fi
+          if npm view "@method-ai-hq/sdk@$version" version >/dev/null 2>&1; then echo "@method-ai-hq/sdk@$version is already on npm."; exit 0; fi
           npm publish "$file" --access public --provenance
   pypi:
     runs-on: ubuntu-latest

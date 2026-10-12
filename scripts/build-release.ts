@@ -9,7 +9,7 @@ const root=resolve(import.meta.dirname,'..'), output=join(root,'dist/release'), 
 rmSync(output,{recursive:true,force:true});rmSync(assets,{recursive:true,force:true});
 mkdirSync(output,{recursive:true});mkdirSync(assets,{recursive:true});
 execFileSync('npm',['run','build'],{cwd:root,stdio:'inherit'});
-execFileSync('npm',['pack','--workspace','@withmethod/sdk','--ignore-scripts','--pack-destination',output],{cwd:root,stdio:'pipe'});
+execFileSync('npm',['pack','--workspace','@method-ai-hq/sdk','--ignore-scripts','--pack-destination',output],{cwd:root,stdio:'pipe'});
 const packedSdk = readdirSync(output).find(name => name.endsWith('.tgz'))!;
 const packedFiles = new Set(execFileSync('tar', ['-tzf', join(output, packedSdk)], {encoding:'utf8'}).trim().split('\n'));
 const exampleFiles = JSON.parse(readFileSync(join(root,'packages/sdk/examples/files.json'),'utf8')) as string[];
