@@ -35,7 +35,7 @@ function installLine(app: string, language: Language) {
     const pack = process.env.METHOD_NODE_PACKAGE || "@method-ai-hq/sdk";
     return has("pnpm-lock.yaml") ? `pnpm add ${pack}` : has("yarn.lock") ? `yarn add ${pack}` : has("bun.lockb") || has("bun.lock") ? `bun add ${pack}` : `npm install ${pack}`;
   }
-  const pack = process.env.METHOD_PYTHON_PACKAGE || "withmethod";
+  const pack = process.env.METHOD_PYTHON_PACKAGE || "method-ai";
   return has("uv.lock") ? `uv add ${pack}` : has("poetry.lock") ? `poetry add ${pack}` : `pip install ${pack}`;
 }
 function example(document: any, language: Language, methodId: string, hasAsk: boolean) {

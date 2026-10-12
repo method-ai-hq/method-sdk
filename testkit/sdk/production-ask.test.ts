@@ -200,7 +200,7 @@ it("connect makes a key named after the app, writes it to .env without printing 
     const env = readFileSync(join(app, ".env"), "utf8");
     expect(env).toContain("ARCHIVE_TOKEN=keep-me\n"); expect(env).toContain(`METHOD_API_KEY=${key}`);
     expect(readFileSync(join(app, ".gitignore"), "utf8").split("\n")).toContain(".env");
-    expect(result).toMatchObject({ language: "python", published_version_id: "v_9", install: "pip install withmethod", secrets_to_set_on_the_host: ["ARCHIVE_TOKEN"] });
+    expect(result).toMatchObject({ language: "python", published_version_id: "v_9", install: "pip install method-ai", secrets_to_set_on_the_host: ["ARCHIVE_TOKEN"] });
     expect(result.code).toContain(`wf_${"a".repeat(32)}`);
     // Again: the app keeps its key.
     await connectCommand([app], client);

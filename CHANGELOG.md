@@ -1,3 +1,7 @@
+# 0.14.3
+
+- The Python package is now `method-ai` on PyPI (`pip install method-ai`); the import stays `from withmethod import Method`.
+
 # 0.14.2
 
 - The Python library works with Method's production server: it names itself in each request (`withmethod-python/<version>`), because Cloudflare refuses the default Python user agent.

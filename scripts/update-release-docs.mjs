@@ -7,7 +7,7 @@ for (const name of ['README.md','packages/sdk/README.md','packages/sdk-python/RE
   const path = new URL(name, root), source = readFileSync(path,'utf8');
   const text = source.replace(/releases\/download\/v[\d.]+\//g,`releases/download/v${sdk}/`)
     .replace(/method-ai-hq-sdk-[\d.]+\.tgz/g,`method-ai-hq-sdk-${sdk}.tgz`)
-    .replace(/withmethod-[\d.]+-py3-none-any\.whl/g,`withmethod-${python}-py3-none-any.whl`)
+    .replace(/method_ai-[\d.]+-py3-none-any\.whl/g,`method_ai-${python}-py3-none-any.whl`)
     .replace(/JavaScript SDK [\d.]+\./g,`JavaScript SDK ${sdk}.`);
   if (process.argv.includes('--check')) { if (source !== text) throw Error(`${name} has stale release instructions`); }
   else writeFileSync(path,text);

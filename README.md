@@ -7,14 +7,14 @@ The canonical source for the JavaScript SDK, Python binding, and `method` CLI. B
 ## Install
 
 ```sh
-npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.14.2/method-ai-hq-sdk-0.14.2.tgz
+npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.14.3/method-ai-hq-sdk-0.14.3.tgz
 method --version
 ```
 
 Node.js 22 or later is required. Python 3.9 or later uses the installed Node package:
 
 ```sh
-pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.14.2/withmethod-0.14.2-py3-none-any.whl
+pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.14.3/method_ai-0.14.3-py3-none-any.whl
 withmethod authoring
 ```
 
@@ -41,6 +41,6 @@ The Release workflow builds the npm archive, Python wheel, and four self-contain
 
 New Methods use `format: method/3.4`: models, limits, tools, and the Method ID are in the Method file, and no runtime.json is read. `method validate` reports a leftover runtime.json or FILE.method.json as an error and says what to move where. Effects confirm external changes; `method case new` and `method test` keep corrections as recorded cases. `method deploy` is removed: production runs use `method connect`, workers, or Method Cloud. The SDK uses one current runtime.
 
-Use `method`. The `workflow`, `sdk`, `method-run`, and `workflow-bridge` aliases are removed. Python keeps `withmethod`; `workflow-corp`, `method-python`, and the `workflow_corp` module are removed. `method-bridge` is the machine interface for Python.
+Use `method`. The `workflow`, `sdk`, `method-run`, and `workflow-bridge` aliases are removed. The Python package is `method-ai` on PyPI; its import and command stay `withmethod`. `workflow-corp`, `method-python`, and the `workflow_corp` module are removed. `method-bridge` is the machine interface for Python.
 
 JavaScript and Python use the same release version from 0.8 onward. Each versioned archive is immutable. Release builds start with clean staging, use a fixed wheel timestamp, and reject changed hashes for previously published filenames.

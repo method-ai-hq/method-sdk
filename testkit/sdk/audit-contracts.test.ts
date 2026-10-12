@@ -36,6 +36,6 @@ it('a local background run creates a worker that wait can reconnect to, and a se
  finally{process.execArgv=savedArgs;}
 },25000);
 it('release checks reject changed versioned wheels and allow alias changes',()=>{
- expect(()=>assertImmutableArtifacts([{name:'withmethod-0.8.0.whl',sha256:'new'}],[{name:'withmethod-0.8.0.whl',sha256:'old'}])).toThrow(/Use a new package version/);
+ expect(()=>assertImmutableArtifacts([{name:'method_ai-0.8.0-py3-none-any.whl',sha256:'new'}],[{name:'method_ai-0.8.0-py3-none-any.whl',sha256:'old'}])).toThrow(/Use a new package version/);
  expect(()=>assertImmutableArtifacts([{name:'cli/latest-linux-x64.txt',sha256:'new'}],[{name:'cli/latest-linux-x64.txt',sha256:'old'}])).not.toThrow();
 });

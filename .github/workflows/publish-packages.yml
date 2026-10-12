@@ -1,5 +1,5 @@
 name: Publish packages
-# Publishes the exact files of a GitHub release to npm (@method-ai-hq/sdk) and PyPI (withmethod), with trusted
+# Publishes the exact files of a GitHub release to npm (@method-ai-hq/sdk) and PyPI (method-ai), with trusted
 # publishing: npm and PyPI trust this workflow, so no token is stored. A version that is already published is skipped.
 on:
   release:
@@ -50,11 +50,11 @@ jobs:
       - name: Download the release wheel
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern 'withmethod-*.whl' --dir dist
+        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern 'method_ai-*.whl' --dir dist
       - name: Check whether this version is on PyPI
         id: check
         run: |
           version=${TAG#v}
-          if curl -sf "https://pypi.org/pypi/withmethod/$version/json" >/dev/null; then echo "withmethod $version is already on PyPI."; echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+          if curl -sf "https://pypi.org/pypi/method-ai/$version/json" >/dev/null; then echo "method-ai $version is already on PyPI."; echo "skip=true" >> "$GITHUB_OUTPUT"; fi
       - if: steps.check.outputs.skip != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1

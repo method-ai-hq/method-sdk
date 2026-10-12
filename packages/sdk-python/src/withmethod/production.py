@@ -35,7 +35,7 @@ CREDENTIAL = re.compile(r"^(mk_live_|method_)[A-Za-z0-9_-]{43}$")
 def _user_agent() -> str:
     try:
         from importlib.metadata import version
-        return f"withmethod-python/{version('withmethod')}"
+        return f"withmethod-python/{version('method-ai')}"
     except Exception:
         return "withmethod-python"
 
