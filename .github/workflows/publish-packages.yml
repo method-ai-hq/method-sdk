@@ -39,7 +39,8 @@ jobs:
           file=$(ls dist/method-ai-hq-sdk-*.tgz)
           version=${TAG#v}
           if npm view "@method-ai-hq/sdk@$version" version >/dev/null 2>&1; then echo "@method-ai-hq/sdk@$version is already on npm."; exit 0; fi
-          npm publish "$file" --access public --provenance
+          # ./ makes it a file: npm reads "dist/name.tgz" as a GitHub repository.
+          npm publish "./$file" --access public --provenance
   pypi:
     runs-on: ubuntu-latest
     environment: pypi
