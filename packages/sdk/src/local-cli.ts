@@ -30,13 +30,11 @@ export function parse(args: string[]) {
 }
 export async function run(target: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync): Promise<void> {
   const path = isWorkflowLink(target) ? (await saveWorkflowLink(target, process.cwd())).path : resolve(target);
-  const legacy = (await import("./method-issues.js")).legacyIssues(path);
-  if (legacy.length) throw Error(legacy.map(issue => `${issue.code}: ${issue.message} ${issue.fix}`).join('\n'));
+  (await import("./legacy.js")).convertLegacyOrThrow(path);
+  if (!syncFactory) await (await import("./home.js")).followAccount(new MethodClient(flags.server), path);
   loadWorkflow(methodContent(readDocument(path)));
   const notice = await (await import("./quality.js")).casesNotice(path);
   if (notice) process.stderr.write(notice + "\n");
-  const update = await (await import("./update.js")).updateNotice();
-  if (update) process.stderr.write(update + "\n");
   (await import("./prepare.js")).pruneCachedRuns();
   flags = { ...flags, "run-dir": flags["run-dir"] ?? join(process.cwd(), ".method-runs", randomUUID()) };
   const account = syncFactory ? undefined : await accountSync(path, flags);
@@ -77,6 +75,8 @@ async function accountSync(path: string, flags: ReturnType<typeof parse>["values
     const version = await prepareVersion(client, outbox, path);
     return { client, outbox, version, sync: () => new Sync(client, runDir, version.method_id, version.version_id, undefined, method.run_data === "device", outbox) };
   } catch (error) {
+    // A copy of a Method that is saved from another file must not run: the change belongs in that file.
+    if ((error as any).code === 'other_home') throw error;
     process.stderr.write(`Not saved to your Method account: ${(error as Error).message} The run continues on this computer.\n`);
     return undefined;
   }

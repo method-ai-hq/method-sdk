@@ -44,6 +44,10 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
   return true;
 }
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
+  const resumed = (await import('./resume-release.js')).resumeWithOriginalRelease(args);
+  if (resumed !== undefined) { process.exitCode = resumed; return; }
+  // An installed CLI keeps itself current in the background, with no output; this command is not delayed.
+  void (await import('./update.js')).updateInBackground();
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
   if (['improve','proposals','apply'].includes(args[0] ?? '')) return (await import('./proposals.js')).proposalCommand(args, clientFactory);
   await (await import('./proposals.js')).autoApply(args, clientFactory);
@@ -170,8 +174,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       try { await client.request("/api/cli/me"); signedIn = true; }
       catch (error) { if (!/^401:/.test(String((error as Error).message))) throw error; }
     }
-    const update = await (await import("./update.js")).updateNotice();
-    process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn, ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : {}), ...(update ? { update } : {}) }, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn, ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : {}) }, null, 2) + "\n");
     return;
   }
   // Without sign-in, explain prints one line and stops: script cards need a hosted model.
@@ -272,8 +275,13 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       // The id: line links the file to its Method; its content is the saved version.
       const { methodContent, writeMethodId } = await import("./versions.js");
       writeDocument(out, methodContent(workflow));
+      // An older saved version carries runtime.json; the file gets it in the Method, as in format 3.4.
+      (await import("./legacy.js")).convertLegacyOrThrow(out);
       writeMethodId(out, saved.workflow_id);
       (await import("./outbox.js")).recordCheckout(client.server, saved.workflow_id, saved.version_id, saved.version_number, methodContent(workflow));
+      // The new file becomes the Method's home on this computer unless another file already is.
+      const home = await import("./home.js");
+      try { home.claimHome(client.server, saved.workflow_id, out); home.recordHome(client.server, saved.workflow_id, out, { version_id: saved.version_id, files: home.writtenFiles(out, saved.package?.files ?? []) }); } catch { /* a copy for reading */ }
       print({
         workflow_id: saved.workflow_id,
         version_id: saved.version_id,

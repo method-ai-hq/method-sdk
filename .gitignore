@@ -12,3 +12,4 @@ build/
 runs/
 .method-runs/
 .tmp/
+.test-homes/

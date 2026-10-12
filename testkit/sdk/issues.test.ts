@@ -196,19 +196,43 @@ it('the private model list comes from the server and is kept for a day; method m
   await expect(methodMain(['models'], () => ({ ...client, token: () => null }))).rejects.toThrow('method login');
 });
 
-it('validate reports runtime.json and a sidecar as errors and changes no file', async () => {
-  const { dir, file } = folder(method().replace('format: method/3.4', 'format: method/3.3'), { 'copy.cjs': script,
-    'runtime.json': JSON.stringify({ models: { researcher: { backend: 'codex' } }, limits: { timeout_ms: 5000 } }) });
-  writeFileSync(`${file}.method.json`, JSON.stringify({ workflow_id: `wf_${'a'.repeat(32)}` }));
+it('validate moves runtime.json and the sidecar into the Method, then validates it', async () => {
+  const id = `wf_${'a'.repeat(32)}`;
+  const { dir, file } = folder(method().replace('format: method/3.4', 'format: method/3.2').replace('      spare: {type: text, description: Not used.}\n', '      spare: {type: text, description: Not used.}\n  draft:\n    name: Draft\n    in: {message: inputs.message}\n    do: {kind: call, model: planner, prompt: "Draft a reply to {{message}}."}\n    out: {reply: {type: text}}\n  research:\n    name: Research\n    in: {message: inputs.message}\n    do: {kind: agent, model: researcher, prompt: "Research {{message}}."}\n    out: {notes: {type: text}}\n'),
+    { 'copy.cjs': script, 'runtime.json': JSON.stringify({ allow_local_processes: true,
+      models: { researcher: { backend: 'codex', command: '/opt/codex' }, planner: { backend: 'openai-responses', model: 'gpt-5.4', api_key_env: 'OPENAI_API_KEY', max_output_tokens: 18000, reasoning_effort: 'medium' } },
+      limits: { timeout_ms: 5000, effect_wait_ms: 10 }, step_defaults: { timeout_ms: 1000 }, environment: { notes: 'notes' }, runtimes: { python: { command: 'python3', version: '3' } } }) });
+  writeFileSync(`${file}.method.json`, JSON.stringify({ workflow_id: id, base_version: 'version_x' }));
+  const result = printed();
+  await methodMain(['validate', file]);
+  expect(result()).toMatchObject({ valid: true });
+  expect(readdirSync(dir).sort()).toEqual(['copy.cjs', 'task.method']);
+  const saved = YAML.parse(readFileSync(file, 'utf8'));
+  expect(saved).toMatchObject({ format: 'method/3.4', id, models: { researcher: { agent: 'codex' }, planner: { model: 'openai/gpt-5.4', max_output_tokens: 18000, reasoning_effort: 'medium' } },
+    limits: { timeout_ms: 5000, step: { timeout_ms: 1000 } } });
+  expect(saved.limits.effect_wait_ms).toBeUndefined();
+  expect(readFileSync(file, 'utf8').split('\n').slice(0, 2)).toEqual(['format: method/3.4', `id: ${id}`]);
+  const { readComputerSettings } = await import('../../packages/sdk/src/computer-settings.js');
+  expect(readComputerSettings().bindings[id]).toEqual({ notes: join(dir, 'notes') });
+});
+
+it('a folder that cannot be converted stays as it was', async () => {
+  const { dir, file } = folder(method().replace('format: method/3.4', 'format: method/3.2').replace('      spare: {type: text, description: Not used.}\n', '      spare: {type: text, description: Not used.}\n  draft:\n    name: Draft\n    in: {message: inputs.message}\n    do: {kind: call, model: missing, prompt: "Draft {{message}}."}\n    out: {reply: {type: text}}\n'),
+    { 'copy.cjs': script, 'runtime.json': JSON.stringify({ models: { researcher: { backend: 'codex' } } }) });
   const snapshot = () => Object.fromEntries(readdirSync(dir).sort().map(name => [name, readFileSync(join(dir, name), 'utf8')]));
   const before = snapshot(), result = printed();
   await methodMain(['validate', file]);
   const output = result();
-  expect(process.exitCode).toBe(1);
   expect(output.valid).toBe(false);
-  const codes = output.issues.map((issue: any) => issue.code);
-  expect(codes).toEqual(expect.arrayContaining(['legacy_runtime_json', 'legacy_sidecar']));
-  await methodMain(['check', file]);
-  expect(result().valid).toBe(false);
+  expect(output.issues[0]).toMatchObject({ code: 'older_format' });
   expect(snapshot()).toEqual(before);
+});
+
+it('validate names the local agent for model steps when this computer runs them with one', async () => {
+  const { file } = folder(method().replace('      spare: {type: text, description: Not used.}\n', '      spare: {type: text, description: Not used.}\n  draft:\n    name: Draft\n    in: {message: inputs.message}\n    do: {kind: call, model: openai/gpt-5.4, prompt: "Draft {{message}}."}\n    out: {reply: {type: text}}\n'));
+  const { updateComputerSettings } = await import('../../packages/sdk/src/computer-settings.js');
+  updateComputerSettings(settings => { settings.agent = 'codex'; });
+  const result = printed();
+  await methodMain(['validate', file]);
+  expect(result().steps).toEqual(expect.arrayContaining([{ id: 'draft', runs: 'codex' }]));
 });

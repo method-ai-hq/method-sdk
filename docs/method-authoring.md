@@ -12,6 +12,9 @@
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand, and fix a wrong result in the Method, not in the data it reads. If you cannot run, say so.
 10. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
+11. **Talk about the work, not about Method.** Unless the user asks, do not mention Method's versions, formats, settings files, or other internal files, and do not ask the user about them, about models, or about which saved version to use. Method updates itself and converts older Method files when it runs them. When the user asks whether a Method works, or asks you to make it work, run it with the inputs of a recent run and show the result and the dashboard link in a few sentences. Say that it works only after a run completed.
+12. **One file for each Method.** Change and run a Method in its own file. Do not copy it to a temporary or other folder to change it: Method does not run or save the copy while the Method's file exists, and names that file.
+13. **Questions in a run are for the user.** When a run stops with `needs_input`, ask the user its `question` in plain words, wait for the answer, and continue the run with it as the output says. Never answer it yourself.
 
 When a run fails, read its `fix` and `diagnostics`, change the step, and run again.
 
@@ -392,12 +395,11 @@ To edit a failed method, read its exact saved version and logs, compare the curr
 For a stopped run, read summary.json, events.jsonl, and checkpoint.json. Resume with the original method, --run-dir DIR, and --resume. Accepted steps and iterations are reused.
 An unfinished action needs --retry STEP:ITERATION after inspection of its external effects. A retry consumes the remaining run budget. Budgets do not reset on resume. Resume always uses the run's saved bundle, so a code fix needs a new run.
 To fix a failed or wrong step, change it and run the Method again. The new run reuses every iteration whose step definition, inputs, model, tools, runtime, and (for script steps) bundle files match an earlier accepted run on this computer, and copies their declared file outputs. Steps with ask or effects, steps that change state or a service, and tools with effects are never reused. Use --rerun STEP to run a step again anyway, or --fresh to reuse nothing.
-For ask, supply --human FILE containing {steps: {"STEP:ITERATION": {outputs: {NAME: VALUE}}}}. Use the user's actual answer. Checks still run.
+For ask, supply --human FILE containing {steps: {"STEP": {outputs: {NAME: VALUE}}}} (STEP:ITERATION, counted from 0, for a step with each or repeat). Use the user's actual answer. Checks still run.
 A save never blocks a run: a run that cannot save says "Will save when online", and any later method command sends the outbox.
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
-Two computers can save different content of one Method; each becomes a version with its parent. Going back to earlier content finds its existing version. The id: line keeps a renamed or moved file on its Method; method new-id FILE makes a copy a new Method.
+Two computers can save different content of one Method; each becomes a version with its parent. Going back to earlier content finds its existing version. The id: line keeps a renamed or moved file on its Method; method new-id FILE makes a copy a new Method. On one computer a Method is saved from one file (every checkout of one Git repository counts as one): a copy in another folder or a temporary folder does not run while that file exists, and the error names the file to change. When that file is unchanged since its last save and the account has a newer version, a run takes that version first.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
-New Methods use format method/3.4. A signed-in run moves a method/3.1 to 3.3 file to 3.4 when it writes the id: line.
 After a failed action with effects, the failure lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
 
 
@@ -1679,7 +1681,7 @@ Models come from the Method's models: (or the account default); --agent codex|cl
 --resume: continue the same saved run with its saved agent.
 --rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
 --fresh: run every step; reuse nothing.
---human FILE: answers for ask steps, as {steps: {"STEP:ITERATION": {outputs: {...}}}}.
+--human FILE: answers for ask steps, as {steps: {"STEP": {outputs: {...}}}} (STEP:ITERATION, counted from 0, for a step with each or repeat).
 --verbose: print runtime events.
 Use method doctor to check the installed Node and configured tools.
 

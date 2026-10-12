@@ -43,6 +43,10 @@ function fixture() {
 it('runs without an installed agent, saves the model once, and reuses accepted classification on resume', async () => {
   const f = fixture();
   expect(await runCurrentFile(f.file,{'run-dir':f.runDir},undefined,undefined,f.client)).toMatchObject({status:'needs_input'});
+  // The output shows the question, so the agent can ask the user.
+  const printed = JSON.parse(String(vi.mocked(process.stdout.write).mock.calls.at(-1)![0]));
+  expect(printed).toMatchObject({status:'needs_input',question:{step:'confirm:0',question:'Continue?'}});
+  expect(printed.fix).toContain('Ask the user this question');
   const config = readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8');
   expect(JSON.parse(config)).toMatchObject({models:{},classification:{provider:'typesafe',model:'jev-test'}});
   const calls = (suffix: string) => f.fetcher.mock.calls.filter(([url]) => String(url).endsWith(suffix)).length;
@@ -53,7 +57,7 @@ it('runs without an installed agent, saves the model once, and reuses accepted c
   const response = inspection.invocations['classify:0']?.events.find(e=>e.type==='model_response');
   expect(response).toMatchObject({kind:'classify',model:'jev-test',confidence:.03,usage:null});
   expect(RunEventSchema.safeParse(response).success).toBe(true);
-  const human = join(f.root,'human.json'); writeFileSync(human,JSON.stringify({steps:{'confirm:0':{outputs:{answer:'yes'}}}}));
+  const human = join(f.root,'human.json'); writeFileSync(human,JSON.stringify({steps:{confirm:{outputs:{answer:'yes'}}}}));
   expect(await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true,human},undefined,undefined,f.client)).toMatchObject({status:'completed',result:{choice:'billing'}});
   expect([calls('/classifications/model'), calls('/classifications')]).toEqual([1, 1]);
   expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(config);

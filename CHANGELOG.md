@@ -1,3 +1,16 @@
+# 0.14.4
+
+A Method keeps working when Method changes, with nothing for the user to do or to answer.
+
+- **The CLI updates itself.** An installed CLI checks for a newer release at most once a day and installs it in the background, with no message; the next command uses it. The Method plugin also updates a CLI that is older than the plugin when a session starts. `METHOD_NO_UPDATE=1` turns this off. `method status` and `method run` no longer print an update notice.
+- **A resume uses the release that started the run**, so a run that waits on an ask step continues after an update.
+- **Older Method folders convert themselves.** `method run`, `method validate` and `method get` move a `runtime.json` and a `FILE.method.json` into the Method (format 3.4) and delete them: profiles become `models` (a direct OpenAI or Anthropic profile becomes the same model, hosted), limits become `limits`, folder paths become this computer's bindings. When the result would not validate, nothing changes and validate reports `older_format`. `method get` of an older saved version now gives a file that runs.
+- **One file for each Method on a computer.** Versions are saved from one file (all checkouts of one Git repository count as one). A copy in a temporary or another folder does not run while that file exists, and the error names the file. When that file is unchanged since its last save and the account has a newer version, a run takes it first, with no message.
+- **A run that waits for a person shows the question.** The `needs_input` result has the `question` text and its answer form, and the fix says to ask the user. `--human` accepts `"STEP"` for the first iteration.
+- `method validate` names the local agent for model steps when this computer runs them with one.
+- The authoring guide and the plugin tell the agent to talk about the user's work, not Method's versions, files, or settings, and to run a Method to show that it works.
+- The Method plugin no longer puts the CLI version in the session context.
+
 # 0.14.3
 
 - The Python package is now `method-ai` on PyPI (`pip install method-ai`); the import stays `from withmethod import Method`.

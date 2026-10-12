@@ -33,6 +33,11 @@ export function recentRuns(exclude: string, limit = 20) {
   }
   return [...found].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([dir]) => dir);
 }
+/** Answers for ask steps: a key without an iteration ("confirm") answers its first iteration ("confirm:0"). */
+export function answers(human: any) {
+  if (!human?.steps) return human;
+  return { ...human, steps: Object.fromEntries(Object.entries(human.steps).map(([key, value]) => [key.includes(':') ? key : `${key}:0`, value])) };
+}
 /**
  * Run a local Method file. The run starts at once: saving and run records go through the outbox and never stop or fail
  * the run. baseConfig is a configuration the SDK made (a saved version's package); otherwise localSetup builds it.
@@ -97,7 +102,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       cacheFrom: flags.resume ? [] : recentRuns(authoringPath(flags['run-dir']!)),
       fresh: flags.fresh ? true : flags.rerun?.length ? flags.rerun.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean) : undefined,
       secrets: { ...resolveSecrets(Object.keys(method.secrets ?? {})), ...Object.fromEntries(Object.entries(runSecrets).filter(([key]) => Object.hasOwn(method.secrets ?? {}, key))) }, ...(hostedModels ? { hostedModels } : {}),
-      human: json(flags.human), signal: controller.signal,
+      human: answers(json(flags.human)), signal: controller.signal,
       ...(browser ? {connections:browser.connections} : {}),
       sourceRoot, ...(classification ? {classification} : {}),
       processPath: prepared.processPath,
@@ -110,7 +115,10 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     });
     runFailed = !['completed','unconfirmed'].includes(result.status);
     const synced = await sync?.finish();
-    const display=synced?{...result,dashboard_sync:synced}:result;
+    let display:any=synced?{...result,dashboard_sync:synced}:result;
+    // A run that waits for a person shows the question itself, so the agent can ask the user and pass on the answer.
+    const question=result.status==='needs_input'?(await import('./worker.js')).lastQuestion(authoringPath(flags['run-dir']!)):null;
+    if(question)display={...display,question,fix:`Ask the user this question in plain words and wait for the answer; do not answer it yourself. Then write {"steps": {"${question.step}": {"outputs": {...}}}} with the user's answer (the fields are in question.form) to a file, and run the same command again with --resume --run-dir ${JSON.stringify(flags['run-dir'])} --human FILE.`};
     process.stdout.write(JSON.stringify(display, null, 2) + "\n");
     // 3: every step finished, but an observer could not confirm an external change.
     if (result.status !== "completed") process.exitCode = ({needs_input:2,unconfirmed:3} as Record<string,number>)[result.status] ?? 1;

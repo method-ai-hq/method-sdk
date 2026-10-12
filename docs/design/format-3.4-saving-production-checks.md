@@ -46,8 +46,10 @@ steps:
 - Runtimes (python, node) are found on PATH; the run record notes the version. `allow_local_processes` is true for
   the user's own Methods.
 - The sidecar `FILE.method.json`, the `FILE.lock` file, and the `pending` save state are deleted.
-- No converter. A runtime.json or a sidecar next to a Method is the error `legacy_runtime_json` or `legacy_sidecar`
-  in `method validate` and `method run`; the fix says what to move where, and validate changes no file.
+- `method run`, `method validate` and `method get` move a runtime.json and a sidecar into the Method and delete them
+  (`legacy.ts`): profiles become `models` (a direct API profile becomes the same model, hosted; codex and claude keep
+  their model and effort), `limits` and `step_defaults` become `limits`, `tools` stay, folder paths become this
+  computer's bindings. When the result does not validate, no file changes and validate reports `older_format`.
 
 ## 3. Saving by content
 

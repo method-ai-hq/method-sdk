@@ -7,6 +7,7 @@ import type { MethodClient } from './method-client.js';
 import { buildPackage } from './method-files.js';
 import { authoringPath, readDocument } from './authoring.js';
 import { Outbox, lastSaved, savedVersions } from './outbox.js';
+import { claimHome, recordHome, writtenFiles } from './home.js';
 
 export const methodIdPattern = /^wf_[a-f0-9]{32}$/;
 /** A new account Method ID, made on this computer. The first save of this ID creates the Method. */
@@ -79,10 +80,12 @@ export type PreparedVersion = { method_id: string; version_id: string; url: stri
  */
 export async function prepareVersion(client: MethodClient, outbox: Outbox, file: string, reason?: string): Promise<PreparedVersion> {
   const id = ensureMethodId(file);
+  claimHome(client.server, id, file);
   const workflow = loadWorkflow(methodContent(readDocument(file)));
   const { pack, sources, tooLarge } = await buildPackage(file, workflow);
   const versionId = versionIdFor(id, pack.digest);
   const url = `${client.server}/methods/${id}?version=${versionId}`;
+  recordHome(client.server, id, file, { version_id: versionId, files: writtenFiles(file, pack.files) });
   if (savedVersions(client.server)[versionId]) return { method_id: id, version_id: versionId, url, unchanged: true, workflow };
   const previous = lastSaved(client.server, id);
   if (tooLarge.length) process.stderr.write(`Not saved with this version (over 20 MB each; they stay on this computer): ${tooLarge.join(', ')}\n`);

@@ -61,29 +61,17 @@ export function privacyIssues(method: any, privateIds: Set<string>): Issue[] {
   }));
 }
 
-/**
- * legacy_runtime_json and legacy_sidecar: an old runtime.json or FILE.method.json is next to the Method. Method files
- * no longer read them, so a run would lose their settings. The fix says what to move where; nothing is changed here.
- */
-export function legacyIssues(file: string): Issue[] {
-  const path = authoringPath(file), folder = dirname(path), issues: Issue[] = [];
-  if (existsSync(join(folder, 'runtime.json'))) issues.push({ code: 'legacy_runtime_json', level: 'error',
-    message: `runtime.json is next to ${basename(path)}. Methods no longer read runtime.json, so its settings would be lost.`,
-    fix: 'Move each part into the Method, then delete runtime.json. models -> top-level models: (NAME: provider/model, or {model, max_output_tokens, reasoning_effort}); a profile with backend codex or claude -> NAME: {agent: codex|claude, model, reasoning_effort} (keep its model and reasoning_effort). limits -> top-level limits:. step_defaults -> limits.step. tools -> top-level tools:. environment paths -> method bind ID NAME --file FOLDER (a folder beside the Method with the connection name needs nothing). classification.api_key_env -> method config model-key. runtimes and allow_local_processes need nothing. Set format: method/3.4 and remove runtime.json from files:.' });
-  if (existsSync(`${path}.method.json`)) issues.push({ code: 'legacy_sidecar', level: 'error',
-    message: `${basename(path)}.method.json is next to ${basename(path)}. Methods keep their ID in the file now.`,
-    fix: `Put its workflow_id as the line id: wf_... directly after format: method/3.4 in ${basename(path)}, then delete ${basename(path)}.method.json.` });
-  return issues;
-}
-
 export type IssueReport = { issues: Issue[]; changed?: Set<string>; pending: number; notChecked: string[]; invalid?: boolean };
 /**
  * All issues of a Method file. With changed, model checks run for the steps whose text changed since the last
  * validate (in parallel, waitMs in all; the rest finish in the background). Without it, only cached answers are used.
  */
 export async function collectIssues(file: string, options: { phase?: 'validate' | 'publish'; waitMs?: number; client?: MethodClient; background?: boolean } = {}): Promise<IssueReport> {
-  const path = authoringPath(file), text = readFileSync(path, 'utf8');
-  const legacy = legacyIssues(path), first = [...legacy, ...methodIssues(text)];
+  const path = authoringPath(file);
+  try { (await import('./legacy.js')).convertLegacyOrThrow(path); }
+  catch (error) { return { issues: [{ code: 'older_format', level: 'error', message: (error as Error).message, fix: 'Fix what the message names in runtime.json or the Method, then validate again.' } as Issue], pending: 0, notChecked: [], invalid: true }; }
+  const text = readFileSync(path, 'utf8');
+  const first = methodIssues(text);
   if (first.some(issue => issue.level === 'error')) return { issues: first, pending: 0, notChecked: [], invalid: true };
   const method = parseDocumentValue(text), read = folderReader(path);
   const { deviceSecretValues, resolveSecrets } = await import('./secrets.js');

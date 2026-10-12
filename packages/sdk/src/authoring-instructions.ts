@@ -43,6 +43,9 @@ export const firstMethodRules = `# Build a Method
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** After a good run, show the result and the dashboard link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand, and fix a wrong result in the Method, not in the data it reads. If you cannot run, say so.
 10. **Publish** with \`method publish FILE --reason TEXT\` when the user wants to share or schedule a version. It runs the Method's cases first.
+11. **Talk about the work, not about Method.** Unless the user asks, do not mention Method's versions, formats, settings files, or other internal files, and do not ask the user about them, about models, or about which saved version to use. Method updates itself and converts older Method files when it runs them. When the user asks whether a Method works, or asks you to make it work, run it with the inputs of a recent run and show the result and the dashboard link in a few sentences. Say that it works only after a run completed.
+12. **One file for each Method.** Change and run a Method in its own file. Do not copy it to a temporary or other folder to change it: Method does not run or save the copy while the Method's file exists, and names that file.
+13. **Questions in a run are for the user.** When a run stops with \`needs_input\`, ask the user its \`question\` in plain words, wait for the answer, and continue the run with it as the output says. Never answer it yourself.
 
 When a run fails, read its \`fix\` and \`diagnostics\`, change the step, and run again.
 `;
