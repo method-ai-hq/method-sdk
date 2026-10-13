@@ -1,6 +1,6 @@
 # 0.16.0
 
-A failed run says what went wrong, whose problem it is, and what to do next (runtime 0f19bef).
+A failed run says what went wrong, whose problem it is, and what to do next (runtime 0.13.0).
 
 - **One failure record.** A run that stops has `failure` in its result, its `summary.json`, and its dashboard record: `owner` (whose problem it is: the Method's code, the agent's work, a service outside Method, a limit, your setup, your answer, or Method itself), `code`, a one-sentence `headline`, the step, its name and the failed tasks, the phase and check, `next` (an action and one sentence, sometimes a command), and the `evidence`, `details`, and `diagnostics`. The top-level `code`, `error`, `failed_step`, `iteration`, `diagnostics`, `fix`, and `recovery` fields are gone. A run that waits for an answer has `failure.next.text` that says to ask the user.
 - **Three plain lines for a failed run.** `method run` prints `Failed:`, `Whose problem:`, and `Next:` on stderr. The JSON on stdout keeps its form.
