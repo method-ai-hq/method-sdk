@@ -14,6 +14,7 @@ import { workerRunId } from './run-worker.js';
 import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
 import { withInputsFrom } from './inputs-from.js';
+import { setupFailure } from './failure.js';
 
 // Older versions are listed only after their saved-package tests pass.
 const supportedPackageRuntimes = new Set([runtimeVersion, '0.11.1', '0.11.0', '0.10.0', '0.9.5', '0.9.4', '0.9.3', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
@@ -94,7 +95,8 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     if(acquired&&finishedRun(result.status)){await client.request(statePath,'POST',{action:'release',run_id:request.run_id});acquired=false;}
     return {run_id:request.run_id,directory,...result};
   } catch(error:any) {
-    writePrivateJson(join(directory,'setup-error.json'),{code:error.code??'setup_failed',error:error.message,...(error.missing?{missing:error.missing}:{})});
+    // The run stopped before its first step: setup-error.json holds its failure record.
+    writePrivateJson(join(directory,'setup-error.json'),setupFailure(error));
     setupEvents.push({at:new Date().toISOString(),type:'setup_failed',detail:error.message});writePrivateJson(setupFile,setupEvents);
     await sync.finish(error);
     if(error.code==='needs_input'){process.stdout.write(JSON.stringify({status:'needs_input',run_id:request.run_id,run_dir:directory,message:error.message,missing:error.missing,continue:`method run ${saved.workflow_id} --version ${saved.version_id} --resume --run-dir ${JSON.stringify(directory)}`})+'\n');process.exitCode=2;return;}

@@ -46,7 +46,7 @@ it('runs without an installed agent, saves the model once, and reuses accepted c
   // The output shows the question, so the agent can ask the user.
   const printed = JSON.parse(String(vi.mocked(process.stdout.write).mock.calls.at(-1)![0]));
   expect(printed).toMatchObject({status:'needs_input',question:{step:'confirm:0',question:'Continue?'}});
-  expect(printed.fix).toContain('Ask the user this question');
+  expect(printed.failure.next.text).toContain('Ask the user this question');
   const config = readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8');
   expect(JSON.parse(config)).toMatchObject({models:{},classification:{provider:'typesafe',model:'jev-test'}});
   const calls = (suffix: string) => f.fetcher.mock.calls.filter(([url]) => String(url).endsWith(suffix)).length;

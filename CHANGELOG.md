@@ -1,3 +1,16 @@
+# 0.16.0
+
+A failed run says what went wrong, whose problem it is, and what to do next (runtime 0f19bef).
+
+- **One failure record.** A run that stops has `failure` in its result, its `summary.json`, and its dashboard record: `owner` (whose problem it is: the Method's code, the agent's work, a service outside Method, a limit, your setup, your answer, or Method itself), `code`, a one-sentence `headline`, the step, its name and the failed tasks, the phase and check, `next` (an action and one sentence, sometimes a command), and the `evidence`, `details`, and `diagnostics`. The top-level `code`, `error`, `failed_step`, `iteration`, `diagnostics`, `fix`, and `recovery` fields are gone. A run that waits for an answer has `failure.next.text` that says to ask the user.
+- **Three plain lines for a failed run.** `method run` prints `Failed:`, `Whose problem:`, and `Next:` on stderr. The JSON on stdout keeps its form.
+- **`method wait` ends with the run's status** (`succeeded`, `unconfirmed`, `waiting_for_you`, or `failed`) and the headline of a failure, not `finished`.
+- **Run records use the runtime's statuses.** An inspection has `status` `running`, `waiting_for_you`, `succeeded`, `unconfirmed`, or `failed` (no `needs_attention`) and the failure record (no `error`). The failed tasks of the failed step are `failed`; other tasks that were running when the run stopped are `stopped`, with no copied error. Only the final run event gives the run a duration. Events keep a task `total` without a count, and notices keep their `key`, `attempt`, and `attempts`. A `run_data: device` record keeps the failure record without its evidence, details, and diagnostics.
+- **The runtime gives the agent one more attempt after a failed check** of an `agent` or `call` step with no `changes` or `effects`, with the check's reason and evidence in the prompt. The run records `step.retry`. A failed task of a parallel `each` step no longer stops the other tasks; the step fails after they end, with all failed tasks in `failure.failed_iterations`.
+- **Notices.** The run records a `notice` event for each retry of a model or service, each error or warning that Codex or Claude Code reports, and a limit that is 80% used. Each user-facing event has a plain `message`.
+- `ownerText(owner)` from `@method-ai-hq/sdk/inspection` gives the words for each owner.
+- The authoring guide tells the agent to read `failure.headline` and `failure.next` when a run fails.
+
 # 0.15.1
 
 - The start link of a saved Method's run opens the run. Its records now use the run ID of the start line, so the page no longer waits for a record that never comes.

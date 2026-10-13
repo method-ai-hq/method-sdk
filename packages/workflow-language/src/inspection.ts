@@ -2,7 +2,27 @@ import { AttachedFileSchema, MAX_RESULT_FILES } from "./result-files.js";
 import { z } from "zod";
 import { JsonSchema, WorkflowSchema, effectiveOutputs, executionText, type Json, type Step, type Workflow, type Shape } from "./schema.js";
 import { producers, references, referenceShape } from "./validate.js";
-export const FailureSchema = z.strictObject({ phase: z.enum(["environment", "input", "action", "check", "change"]), expected: z.string(), observed: z.string(), evidence: z.array(z.string()) });
+export const FailureOwnerSchema = z.enum(["method_code", "agent_work", "outside_service", "limit", "setup", "needs_you", "method_platform"]);
+export type FailureOwner = z.infer<typeof FailureOwnerSchema>;
+/** The runtime's failure record of a run that stopped: whose problem it is, where in the Method, and the next action. */
+export const FailureSchema = z.strictObject({
+  owner: FailureOwnerSchema, code: z.string(), headline: z.string(),
+  step: z.string().nullable(), step_name: z.string().nullable(),
+  iteration: z.number().int().nonnegative().nullable(), failed_iterations: z.array(z.number().int().nonnegative()), total: z.number().int().nonnegative().nullable(),
+  phase: z.enum(["action", "check", "effect", "tool", "setup"]).nullable(), check_name: z.string().nullable(),
+  next: z.strictObject({ action: z.enum(["fix_method", "run_again", "raise_limit", "fix_setup", "answer", "report_bug"]), text: z.string(), command: z.string().optional() }),
+  // Run content. The device form of a run record (deviceOnly) has no evidence, details, or diagnostics.
+  evidence: z.array(z.string()).optional(), details: z.string().optional(), diagnostics: z.string().optional(),
+});
+export type RunFailure = z.infer<typeof FailureSchema>;
+const ownerTexts: Record<FailureOwner, string> = {
+  method_code: "Problem in the Method's code", agent_work: "The agent's work did not pass", outside_service: "A service outside Method",
+  limit: "A limit was reached", setup: "Your setup", needs_you: "Needs your answer", method_platform: "A problem in Method",
+};
+/** Whose problem a failure is, in a few plain words. */
+export function ownerText(owner: FailureOwner): string { return ownerTexts[owner]; }
+export const RunStatusSchema = z.enum(["running", "waiting_for_you", "succeeded", "unconfirmed", "failed"]);
+export type RunStatus = z.infer<typeof RunStatusSchema>;
 // What a script process was seen to do (runtime observed_effects): hosts, paths, variable names, and program names.
 const observedList = z.array(z.string()).max(200);
 export const ObservedEffectsSchema = z.union([
@@ -20,20 +40,22 @@ export const RunEventSchema = z.strictObject({
   tool: z.string().optional(), call_id: z.string().optional(), command: z.string().optional(),
   exit_code: z.number().int().nullable().optional(), diagnostics: z.string().optional(),
   child: z.string().max(100).optional(), completed: z.number().int().nonnegative().optional(),
-  total: z.number().int().positive().optional(), unit: z.string().max(50).optional(),
+  total: z.number().int().nonnegative().optional(), unit: z.string().max(50).optional(),
+  // Notice events: key is the same for each repeat of one problem, so a newer notice replaces an older one.
+  key: z.string().max(500).optional(), attempt: z.number().int().positive().optional(), attempts: z.number().int().positive().optional(),
 });
 export const InspectionSchema = z.strictObject({
   started_at: z.string().optional(), device_name: z.string().optional(),
   local_run_directory: z.string().optional(),
   // run_data: device. The run's content stays on the device that ran it.
   content: z.literal("device").optional(),
-  schema: z.literal("workflow-inspection/2"), workflow: WorkflowSchema, run_id: z.string(), status: z.string(), error: z.string().optional(), failure: FailureSchema.optional(),
+  schema: z.literal("workflow-inspection/2"), workflow: WorkflowSchema, run_id: z.string(), status: RunStatusSchema, failure: FailureSchema.optional(),
   inputs: z.record(JsonSchema), state: z.record(JsonSchema).optional(), resources: z.record(z.strictObject({ description: z.string(), setup: z.string().optional(), path: z.string().optional() })),
   environment: z.record(z.object({ result: z.enum(["pass", "fail", "ambiguous"]), summary: z.string(), evidence: z.array(z.string()) })).optional(),
   files: z.array(AttachedFileSchema).max(MAX_RESULT_FILES).optional(),
   events: z.array(RunEventSchema).optional(),
   invocations: z.record(z.strictObject({
-    step_id: z.string(), status: z.string(), verification: z.enum(["checked", "unchecked"]).optional(), error: z.string().optional(), failure: FailureSchema.optional(), inputs: z.record(JsonSchema).optional(), outputs: z.record(JsonSchema).optional(),
+    step_id: z.string(), status: z.enum(["running", "returned", "passed", "skipped", "waiting_for_you", "failed", "stopped"]), verification: z.enum(["checked", "unchecked"]).optional(), inputs: z.record(JsonSchema).optional(), outputs: z.record(JsonSchema).optional(),
     checks: z.array(z.object({ id: z.string(), result: z.enum(["pass", "fail", "ambiguous"]), summary: z.string(), evidence: z.array(z.string()), method: z.string() })), changes: z.record(JsonSchema),
     prompts: z.array(z.strictObject({ sequence: z.number().int(), phase: z.enum(["action", "check"]), template: z.string(), rendered: z.string() })).optional(),
     events: z.array(RunEventSchema),
@@ -88,20 +110,21 @@ export function observedValue(item: InspectItem, inspection: RunInspection, invo
 }
 
 /**
- * The device form of a run record (run_data: device). Keep step status, kinds, names, timing, and the phase of a failure. Remove inputs, outputs,
- * prompts, files, errors, and free text. The server accepts only this form when an organization keeps run content on devices.
+ * The device form of a run record (run_data: device). Keep step status, kinds, names, timing, task counts, and the failure record without its
+ * evidence, details, and diagnostics. Remove inputs, outputs, prompts, files, event text, and other free text. The server accepts only this
+ * form when an organization keeps run content on devices.
  */
 export function deviceOnly(inspection: RunInspection): RunInspection {
-  const failure = (value?: RunInspection['failure']) => value ? { failure: { phase: value.phase, expected: '', observed: '', evidence: [] } } : {};
-  const event = ({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }: any) =>
-    Object.fromEntries(Object.entries({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }).filter(([, value]) => value !== undefined)) as any;
+  const failure = inspection.failure ? (({ evidence, details, diagnostics, ...kept }) => ({ failure: kept }))(inspection.failure) : {};
+  const event = ({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code, completed, total, key, attempt, attempts }: any) =>
+    Object.fromEntries(Object.entries({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code, completed, total, key, attempt, attempts }).filter(([, value]) => value !== undefined)) as any;
   return {
-    schema: inspection.schema, content: 'device', workflow: inspection.workflow, run_id: inspection.run_id, status: inspection.status, ...failure(inspection.failure),
+    schema: inspection.schema, content: 'device', workflow: inspection.workflow, run_id: inspection.run_id, status: inspection.status, ...failure,
     ...(inspection.started_at ? { started_at: inspection.started_at } : {}), ...(inspection.device_name ? { device_name: inspection.device_name } : {}),
     inputs: {}, resources: Object.fromEntries(Object.entries(inspection.resources).map(([name, value]) => [name, { description: value.description }])),
     ...(inspection.events ? { events: inspection.events.map(event) } : {}),
     invocations: Object.fromEntries(Object.entries(inspection.invocations).map(([id, value]) => [id, {
-      step_id: value.step_id, status: value.status, ...(value.verification ? { verification: value.verification } : {}), ...failure(value.failure),
+      step_id: value.step_id, status: value.status, ...(value.verification ? { verification: value.verification } : {}),
       checks: value.checks.map(check => ({ id: check.id, result: check.result, summary: '', evidence: [], method: check.method })), changes: {}, events: value.events.map(event),
     }])),
   } as RunInspection;

@@ -176,7 +176,7 @@ export class Method {
       const run = await this.runs.get(runId);
       if (run.status !== "waiting" || !run.question) throw new MethodApiError(409, "not_waiting", `The run is ${run.status}; it has no question to answer.`);
       const asked = this.openQuestion(run);
-      try { assertSchema(asked.form, answer, "Answer"); }
+      try { assertSchema(asked.form, answer, "Answer", { producer: "the answer", owner: "needs_you" }); }
       catch (error) { throw new MethodApiError(422, "invalid_answer", (error as Error).message); }
       const body = run.question.sealed ? { step: run.question.step, sealed_answer: seal(this.api.apiKey, "answer", run.method_id, answer) } : { step: run.question.step, answer };
       return this.withLocal((await this.api.request<ProductionRun>(`/v1/runs/${encodeURIComponent(runId)}/answer`, "POST", body)).body);

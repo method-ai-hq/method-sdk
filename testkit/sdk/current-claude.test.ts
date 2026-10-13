@@ -24,6 +24,6 @@ it('passes structured results through the real Method tool bridge without bare m
 });
 it('preserves a provider error and cancels a stuck child process',async()=>{
  const failed=fixture('console.log(JSON.stringify({type:"result",subtype:"error_during_execution",is_error:true,errors:["Sign in to Claude"]}));');
- expect(await failed.run()).toMatchObject({status:'failed',error:'Sign in to Claude'});
+ expect(await failed.run()).toMatchObject({status:'failed',failure:{owner:'outside_service',details:expect.stringContaining('Sign in to Claude')}});
  const stuck=fixture('setInterval(()=>{},1000)',100);const start=Date.now();expect((await stuck.run()).status).toBe('failed');expect(Date.now()-start).toBeLessThan(4000);
 });

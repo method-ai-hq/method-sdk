@@ -21,16 +21,8 @@ import { writePrivateJson } from "./files.js";
 import { loadWorkflow } from "../../workflow-language/src/validate.js";
 
 import { methodHelp, overviewHelp as help } from "./method-help.js";
-import { fixFor } from "@withmethod/runtime/runner.js";
 
 /** The next step for a failure before the first step. */
-export function setupFix(error: any) {
-  if (error.code === 'missing_secret') {
-    const names = (error.missing ?? []).join(' ');
-    return `No step ran. Run method secret find to see which nearby files hold ${names}, then method secret import FILE ${names}; or ask the user to enter each one with method secret set NAME (a private form in their browser). Never open or print a key file, and never ask for a value in chat.`;
-  }
-  return fixFor(error);
-}
 function safePath(path: string) {
   return authoringPath(path);
 }
@@ -81,8 +73,11 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     try { await methodMain(JSON.parse(readFileSync(file,'utf8')).args,clientFactory); }
     catch(error:any){
       // A run that fails before its first step still prints one result that says why and what to do.
-      const failed={status:error.code==='needs_input'?'needs_input':'failed',run_dir:directory,code:error.code??'setup_failed',error:error.message,...(error.missing?{missing:error.missing}:{}),fix:setupFix(error)};
+      const {setupFailure,failureLines}=await import('./failure.js');
+      const failure=setupFailure(error);
+      const failed={status:error.code==='needs_input'?'needs_input':'failed',run_dir:directory,failure,...(error.missing?{missing:error.missing}:{})};
       if(!existsSync(join(directory,'summary.json')))writePrivateJson(join(directory,'summary.json'),failed);
+      if(failed.status==='failed')process.stderr.write(failureLines(failure));
       process.stdout.write(JSON.stringify(failed,null,2)+'\n');process.exitCode=error.code==='needs_input'?2:1;
     }
     finally {writePrivateJson(join(directory,'worker.json'),{status:'finished',pid:process.pid,exit_code:Number(process.exitCode??0)});}

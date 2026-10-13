@@ -28,11 +28,13 @@ it('a local background run creates a worker that wait can reconnect to, and a se
  const entry=resolve('packages/sdk/src/method.ts'),loader=resolve('node_modules/tsx/dist/loader.mjs'),run=join(dir,'run');
  const call=(args:string[])=>execFileSync(process.execPath,['--import',loader,entry,...args],{cwd:dir,encoding:'utf8',timeout:20000});
  expect(JSON.parse(call(['run','task.method','--background','--run-dir',run])).status).toBe('started');
- expect(call(['wait',run])).toContain('done');
+ const waited=call(['wait',run]);expect(waited).toContain('done');
+ // The final line gives the run status, not the worker's.
+ expect(JSON.parse(waited.trimEnd().split('\n').at(-1)!)).toMatchObject({status:'succeeded',exit_code:0});
  expect(JSON.parse(readFileSync(join(run,'worker.json'),'utf8'))).toMatchObject({status:'finished',exit_code:0});
  vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
  const savedArgs=[...process.execArgv];process.execArgv=['--import','tsx'];
- try{await startRunWorker(['--version'],run,true);expect(await waitForRun(run)).toMatchObject({status:'finished',exit_code:0});}
+ try{await startRunWorker(['--version'],run,true);expect(await waitForRun(run)).toMatchObject({status:'succeeded',exit_code:0});}
  finally{process.execArgv=savedArgs;}
 },25000);
 it('release checks reject changed versioned wheels and allow alias changes',()=>{

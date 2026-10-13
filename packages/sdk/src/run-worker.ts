@@ -5,6 +5,8 @@ import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writePrivateJson } from './files.js';
 import { runDashboard } from './method-sync.js';
+import { runStatus } from './current-inspection.js';
+import { unreadableRecord } from './failure.js';
 
 /** server: the signed-in Method server, so that the start line links to the run's dashboard page. */
 export async function startRunWorker(args:string[], directory:string, background=false, server?:string) {
@@ -69,7 +71,16 @@ export async function waitForRun(directory:string) {
     if(existsSync(file)){
       const status=JSON.parse(readFileSync(file,'utf8'));
       const dashboard=runDashboard(directory),link=dashboard?{dashboard}:{};
-      if(status.status!=='running'){process.exitCode=status.exit_code??1;return {...status,...link};}
+      if(status.status!=='running'){
+        // The final line gives the run's own status, and the headline of a failure.
+        process.exitCode=status.exit_code??1;
+        const summary=existsSync(join(directory,'summary.json'))?JSON.parse(readFileSync(join(directory,'summary.json'),'utf8')):undefined;
+        const result=runStatus(summary?.status);
+        // A worker command that is not a run (no run record) and exits 0 only finished.
+        if(!result&&process.exitCode===0)return {...status,...link};
+        const failure=result?summary.failure:unreadableRecord(Error('The run has no readable summary.json.'));
+        return {status:result??'failed',run_dir:directory,exit_code:process.exitCode,...(failure&&result!=='succeeded'?{headline:failure.headline}:{}),...link};
+      }
       if(!workerAlive(directory)){process.exitCode=1;return {status:'interrupted',run_dir:directory,...link,message:'The worker stopped. Inspect its run record before resuming.'};}
     }
     if(!existsSync(file)&&Date.now()>deadline)throw Error('The run worker did not start. Inspect worker.stderr.log in the run folder.');

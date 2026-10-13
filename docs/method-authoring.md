@@ -18,7 +18,7 @@
 14. **Make each run easy to find and to run again.** Give the Method a `run_label` that tells its runs apart, such as `inputs.topic`. When an input can be empty and a default picks the value, point `run_label` at the step output that holds the resolved value, not at the input. Put the readable output, such as the report text or the message, in `result`, not only in files. Write a `run_prompt` that says where each input comes from (for example "as_of is today's date in YYYY-MM-DD") and what to show at the end. Leave SDK, runtime, and version details out of it.
 15. **Run again from the dashboard.** When the user pastes a "Run again" prompt from the dashboard, run with `--inputs-from RUN_ID` and change only what the prompt names: put those values in a file and add `--inputs FILE`.
 
-When a run fails, read its `fix` and `diagnostics`, change the step, and run again.
+When a run fails, read failure.headline and failure.next, change what they name, and run again.
 
 # Write each prompt
 
@@ -402,7 +402,7 @@ A save never blocks a run: a run that cannot save says "Will save when online", 
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
 Two computers can save different content of one Method; each becomes a version with its parent. Going back to earlier content finds its existing version. The id: line keeps a renamed or moved file on its Method; method new-id FILE makes a copy a new Method. On one computer a Method is saved from one file (every checkout of one Git repository counts as one): a copy in another folder or a temporary folder does not run while that file exists, and the error names the file to change. When that file is unchanged since its last save and the account has a newer version, a run takes that version first.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
-After a failed action with effects, the failure lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
+After a failed action with effects, failure.next.text lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
 
 
 # Command reference
@@ -630,7 +630,7 @@ Arguments and defaults:
 Use the directory returned by run. Closing this output connection leaves the worker active.
 
 Result and changes:
-Live output, then the final worker status with the dashboard link of a synced run.
+Live output, then a final line with the run status (succeeded, unconfirmed, waiting_for_you, or failed), the headline of a failure, and the dashboard link of a synced run.
 
 Errors:
 Stopped process or missing run.
@@ -1689,7 +1689,7 @@ Models come from the Method's models: (or the account default); --agent codex|cl
 Use method doctor to check the installed Node and configured tools.
 
 Result and changes:
-When signed in, the start line and the final result have dashboard: the link to the run's page; give it to the user when the run starts. Progress and final status text; local result.json and run evidence. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Runs exit 0 on completion, 1 on failure, 2 when human input is needed, and 3 when an observer could not confirm an external change (unconfirmed).
+When signed in, the start line and the final result have dashboard: the link to the run's page; give it to the user when the run starts. Progress, then the final result as JSON on stdout; a run that stopped has failure (owner, headline, step, next), and a failed run also prints Failed, Whose problem, and Next lines on stderr. Local result.json and run evidence. The runtime executes the method's declared scripts, calls, agents, and checks. Executes trusted local processes; changes declarations do not enforce permissions. Runs exit 0 on completion, 1 on failure, 2 when human input is needed, and 3 when an observer could not confirm an external change (unconfirmed).
 
 Errors:
 Missing inputs/access, failed check, timeout, unsafe resume/version mismatch, upload failure. See recovery. Never retry a business write without inspecting its saved changes.

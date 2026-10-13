@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { inspectRun } from "./inspect.js";
+import { setupFailure, unreadableRecord } from "./failure.js";
 import { writePrivateJson } from "./files.js";
 import { MethodClient } from "./method-client.js";
 import {
@@ -216,11 +217,8 @@ export class MethodSync {
         inspection = {
           ...this.initial,
           events: existsSync(join(this.directory,"setup.json")) ? JSON.parse(readFileSync(join(this.directory,"setup.json"),"utf8")) : this.initial.events,
-          status: "needs_attention",
-          error:
-            failure instanceof Error
-              ? failure.message
-              : String(failure ?? error),
+          // A run that failed before its first step has the failure record of its setup error; otherwise Method could not read the record.
+          ...((record => ({ status: record.code === "needs_input" ? "waiting_for_you" : "failed", failure: record }))(failure ? setupFailure(failure) : unreadableRecord(error))),
         };
         // A run that failed before its first step keeps this record for a later sync.
         writePrivateJson(join(this.directory, "setup-inspection.json"), inspection);

@@ -20,7 +20,7 @@ it('method run reuses unchanged accepted steps of an earlier run after a fix to 
  writeFileSync(join(root,'slow.mjs'),`import{appendFileSync}from'node:fs';appendFileSync(${JSON.stringify(calls)},'x');console.log(JSON.stringify({value:41}))`);
  writeFileSync(join(root,'finish.mjs'),'console.log(JSON.stringify({wrong:1}))');
  const failed=await runCurrentFile(join(root,'task.method'),{'run-dir':join(runs,'first')});
- expect(failed).toMatchObject({status:'failed',code:'invalid_output',failed_step:'finish'});
+ expect(failed).toMatchObject({status:'failed',failure:{code:'invalid_output',step:'finish'}});
  writeFileSync(join(root,'finish.mjs'),`import{readFileSync}from'node:fs';const a=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({total:a.value+1}))`);
  const result=await runCurrentFile(join(root,'task.method'),parse(['run',join(root,'task.method'),'--run-dir',join(runs,'second')]).values);
  expect(result).toMatchObject({status:'completed',result:42,reused:{slow:1}});

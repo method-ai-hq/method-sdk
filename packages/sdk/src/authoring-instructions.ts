@@ -49,7 +49,7 @@ export const firstMethodRules = `# Build a Method
 14. **Make each run easy to find and to run again.** Give the Method a \`run_label\` that tells its runs apart, such as \`inputs.topic\`. When an input can be empty and a default picks the value, point \`run_label\` at the step output that holds the resolved value, not at the input. Put the readable output, such as the report text or the message, in \`result\`, not only in files. Write a \`run_prompt\` that says where each input comes from (for example "as_of is today's date in YYYY-MM-DD") and what to show at the end. Leave SDK, runtime, and version details out of it.
 15. **Run again from the dashboard.** When the user pastes a "Run again" prompt from the dashboard, run with \`--inputs-from RUN_ID\` and change only what the prompt names: put those values in a file and add \`--inputs FILE\`.
 
-When a run fails, read its \`fix\` and \`diagnostics\`, change the step, and run again.
+When a run fails, read failure.headline and failure.next, change what they name, and run again.
 `;
 
 /** How to write the prompt inside a call, agent, or classify step. */

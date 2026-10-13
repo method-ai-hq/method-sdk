@@ -10,7 +10,7 @@ export function inspectRun(directory: string, options: { includeFiles?: boolean 
   if (!existsSync(join(root,"method.json")) && existsSync(join(root,"setup-inspection.json")) && existsSync(join(root,"request.json"))) {
     const initial=JSON.parse(readFileSync(join(root,"setup-inspection.json"),"utf8"));
     const failure=existsSync(join(root,"setup-error.json"))?JSON.parse(readFileSync(join(root,"setup-error.json"),"utf8")):null;
-    return InspectionSchema.parse({...initial,local_run_directory:root,...(failure?{status:'needs_attention',error:failure.error}:{}),events:existsSync(join(root,"setup.json"))?JSON.parse(readFileSync(join(root,"setup.json"),"utf8")):[]});
+    return InspectionSchema.parse({...initial,local_run_directory:root,...(failure?{status:failure.code==='needs_input'?'waiting_for_you':'failed',failure}:{}),events:existsSync(join(root,"setup.json"))?JSON.parse(readFileSync(join(root,"setup.json"),"utf8")):[]});
   }
   if (existsSync(join(root, "method.json"))) return inspectCurrentRun(root, options.activeSnapshot, options.includeFiles);
   throw Error("UNSUPPORTED_RUN: only current Method run records are supported.");

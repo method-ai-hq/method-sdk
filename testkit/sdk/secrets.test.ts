@@ -50,15 +50,17 @@ it('gives declared secrets to scripts, and stops before the first step when one 
   expect(await runCurrentFile(join(root, 'task.method'), { 'run-dir': join(root, 'runs/two') })).toMatchObject({ status: 'completed', result: 6 });
 });
 
-it('a device-only inspection keeps the run shape and drops its content', () => {
-  const inspection: any = { schema: 'workflow-inspection/2', workflow: { format: 'method/3.3' }, run_id: 'r', status: 'failed', error: 'private error', failure: { phase: 'check', expected: 'private expected', observed: 'private observed', evidence: ['quote'] }, device_name: 'laptop', inputs: { member: 'Maeby' },
-    resources: { notes: { description: 'Notes', path: '/private/notes' } }, files: [{ name: 'x' }], events: [{ at: 't', type: 'step_started', detail: 'private text' }],
-    invocations: { 'write:0': { step_id: 'write', status: 'failed', error: 'private step error', failure: { phase: 'action', expected: 'private', observed: 'private', evidence: ['quote'] }, inputs: { a: 1 }, outputs: { b: 2 }, prompts: [{}], checks: [{ id: 'c', result: 'pass', summary: 'private', evidence: ['quote'], method: 'agent' }], changes: { x: 1 }, events: [{ at: 't', type: 'model_response', detail: 'answer' }] } } };
+it('a device-only inspection keeps the run shape and the failure record, and drops its content', () => {
+  const failure = { owner: 'agent_work', code: 'check_failed', headline: 'The check Sources open did not pass in task 5 of 12.', step: 'write', step_name: 'Write', iteration: 4, failed_iterations: [4], total: 12,
+    phase: 'check', check_name: 'Sources open', next: { action: 'run_again', text: 'Run the Method again.' }, evidence: ['quote'], details: 'private details', diagnostics: 'private stderr' };
+  const inspection: any = { schema: 'workflow-inspection/2', workflow: { format: 'method/3.3' }, run_id: 'r', status: 'failed', failure, device_name: 'laptop', inputs: { member: 'Maeby' },
+    resources: { notes: { description: 'Notes', path: '/private/notes' } }, files: [{ name: 'x' }], events: [{ at: 't', type: 'step_started', detail: 'private text', total: 12 }, { at: 't', type: 'notice', detail: 'private notice', key: 'write:4:retry:model', attempt: 2, attempts: 3 }],
+    invocations: { 'write:4': { step_id: 'write', status: 'failed', inputs: { a: 1 }, outputs: { b: 2 }, prompts: [{}], checks: [{ id: 'c', result: 'pass', summary: 'private', evidence: ['quote'], method: 'agent' }], changes: { x: 1 }, events: [{ at: 't', type: 'model_response', detail: 'answer' }] } } };
   const shown = deviceOnly(inspection);
-  expect(shown).toMatchObject({ content: 'device', inputs: {}, device_name: 'laptop', resources: { notes: { description: 'Notes' } }, invocations: { 'write:0': { step_id: 'write', status: 'failed', changes: {} } } });
-  expect(shown.failure).toEqual({ phase: 'check', expected: '', observed: '', evidence: [] });
-  expect(shown.invocations['write:0'].failure).toEqual({ phase: 'action', expected: '', observed: '', evidence: [] });
-  expect(JSON.stringify(shown)).not.toMatch(/Maeby|private|quote|answer|outputs|prompts|files|error/);
+  expect(shown).toMatchObject({ content: 'device', inputs: {}, device_name: 'laptop', resources: { notes: { description: 'Notes' } }, invocations: { 'write:4': { step_id: 'write', status: 'failed', changes: {} } } });
+  const { evidence, details, diagnostics, ...kept } = failure;
+  expect(shown.failure).toEqual(kept);
+  expect(shown.events).toEqual([{ at: 't', type: 'step_started', total: 12 }, { at: 't', type: 'notice', key: 'write:4:retry:model', attempt: 2, attempts: 3 }]);
+  expect(JSON.stringify(shown)).not.toMatch(/Maeby|private|quote|answer|outputs|prompts|files|details|diagnostics/);
   expect(deviceOnly({ ...inspection, failure: undefined }).failure).toBeUndefined();
 });
-

@@ -311,11 +311,12 @@ export function cliExecutor(options: { command?: string[] } = {}): Executor {
         try { timeoutMs = JSON.parse(readFileSync(join(dir, "saved.method"), "utf8")).steps?.[question.step.split(":")[0]!]?.limits?.timeout_ms; } catch { /* Default. */ }
         return { status: "waiting", question, ...(typeof timeoutMs === "number" ? { timeoutMs } : {}) };
       }
-      return { status: "failed", error: { code: "needs_input", message: String(summary.error ?? "The run needs input that a production worker cannot give.") } };
+      return { status: "failed", error: { code: "needs_input", message: String(summary.failure?.headline ?? "The run needs input that a production worker cannot give.") } };
     }
-    if (summary?.status === "failed") return { status: "failed", error: { code: summary.code ?? "execution_failed", message: String(summary.error ?? "The run failed.") } };
+    // Production keeps its own run statuses; the failure record gives the code and the headline.
+    if (summary?.status === "failed") return { status: "failed", error: { code: summary.failure?.code ?? "execution_failed", message: String(summary.failure?.headline ?? "The run failed.") } };
     const setup = read("setup-error.json");
-    if (setup) return { status: "failed", error: { code: setup.code, message: String(setup.error) }, retryable: !finalCodes.has(setup.code) };
+    if (setup) return { status: "failed", error: { code: setup.code, message: String(setup.headline) }, retryable: !finalCodes.has(setup.code) };
     return { status: "failed", error: { code: "worker_failed", message: `The run process stopped (exit ${code}). See ${join(dir, "worker.stderr.log")}.` }, retryable: true };
   };
 }

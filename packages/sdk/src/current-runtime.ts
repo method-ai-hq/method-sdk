@@ -14,6 +14,7 @@ import { runMethod as executeMethod } from "@withmethod/runtime/runner.js";
 import { localSetup } from "./local-setup.js";
 import { authoringPath } from "./authoring.js";
 import type { MethodSync } from "./method-sync.js";
+import { failureLines } from "./failure.js";
 import type { parse } from "./local-cli.js";
 
 export { executeMethod as runCurrentMethod };
@@ -118,7 +119,9 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     let display:any=synced?{...result,dashboard:sync!.dashboard,dashboard_sync:synced}:result;
     // A run that waits for a person shows the question itself, so the agent can ask the user and pass on the answer.
     const question=result.status==='needs_input'?(await import('./worker.js')).lastQuestion(authoringPath(flags['run-dir']!)):null;
-    if(question)display={...display,question,fix:`Ask the user this question in plain words and wait for the answer; do not answer it yourself. Then write {"steps": {"${question.step}": {"outputs": {...}}}} with the user's answer (the fields are in question.form) to a file, and run the same command again with --resume --run-dir ${JSON.stringify(flags['run-dir'])} --human FILE.`};
+    if(question&&display.failure)display={...display,question,failure:{...display.failure,next:{...display.failure.next,text:`Ask the user this question in plain words and wait for the answer; do not answer it yourself. Then write {"steps": {"${question.step}": {"outputs": {...}}}} with the user's answer (the fields are in question.form) to a file, and run the same command again with --resume --run-dir ${JSON.stringify(flags['run-dir'])} --human FILE.`}}};
+    // People read three plain lines on stderr; agents, apps, and tests parse the JSON on stdout.
+    if (result.status === "failed" && display.failure) process.stderr.write(failureLines(display.failure) + (display.dashboard ? `Dashboard: ${display.dashboard}\n` : ""));
     process.stdout.write(JSON.stringify(display, null, 2) + "\n");
     // 3: every step finished, but an observer could not confirm an external change.
     if (result.status !== "completed") process.exitCode = ({needs_input:2,unconfirmed:3} as Record<string,number>)[result.status] ?? 1;
