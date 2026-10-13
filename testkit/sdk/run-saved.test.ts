@@ -98,3 +98,10 @@ it('sends only the device form of the run when the organization keeps run conten
   expect(JSON.parse(readFileSync(join(f.flags['run-dir'],'method-sync.json'),'utf8')).device).toBe(keep?true:undefined);
  }
 });
+// The run worker's start line links to the run with the ID in run-id.json; the run's records use that ID.
+it('sends its records with the run ID that the start line linked to',async()=>{
+ const f=fixture();mkdirSync(f.flags['run-dir'],{recursive:true});
+ writeFileSync(join(f.flags['run-dir'],'run-id.json'),JSON.stringify({id:'5d1f7c3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f'}));
+ expect(await runSaved(f.saved,f.flags,f.client)).toMatchObject({status:'completed'});
+ expect(f.client.request.mock.calls.some(([path]:any[])=>path==='/api/cli/runs/5d1f7c3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f')).toBe(true);
+});

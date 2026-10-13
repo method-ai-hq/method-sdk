@@ -10,6 +10,7 @@ import { runCurrentFile } from './current-runtime.js';
 import { MethodSync } from './method-sync.js';
 import { recordKnownVersion } from './outbox.js';
 import { writePrivateJson } from './files.js';
+import { workerRunId } from './run-worker.js';
 import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
 import { withInputsFrom } from './inputs-from.js';
@@ -26,7 +27,8 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   const requestFile=join(directory,'request.json');
   const prior=existsSync(requestFile)?JSON.parse(readFileSync(requestFile,'utf8')):null;
   if(prior && (prior.workflow_id!==saved.workflow_id||prior.version_id!==saved.version_id))throw Error('This run belongs to another saved version.');
-  const request=prior??{run_id:randomUUID(),workflow_id:saved.workflow_id,version_id:saved.version_id,server:client.server};
+  // A run started by the run worker keeps the ID that its start line linked to.
+  const request=prior??{run_id:workerRunId(directory)??randomUUID(),workflow_id:saved.workflow_id,version_id:saved.version_id,server:client.server};
   if(prior&&!flags.resume)throw Error('This run already exists. Use --resume.');
   writePrivateJson(requestFile,request);
   const sync=new MethodSync(client,directory,saved.workflow_id,saved.version_id,request.run_id,saved.workflow?.run_data==='device');

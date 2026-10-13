@@ -39,6 +39,10 @@ export async function startRunWorker(args:string[], directory:string, background
   } finally {closeSync(lockFd);rmSync(lock,{force:true});}
   if(!background)await waitForRun(directory);
 }
+/** The run ID that the worker's start line links to, when a run worker started this run. */
+export function workerRunId(directory:string):string|undefined {
+  const identity=join(resolve(directory),'run-id.json');return existsSync(identity)?JSON.parse(readFileSync(identity,'utf8')).id:undefined;
+}
 export function workerAlive(directory:string) {
   const path=join(resolve(directory),'worker.json');if(!existsSync(path))return false;
   const state=JSON.parse(readFileSync(path,'utf8'));if(state.status!=='running')return false;

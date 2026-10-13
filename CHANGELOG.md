@@ -1,3 +1,7 @@
+# 0.15.1
+
+- The start link of a saved Method's run opens the run. Its records now use the run ID of the start line, so the page no longer waits for a record that never comes.
+
 # 0.15.0
 
 - **Run again with the inputs of an earlier run.** `method run FILE|ID --inputs-from RUN_ID` uses the inputs of that run. `--inputs FILE` given with it replaces single values. The inputs of an account run come from the account. The inputs of a `run_data: device` run come from its run folder on this computer (in `.method-runs` here and beside the Method, and in the CLI's run cache), found by its dashboard run ID; so do the inputs of any run when the account cannot be reached. When no run has the ID, the error says where it looked.
