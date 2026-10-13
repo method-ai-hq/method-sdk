@@ -73,7 +73,9 @@ async function accountSync(path: string, flags: ReturnType<typeof parse>["values
     if (needs.classification && !client.token()) await client.login();
     if (!client.token()) { process.stderr.write(`Sign in to keep versions and runs in your account${needs.models ? " and to use hosted models" : ""}: method login\n`); return undefined; }
     const version = await prepareVersion(client, outbox, path);
-    return { client, outbox, version, sync: () => new Sync(client, runDir, version.method_id, version.version_id, undefined, method.run_data === "device", outbox) };
+    // A run started by the run worker keeps the ID that its start line linked to.
+    const identity = join(runDir, "run-id.json"), runId = existsSync(identity) ? JSON.parse(readFileSync(identity, "utf8")).id : undefined;
+    return { client, outbox, version, sync: () => new Sync(client, runDir, version.method_id, version.version_id, runId, method.run_data === "device", outbox) };
   } catch (error) {
     // A copy of a Method that is saved from another file must not run: the change belongs in that file.
     if ((error as any).code === 'other_home') throw error;

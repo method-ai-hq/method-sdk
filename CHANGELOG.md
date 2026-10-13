@@ -1,3 +1,8 @@
+# 0.14.6
+
+- **A run links to its dashboard page from the start.** When this computer is signed in, the start line of `method run` has `dashboard`, the link to the run's page. The final result and the last line of `method wait` have it too. Before the run's first record arrives, the page waits for it. The `Dashboard:` line on stderr is gone.
+- The authoring guide and the plugin tell the agent to give the user the link as soon as the run starts.
+
 # 0.14.5
 
 - A Method file in JSON keeps its home: a copy no longer takes over the home of a JSON Method file.

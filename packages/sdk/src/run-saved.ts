@@ -45,7 +45,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   const setupEvents=existsSync(setupFile)?JSON.parse(readFileSync(setupFile,'utf8')):[];
   setupEvents.push({at:new Date().toISOString(),type:'setup_started'});writePrivateJson(setupFile,setupEvents);
   await sync.start(saved.workflow,inputs,{});
-  process.stderr.write(`Local run: ${directory}\n`);
+  process.stderr.write(`Local run: ${directory}\nDashboard: ${sync.dashboard}\n`);
   let acquired=false, started=false, revision=0;
   const statePath=`/api/cli/methods/${encodeURIComponent(saved.workflow_id)}/state`;
   try {

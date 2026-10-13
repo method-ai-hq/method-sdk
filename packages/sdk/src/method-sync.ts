@@ -72,6 +72,10 @@ export class MethodSync {
   get device() {
     return this.state.device === true;
   }
+  /** The run's dashboard page. Before the first record arrives, the page waits for it. */
+  get dashboard() {
+    return dashboardUrl(this.state);
+  }
   private get item(): RunItem {
     return { kind: "run", server: this.client.server, run_dir: this.directory, version_id: this.state.version_id, pid: process.pid };
   }
@@ -110,10 +114,6 @@ export class MethodSync {
       true,
       { stallMs: 60_000 },
     ));
-    if (!this.state.dashboard_id)
-      process.stderr.write(
-        `Dashboard: ${this.client.server}/runs/${result.id}\n`,
-      );
     this.state.dashboard_id = result.id;
     this.save();
     this.warned = false;
@@ -269,6 +269,16 @@ export class MethodSync {
     await sync.upload(inspection);
     sync.outbox.remove(sync.item);
   }
+}
+
+/** The dashboard page of a run: its saved ID, or before the first record, the ID that this computer gave it. */
+function dashboardUrl(state: z.infer<typeof SyncSchema>) {
+  return `${state.server}/runs/${state.dashboard_id ?? state.id}`;
+}
+/** The dashboard page of the run in a run folder, when the run is linked to an account. */
+export function runDashboard(directory: string) {
+  const path = join(directory, "method-sync.json");
+  return existsSync(path) ? dashboardUrl(SyncSchema.parse(JSON.parse(readFileSync(path, "utf8")))) : undefined;
 }
 
 async function retryTransfer<T>(send:()=>Promise<T>):Promise<T> {

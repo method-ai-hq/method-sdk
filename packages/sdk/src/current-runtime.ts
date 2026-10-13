@@ -115,7 +115,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     });
     runFailed = !['completed','unconfirmed'].includes(result.status);
     const synced = await sync?.finish();
-    let display:any=synced?{...result,dashboard_sync:synced}:result;
+    let display:any=synced?{...result,dashboard:sync!.dashboard,dashboard_sync:synced}:result;
     // A run that waits for a person shows the question itself, so the agent can ask the user and pass on the answer.
     const question=result.status==='needs_input'?(await import('./worker.js')).lastQuestion(authoringPath(flags['run-dir']!)):null;
     if(question)display={...display,question,fix:`Ask the user this question in plain words and wait for the answer; do not answer it yourself. Then write {"steps": {"${question.step}": {"outputs": {...}}}} with the user's answer (the fields are in question.form) to a file, and run the same command again with --resume --run-dir ${JSON.stringify(flags['run-dir'])} --human FILE.`};

@@ -4,8 +4,10 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync, write
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writePrivateJson } from './files.js';
+import { runDashboard } from './method-sync.js';
 
-export async function startRunWorker(args:string[], directory:string, background=false) {
+/** server: the signed-in Method server, so that the start line links to the run's dashboard page. */
+export async function startRunWorker(args:string[], directory:string, background=false, server?:string) {
   directory=resolve(directory);mkdirSync(directory,{recursive:true,mode:0o700});
   const file=join(directory,'worker-request.json'),status=join(directory,'worker.json');
   const lock=join(directory,'worker-start.lock');let lockFd:number;
@@ -30,7 +32,8 @@ export async function startRunWorker(args:string[], directory:string, background
   await new Promise<void>((yes,no)=>{child.once('spawn',yes);child.once('error',no);});
   child.unref();
   // The child owns its status record after startup. Do not overwrite a fast completion.
-  process.stdout.write(JSON.stringify({status:'started',run_id:runId,run_dir:directory,wait:`method wait ${JSON.stringify(directory)}`,cancel:`method cancel ${JSON.stringify(directory)}`})+'\n');
+  const dashboard=runDashboard(directory)??(server?`${server}/runs/${runId}`:undefined);
+  process.stdout.write(JSON.stringify({status:'started',run_id:runId,...(dashboard?{dashboard}:{}),run_dir:directory,wait:`method wait ${JSON.stringify(directory)}`,cancel:`method cancel ${JSON.stringify(directory)}`})+'\n');
   const startupDeadline=Date.now()+30_000;
   while(!existsSync(status)){if(Date.now()>startupDeadline)throw Error('The worker did not write its status. Inspect its error log.');await new Promise(r=>setTimeout(r,50));}
   } finally {closeSync(lockFd);rmSync(lock,{force:true});}
@@ -61,8 +64,9 @@ export async function waitForRun(directory:string) {
     const file=join(directory,'worker.json');
     if(existsSync(file)){
       const status=JSON.parse(readFileSync(file,'utf8'));
-      if(status.status!=='running'){process.exitCode=status.exit_code??1;return status;}
-      if(!workerAlive(directory)){process.exitCode=1;return {status:'interrupted',run_dir:directory,message:'The worker stopped. Inspect its run record before resuming.'};}
+      const dashboard=runDashboard(directory),link=dashboard?{dashboard}:{};
+      if(status.status!=='running'){process.exitCode=status.exit_code??1;return {...status,...link};}
+      if(!workerAlive(directory)){process.exitCode=1;return {status:'interrupted',run_dir:directory,...link,message:'The worker stopped. Inspect its run record before resuming.'};}
     }
     if(!existsSync(file)&&Date.now()>deadline)throw Error('The run worker did not start. Inspect worker.stderr.log in the run folder.');
     await new Promise(r=>setTimeout(r,500));

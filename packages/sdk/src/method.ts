@@ -40,7 +40,10 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
   const directory = safePath(flags['run-dir'] ?? join(methodCache(), 'runs', randomUUID()));
   const workerArgs = [...args.filter(arg => arg !== '--background'), ...extra];
   if (!flags['run-dir']) workerArgs.push('--run-dir', directory);
-  await startRunWorker(workerArgs, directory, flags.background);
+  // A new run of a signed-in computer is synced; a resumed run keeps the link that it has.
+  let server: string | undefined;
+  try { const client = new MethodClient(flags.server); if (!flags.resume && client.token()) server = client.server; } catch { /* Not signed in to this server. */ }
+  await startRunWorker(workerArgs, directory, flags.background, server);
   return true;
 }
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {

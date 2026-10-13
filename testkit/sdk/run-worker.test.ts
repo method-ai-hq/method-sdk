@@ -32,3 +32,17 @@ it('waits and cancels a live worker without PATH tools, and rejects a duplicate 
   out.mockRestore();process.exitCode=0;rmSync(root,{recursive:true,force:true});
  }
 },10000);
+it('links the run to its dashboard page when it starts and when it finishes',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'method-worker-link-'));
+ const out=vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
+ const savedArgs=[...process.execArgv];process.execArgv=['--import','tsx'];
+ try {
+  await startRunWorker(['--version'],root,true,'https://app.example');
+  const started=JSON.parse(String(out.mock.calls[0]![0]));
+  const runId=JSON.parse(readFileSync(join(root,'run-id.json'),'utf8')).id;
+  expect(started).toMatchObject({status:'started',run_id:runId,dashboard:`https://app.example/runs/${runId}`});
+  // After the first record is saved, the link names the saved run.
+  writeFileSync(join(root,'method-sync.json'),JSON.stringify({schema:'method-sync/1',server:'https://app.example',id:runId,workflow_id:'wf_x',version_id:'v_x',sequence:1,dashboard_id:'run_saved'}));
+  expect(await waitForRun(root)).toMatchObject({status:'finished',dashboard:'https://app.example/runs/run_saved'});
+ } finally {process.execArgv=savedArgs;out.mockRestore();process.exitCode=0;rmSync(root,{recursive:true,force:true});}
+},20000);
