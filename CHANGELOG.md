@@ -1,3 +1,7 @@
+# 0.14.5
+
+- A Method file in JSON keeps its home: a copy no longer takes over the home of a JSON Method file.
+
 # 0.14.4
 
 A Method keeps working when Method changes, with nothing for the user to do or to answer.

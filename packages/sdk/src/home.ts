@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import { sha256 } from '../../contracts/src/identity.js';
 import { writePrivateJson } from './files.js';
 import { methodCache } from './prepare.js';
-import { authoringPath } from './authoring.js';
+import { authoringPath, readDocument } from './authoring.js';
 import { fileHash } from './method-files.js';
 
 /**
@@ -59,7 +59,7 @@ export function recordHome(server: string, methodId: string, file: string, versi
 export function claimHome(server: string, methodId: string, file: string) {
   const home = readHome(server, methodId), key = homeKey(file);
   if (home && home.key === key) { if (home.path !== authoringPath(file)) recordHome(server, methodId, file, home.version_id ? { version_id: home.version_id, files: home.files ?? {} } : undefined); return; }
-  const homeLives = (() => { try { return home && new RegExp(`^id:\\s*${methodId}\\s*$`, 'm').test(readFileSync(home.path, 'utf8')); } catch { return false; } })();
+  const homeLives = (() => { try { return !!home && readDocument(home.path).id === methodId; } catch { return false; } })();
   if (home && homeLives && (temporary(file) || !temporary(home.path)))
     throw Object.assign(Error(`This Method is saved from ${home.path}. Make the change in that file and run it there; this copy was not run or saved.`), { code: 'other_home', home: home.path });
   recordHome(server, methodId, file);

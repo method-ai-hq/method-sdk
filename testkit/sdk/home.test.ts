@@ -33,6 +33,14 @@ it('saves come from one home file; a temporary copy or a second folder is refuse
   expect(readHome(server, id)?.path).toBe(other);
 });
 
+it('a home file in JSON keeps its home', () => {
+  const { temp, real } = folders();
+  const dir = join(real, 'json'); mkdirSync(dir, { recursive: true });
+  const home = join(dir, 'echo.method'); writeFileSync(home, JSON.stringify({ format: 'method/3.4', id, name: 'Echo' }));
+  claimHome(server, id, home);
+  expect(() => claimHome(server, id, write(join(temp, 'copy')))).toThrow(expect.objectContaining({ code: 'other_home' }));
+});
+
 it('a temporary home gives way to a real folder', () => {
   const { temp, real } = folders();
   const scratch = write(join(temp, 'scratch')), file = write(join(real, 'kept'));
