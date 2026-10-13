@@ -13,18 +13,18 @@ import { currentVersion, methodContent } from './versions.js';
 import { localRuns, saveLocalProposal } from './proposals.js';
 
 /** run_id: the run folder on this computer that the note is about. */
-export type ImproveRequest = { step_id?: string; note?: string; case_id?: string; run_id?: string };
+export type ImproveRequest = { step_id?: string; note?: string; run_id?: string };
 type SavedImprove = { workflow_id: string; version_id: string; workflow: any; package?: unknown };
 /** Runs a local Method file; the default is the runtime that `method run FILE` uses. */
 export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory: undefined, onEvent: undefined, client: MethodClient, baseConfig: undefined, secrets: Record<string, string>) => Promise<{ status: string; result?: unknown }>;
 /** The SubmitProposal that improve.method returns, read from its result. */
 export type ImproveProposal = { cause: string; workflow: unknown | null; evidence: { kind: ProposalKind; steps?: string[]; [key: string]: unknown } };
-type ProposalKind = 'change' | 'case' | 'rubric' | 'script' | 'none';
-const kinds: ProposalKind[] = ['change', 'case', 'rubric', 'script', 'none'];
+type ProposalKind = 'change' | 'none';
+const kinds: ProposalKind[] = ['change', 'none'];
 
 /**
  * Read the result of improve.method: {proposal: <SubmitProposal as JSON text>, kind, proposal_id}. A change has the
- * proposed workflow; a case or rubric fix has case_suggestion; a script change has script_change; none has neither.
+ * tested workflow; none has no workflow.
  */
 export function readImproveResult(result: unknown): ImproveProposal {
   const value = result as { proposal?: unknown; kind?: unknown } | null;
@@ -36,17 +36,12 @@ export function readImproveResult(result: unknown): ImproveProposal {
   if (!evidence || typeof evidence !== 'object' || !kinds.includes(evidence.kind)) throw Error('The improvement proposal has no known kind.');
   if (value.kind !== undefined && value.kind !== evidence.kind) throw Error(`The improvement run says kind ${String(value.kind)}, but its proposal is kind ${evidence.kind}.`);
   if (evidence.kind === 'change' && (!proposal.workflow || typeof proposal.workflow !== 'object')) throw Error('The improvement proposal is a change without a workflow.');
-  if ((evidence.kind === 'case' || evidence.kind === 'rubric') && !evidence.case_suggestion) throw Error(`The improvement proposal is a ${evidence.kind} fix without case_suggestion.`);
-  if (evidence.kind === 'script' && !evidence.script_change) throw Error('The improvement proposal is a script change without script_change.');
   return { cause: proposal.cause.trim(), workflow: evidence.kind === 'change' ? proposal.workflow : null, evidence };
 }
 
 const nextStep = (file: string, id: string, kind: ProposalKind) => ({
-  change: `Read the proposal, then run method apply ${file} ${id}. It does not publish.`,
-  case: `Run method apply ${file} ${id} to see the case to record.`,
-  rubric: `Run method apply ${file} ${id} to see the case rubric to fix.`,
-  script: `Run method apply ${file} ${id} to see the script change.`,
-  none: 'No safe change was found.',
+  change: `Read the change, then run method apply ${file} ${id}. It does not publish.`,
+  none: 'No change passed the tests.',
 })[kind];
 
 const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
@@ -60,13 +55,12 @@ export const judgmentsLine = 'Method fixes this Method from your judgments. Reco
  * and saves a local proposal.
  */
 export async function improveCommand(args: string[], clientFactory: (server: string) => MethodClient, run?: RunFile) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: 'string' }, note: { type: 'string' }, step: { type: 'string' }, server: { type: 'string' } } });
-  if (positionals.length !== 1) throw Error('Use method improve FILE [--case ID] [--note TEXT] [--step ID].');
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { note: { type: 'string' }, step: { type: 'string' }, server: { type: 'string' } } });
+  if (positionals.length !== 1) throw Error('Use method improve FILE [--note TEXT] [--step ID].');
   const file = authoringPath(positionals[0]!), document = readDocument(file), workflow = loadWorkflow(methodContent(document));
   if (values.step && !Object.hasOwn(workflow.steps, values.step)) throw Error(`Step ${values.step} is not in ${positionals[0]}.`);
-  if (values.case && !/^[a-z0-9][a-z0-9-]{0,79}$/.test(values.case)) throw Error('Use a case ID: lowercase letters, digits, and hyphens.');
   if (values.note !== undefined && !values.note.trim()) throw Error('Write the correction after --note.');
-  const request: ImproveRequest = { ...(values.step ? { step_id: values.step } : {}), ...(values.note ? { note: values.note.trim() } : {}), ...(values.case ? { case_id: values.case } : {}) };
+  const request: ImproveRequest = { ...(values.step ? { step_id: values.step } : {}), ...(values.note ? { note: values.note.trim() } : {}) };
   const client = clientFactory(values.server ?? DEFAULT_SERVER);
   if (!client.token()) await client.login();
   if (document.run_data !== 'device' && !await (await import('./method-sync.js')).organizationKeepsContent(client)) { process.stdout.write(judgmentsLine + '\n'); return; }
@@ -109,7 +103,7 @@ export async function improveOnDevice(client: MethodClient, file: string, reques
   const improve = await cachedImproveMethod(client);
   const runDir = join(methodCache(), 'runs', randomUUID());
   const inputs = join(runDir, 'improve-inputs.json');
-  writePrivateJson(inputs, { method_file: file, case_id: request.case_id ?? '', note: request.note ?? '', step_id: request.step_id ?? '', grant_id: '', run_id: request.run_id ?? '', make_case: false });
+  writePrivateJson(inputs, { method_file: file, note: request.note ?? '', step_id: request.step_id ?? '', grant_id: '', judgment_id: '', run_id: request.run_id ?? '' });
   const runFile: RunFile = run ?? (await import('./current-runtime.js')).runCurrentFile as unknown as RunFile;
   process.stderr.write(`Improving ${file} on this computer. Its run content stays here.\n`);
   // The run prints its own result; send it to stderr so that stdout holds only the proposal.

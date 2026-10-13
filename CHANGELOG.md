@@ -1,3 +1,7 @@
+# 0.17.1
+
+- `method improve` (for Methods that keep run content on the computer) sends only the note, the step and the run to improve.method; `--case` is gone. An improvement gives a tested change or none; case, rubric and script-description proposals are gone, so `method apply` has no manual step for them.
+
 # 0.17.0
 
 - Uses runtime 0.14.0: `validate` follows text from web pages and services across steps. When it can reach a step that sends or changes things without a question to the person, it reports `untrusted_reaches_action` with the path and a patch that adds the question. This replaces `untrusted_content_can_act`; rename that code in `accept:`.

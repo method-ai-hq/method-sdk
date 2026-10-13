@@ -1251,11 +1251,11 @@ Improve a Method that keeps its run content on this computer.
 Usage:
 
 ```sh
-method improve FILE [--case ID] [--note TEXT] [--step ID] [--server URL]
+method improve FILE [--note TEXT] [--step ID] [--server URL]
 ```
 
 Arguments and defaults:
-For a Method with run_data: device, or in an organization that keeps run content on devices: runs Method's improvement on this computer, so the run content stays here. --note: the correction, in the person's words; it is about the newest run of the Method on this computer, which the improvement reads and a suggested case records. --step: improve only this step. --case: the case the change must pass. For a Method that keeps run content in the account, it starts nothing and says to use method judge: Method fixes those Methods from the person's judgments.
+For a Method with run_data: device, or in an organization that keeps run content on devices: runs Method's improvement on this computer, so the run content stays here. --note: the correction, in the person's words; it is about the newest run of the Method on this computer, which the improvement reads. --step: improve only this step. For a Method that keeps run content in the account, it starts nothing and says to use method judge: Method fixes those Methods from the person's judgments.
 
 Result and changes:
 JSON with the local proposal ID and the next step; the proposal is in .method/proposals/. Nothing is published, and the file does not change. For an account Method, one line.

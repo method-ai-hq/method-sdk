@@ -172,17 +172,6 @@ export async function localRuns(file: string) {
   return runs;
 }
 
-/** What the coding agent does for a proposal that is not a change to the Method document. runFolder is the folder of the suggested case's run, when it is on this computer. */
-function manualStep(file: string, proposal: ProposalRecord, runFolder?: string) {
-  const evidence = proposal.evidence ?? {};
-  if (evidence.case_suggestion) {
-    const c = evidence.case_suggestion, quote = (value: string) => JSON.stringify(value);
-    return `Record the case: method case new ${file} --id ${c.id} --note ${quote(c.note)} --run ${runFolder ? quote(runFolder) : 'RUN_FOLDER'}${(c.rubric ?? []).map((r: string) => ` --rubric ${quote(r)}`).join('')}${runFolder ? '' : ', where RUN_FOLDER is the folder of the run that went wrong'}. Then run method improve ${file} --case ${c.id}, show the proposal, apply it, and run again.`;
-  }
-  if (evidence.script_change) return `Change the script, then run method test ${file}: ${evidence.script_change}`;
-  return 'This proposal has no change to apply.';
-}
-
 const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 type Change = { id: string; source: 'account' | 'local'; cause: string; date: string; version_id: string | null; steps: string[] };
 const changeLine = (change: Change) => `${change.date.slice(0, 10)}  ${change.version_id ?? 'not saved as a version'}  ${change.cause}`;
@@ -224,12 +213,7 @@ export async function proposalCommand(args: string[], clientFactory: (server: st
   if (proposal.source === 'account' && proposal.status !== 'accepted') throw Error(`Change ${proposal.id} is ${proposal.status}, so it has nothing to merge.`);
   if (proposal.source === 'local' && proposal.status !== 'open') throw Error(`Proposal ${proposal.id} is ${proposal.status}.`);
   if (values.resolved) return print({ status: 'applied', file, proposal_id: proposal.id, ...await markApplied(client, file, proposal), next: `Run method test ${target}. Publish it when it is right.` });
-  if (!proposal.proposed_workflow) {
-    // The suggested case's run is a local folder (a local improvement) or an account run ID (an account improvement).
-    const runId = proposal.evidence?.case_suggestion?.run_id;
-    const runFolder = runId ? (await localRuns(file)).find(run => run.dir === runId || run.account_run_id === runId)?.dir : undefined;
-    process.exitCode = 1; return print({ status: 'manual', file, proposal_id: proposal.id, kind: proposal.evidence?.kind ?? null, cause: proposal.cause, next: manualStep(target, proposal, runFolder) });
-  }
+  if (!proposal.proposed_workflow) return print({ status: 'none', file, proposal_id: proposal.id, cause: proposal.cause, next: 'No change passed the tests; there is nothing to apply.' });
   const result = await applyProposal(client, file, proposal);
   if (result.status === 'applied') return print({ ...result, file, proposal_id: proposal.id, cause: proposal.cause, next: `Run method test ${target}. Publish it when it is right.` });
   process.exitCode = 1;

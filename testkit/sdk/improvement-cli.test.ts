@@ -205,28 +205,6 @@ it('changes lists the changes that Method applied, with cause, date, and version
   await expect(proposalCommand(['proposals', file], () => client)).rejects.toThrow();
 });
 
-it('names the run folder on this computer in the suggested case of a change', async () => {
-  const { root, file } = setup(method({ a: step('a', 'A.'), b: step('b', 'B.') }));
-  const run = (name: string, id: string, dashboard: string, at: number) => {
-    const dir = join(root, 'cache', 'runs', name); mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'method.json'), JSON.stringify({ id, name: 'Echo' }));
-    writeFileSync(join(dir, 'method-sync.json'), JSON.stringify({ dashboard_id: dashboard }));
-    writeFileSync(join(dir, 'checkpoint.json'), '{}'); utimesSync(join(dir, 'checkpoint.json'), at, at);
-    return dir;
-  };
-  run('older', METHOD_ID, 'run_older', 1_000);
-  const newest = run('newest', METHOD_ID, 'run_newest', 2_000);
-  run('other', `wf_${'d'.repeat(32)}`, 'run_other', 3_000);
-  const client = fakeClient({
-    'GET /api/proposals/prop_1': () => ({ proposal: { id: 'prop_1', method_id: METHOD_ID, base_version_id: null, status: 'accepted', cause: 'No case tests this correction.', created_at: '2026-10-09T00:00:00Z',
-      evidence: { kind: 'case', steps: [], case_suggestion: { id: 'no-paint', note: 'She does not paint.', run_id: 'run_newest', rubric: ['No painting.'] } }, base_workflow: null, proposed_workflow: null } }),
-  });
-  const out = stdout();
-  await proposalCommand(['apply', file, 'prop_1'], () => client);
-  const next = printed(out).next;
-  expect(next).toContain(`--run ${JSON.stringify(newest)}`); expect(next).not.toContain('RUN_FOLDER');
-});
-
 it('runs improve.method on this computer for device run data and saves a local proposal', async () => {
   const document = method({ a: step('a', 'A.'), b: step('b', 'B.') }, { run_data: 'device' });
   const { file, root, folder } = setup(document);
@@ -244,7 +222,7 @@ it('runs improve.method on this computer for device run data and saves a local p
   const run = vi.fn(async (improveFile: string, flags: any, sync: unknown, _event: unknown, given: unknown, _base: unknown, secrets: Record<string, string>) => {
     expect(improveFile).toBe(join(root, 'cache', 'improve', versionId, 'improve.method'));
     expect(readFileSync(join(root, 'cache', 'improve', versionId, 'improve.py'), 'utf8')).toBe('print("improve")\n');
-    expect(JSON.parse(readFileSync(flags.inputs, 'utf8'))).toMatchObject({ method_file: file, case_id: 'late-order', note: 'Too long.' });
+    expect(JSON.parse(readFileSync(flags.inputs, 'utf8'))).toMatchObject({ method_file: file, note: 'Too long.', judgment_id: '' });
     expect(sync).toBeUndefined(); expect(given).toBe(client);
     // The run gets the signed-in key and server as improve.method's secrets, for this run only.
     expect(secrets).toEqual({ IMPROVE_API_KEY: 'method_x', IMPROVE_SERVER: 'https://example.test' });
@@ -252,7 +230,7 @@ it('runs improve.method on this computer for device run data and saves a local p
     return { status: 'completed', result: { proposal: JSON.stringify({ cause: 'Step a wrote too much.', workflow: proposed, evidence: { kind: 'change', steps: ['a'] } }), kind: 'change', proposal_id: '' } };
   });
   const out = stdout(); stderr();
-  await improveCommand([file, '--case', 'late-order', '--note', 'Too long.'], () => client, run);
+  await improveCommand([file, '--note', 'Too long.'], () => client, run);
   expect(client.calls.map((c: any) => c.path)).toEqual(['/api/cli/improve/method']);
   const result = printed(out);
   expect(result).toMatchObject({ source: 'local', kind: 'change', cause: 'Step a wrote too much.', steps: ['a'] });
@@ -298,12 +276,9 @@ it('reads the result that improve.method records: the proposal as JSON text, its
   expect(read).toMatchObject({ workflow: null, evidence: { kind: 'none', steps: ['summarize'] } });
   expect(read.cause).toMatch(/^No safe change was found\./);
   expect(read.evidence.budget).toMatchObject({ model_calls: expect.any(Number) });
-  // A change carries the proposed workflow; a case or rubric fix carries case_suggestion; a script change carries script_change.
+  // A change carries the tested workflow; none has none. Other kinds are refused.
   const as = (kind: string, extra: object, workflow?: unknown) => ({ kind, proposal_id: '', proposal: JSON.stringify({ cause: 'c', ...(workflow ? { workflow } : {}), evidence: { kind, steps: ['a'], ...extra } }) });
   expect(readImproveResult(as('change', {}, { steps: {} })).workflow).toEqual({ steps: {} });
-  expect(readImproveResult(as('case', { case_suggestion: { id: 'x', note: 'n', run_id: null, rubric: ['r'] } })).evidence.kind).toBe('case');
-  expect(readImproveResult(as('rubric', { case_suggestion: { id: 'x', note: 'n', run_id: null, rubric: ['r'] } })).workflow).toBeNull();
-  expect(readImproveResult(as('script', { script_change: 'Change clean.mjs.' })).evidence.script_change).toBe('Change clean.mjs.');
   expect(() => readImproveResult(as('change', {}))).toThrow();
   expect(() => readImproveResult(as('case', {}))).toThrow();
   expect(() => readImproveResult({ ...as('none', {}), kind: 'change' })).toThrow();
