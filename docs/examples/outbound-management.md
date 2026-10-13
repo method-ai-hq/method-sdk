@@ -75,7 +75,7 @@ steps:
     name: Read campaign email
     no_effect_reason: Reads the mailbox in the browser; sends, replies to, and deletes nothing.
     accept:
-      untrusted_content_can_act: The agent needs the signed-in mailbox to read campaign email. The prompt asks it only to search and read; nothing is sent until a person reviews the tasks.
+      untrusted_reaches_action: The agent needs the signed-in mailbox to read campaign email. The prompt asks it only to search and read; nothing is sent until a person reviews the tasks.
     changes: [environment.browser]
     in:
       mailbox_url: target.mailbox_url
@@ -111,7 +111,7 @@ steps:
     name: Find prospects in Happenstance
     no_effect_reason: Searches Happenstance in the browser; sends no messages or introduction requests.
     accept:
-      untrusted_content_can_act: The agent needs the signed-in Happenstance account to search the network. The prompt asks it only to search; no message or introduction request is sent.
+      untrusted_reaches_action: The agent needs the signed-in Happenstance account to search the network. The prompt asks it only to search; no message or introduction request is sent.
     changes: [environment.browser]
     after: read_email
     in:
@@ -149,7 +149,7 @@ steps:
     name: Check each prospect's pages
     no_effect_reason: Reads company and LinkedIn pages in the browser; sends no messages or connection requests.
     accept:
-      untrusted_content_can_act: The agent needs the signed-in browser to read LinkedIn profiles. The prompt asks it only to read pages; no message or connection request is sent.
+      untrusted_reaches_action: The agent needs the signed-in browser to read LinkedIn profiles. The prompt asks it only to read pages; no message or connection request is sent.
     changes: [environment.browser]
     after: find_prospects
     each: {prospect: prospects}
@@ -845,7 +845,7 @@ The `draft_tasks` prompt shows two tasks written the way they should be, for
 contacts that are not in the CRM: a reply to a pricing question and an
 introduction request. Replace them with two drafts that you sent and liked.
 
-The three browser steps accept the `untrusted_content_can_act` warning: each
+The three browser steps accept the `untrusted_reaches_action` warning: each
 agent reads pages with a signed-in browser that could also send, and the
 `accept:` line on each step gives the reason to keep it. Nothing is sent until
 you review the tasks.

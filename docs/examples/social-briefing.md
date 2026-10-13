@@ -35,7 +35,7 @@ steps:
   gather_sources:
     no_effect_reason: Reads posts and papers in the browser; sends, posts and submits nothing.
     accept:
-      untrusted_content_can_act: The agent needs the signed-in browser to read Grok, alphaXiv, and LinkedIn. The prompt asks it only to search and read, and a person reads the briefing before it is shared.
+      untrusted_reaches_action: The agent needs the signed-in browser to read Grok, alphaXiv, and LinkedIn. The prompt asks it only to search and read, and a person reads the briefing before it is shared.
     name: Find and read sources
     changes:
       - environment.browser
@@ -190,7 +190,7 @@ default connection copies the last-used Chrome profile and runs headless. Run
 
 - `no_effect_reason`: the browser step only reads. It sends, posts, and submits
   nothing, so there is no change to read back.
-- `accept: {untrusted_content_can_act: ...}`: `validate` warns when an agent that
+- `accept: {untrusted_reaches_action: ...}`: `validate` warns when an agent that
   reads web pages could also change things with the same browser. Here the agent
   needs the signed-in browser to read, and a person reads the briefing before it
   is shared, so the warning is accepted with that reason.

@@ -1,5 +1,7 @@
 # 0.17.0
 
+- Uses runtime 0.14.0: `validate` follows text from web pages and services across steps. When it can reach a step that sends or changes things without a question to the person, it reports `untrusted_reaches_action` with the path and a patch that adds the question. This replaces `untrusted_content_can_act`; rename that code in `accept:`.
+
 Method fixes a Method from the person's reactions to its results.
 
 - **`method judge RUN_ID right|wrong`** records the person's reaction to a run's result. `--note` takes their words (at most 4000 characters), `--corrected FILE` the result they say is right (JSON is sent as JSON, other text as text; at most 1 MB), and `--step` the step whose output was wrong. RUN_ID is the `run_id` of the run's start line or the run ID on the dashboard. A wrong judgment makes Method fix the Method in the background: it applies a tested change that the person can undo, or changes nothing. The command prints one line, for example `Recorded: wrong on step choose. Method is fixing it in the background.`; `--json` prints the judgment.

@@ -18,7 +18,7 @@ steps:
   gather_sources:
     no_effect_reason: Reads posts and papers in the browser; sends, posts and submits nothing.
     accept:
-      untrusted_content_can_act: The agent needs the signed-in browser to read Grok, alphaXiv, and LinkedIn. The prompt asks it only to search and read, and a person reads the briefing before it is shared.
+      untrusted_reaches_action: The agent needs the signed-in browser to read Grok, alphaXiv, and LinkedIn. The prompt asks it only to search and read, and a person reads the briefing before it is shared.
     name: Find and read sources
     changes:
       - environment.browser

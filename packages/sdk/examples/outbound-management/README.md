@@ -24,7 +24,7 @@ The `draft_tasks` prompt shows two tasks written the way they should be, for
 contacts that are not in the CRM: a reply to a pricing question and an
 introduction request. Replace them with two drafts that you sent and liked.
 
-The three browser steps accept the `untrusted_content_can_act` warning: each
+The three browser steps accept the `untrusted_reaches_action` warning: each
 agent reads pages with a signed-in browser that could also send, and the
 `accept:` line on each step gives the reason to keep it. Nothing is sent until
 you review the tasks.
