@@ -34,15 +34,22 @@ export function setupFix(error: any) {
 function safePath(path: string) {
   return authoringPath(path);
 }
-async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>['values'], extra: string[] = []) {
+async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>['values'], extra: string[] = [], savedClient?: MethodClient) {
   if (process.env.METHOD_RUN_WORKER === '1' || (!/[/\\]method\.(?:js|ts)$/.test(process.argv[1] ?? '') && !flags.background)) return false;
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   const directory = safePath(flags['run-dir'] ?? join(methodCache(), 'runs', randomUUID()));
-  const workerArgs = [...args.filter(arg => arg !== '--background'), ...extra];
+  let workerArgs = [...args.filter(arg => arg !== '--background'), ...extra];
   if (!flags['run-dir']) workerArgs.push('--run-dir', directory);
+  let client = savedClient;
+  try { client ??= new MethodClient(flags.server); } catch { /* Not signed in to this server. */ }
+  // The earlier run's inputs are read before the run starts, so a run that cannot find them does not start.
+  if (flags['inputs-from']) {
+    const { withInputsFrom, withoutOptions } = await import('./inputs-from.js');
+    const resolved = await withInputsFrom(flags, directory, /\.method$/i.test(args[1] ?? '') ? args[1] : undefined, client);
+    workerArgs = [...withoutOptions(workerArgs, ['inputs-from', 'inputs']), '--inputs', resolved.inputs!];
+  }
   // A new run of a signed-in computer is synced; a resumed run keeps the link that it has.
-  let server: string | undefined;
-  try { const client = new MethodClient(flags.server); if (!flags.resume && client.token()) server = client.server; } catch { /* Not signed in to this server. */ }
+  const server = !flags.resume && client?.token() ? client.server : undefined;
   await startRunWorker(workerArgs, directory, flags.background, server);
   return true;
 }
@@ -295,7 +302,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return;
   }
   const flags = parse(rest.slice(2)).values;
-  if(await dispatchRunWorker(args, flags, values.version ? [] : ['--version', saved.version_id])) return;
+  if(await dispatchRunWorker(args, flags, values.version ? [] : ['--version', saved.version_id], client)) return;
   await runSaved(saved, flags, client);
 
 }

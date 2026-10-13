@@ -88,19 +88,20 @@ export function observedValue(item: InspectItem, inspection: RunInspection, invo
 }
 
 /**
- * The device form of a run record (run_data: device). Keep step status, kinds, names, and timing., kinds, names, and timing. Remove inputs, outputs,
- * prompts, files, and free text. The server accepts only this form when an organization keeps run content on devices.
+ * The device form of a run record (run_data: device). Keep step status, kinds, names, timing, and the phase of a failure. Remove inputs, outputs,
+ * prompts, files, errors, and free text. The server accepts only this form when an organization keeps run content on devices.
  */
 export function deviceOnly(inspection: RunInspection): RunInspection {
+  const failure = (value?: RunInspection['failure']) => value ? { failure: { phase: value.phase, expected: '', observed: '', evidence: [] } } : {};
   const event = ({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }: any) =>
     Object.fromEntries(Object.entries({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code }).filter(([, value]) => value !== undefined)) as any;
   return {
-    schema: inspection.schema, content: 'device', workflow: inspection.workflow, run_id: inspection.run_id, status: inspection.status,
+    schema: inspection.schema, content: 'device', workflow: inspection.workflow, run_id: inspection.run_id, status: inspection.status, ...failure(inspection.failure),
     ...(inspection.started_at ? { started_at: inspection.started_at } : {}), ...(inspection.device_name ? { device_name: inspection.device_name } : {}),
     inputs: {}, resources: Object.fromEntries(Object.entries(inspection.resources).map(([name, value]) => [name, { description: value.description }])),
     ...(inspection.events ? { events: inspection.events.map(event) } : {}),
     invocations: Object.fromEntries(Object.entries(inspection.invocations).map(([id, value]) => [id, {
-      step_id: value.step_id, status: value.status, ...(value.verification ? { verification: value.verification } : {}),
+      step_id: value.step_id, status: value.status, ...(value.verification ? { verification: value.verification } : {}), ...failure(value.failure),
       checks: value.checks.map(check => ({ id: check.id, result: check.result, summary: '', evidence: [], method: check.method })), changes: {}, events: value.events.map(event),
     }])),
   } as RunInspection;

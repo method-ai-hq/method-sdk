@@ -174,6 +174,19 @@ it('starts an account improvement for account run data', async () => {
   await expect(improveCommand([file, '--step', 'missing'], () => client)).rejects.toThrow('Step missing is not in');
 });
 
+it('proposals says what to do when the newest improvement found no safe change', async () => {
+  const { file } = setup(method({ a: step('a', 'A.') }));
+  const improvement = { id: 'run_9', status: 'succeeded', outcome: 'none', created_at: '2026-10-13T10:00:00Z', proposal_id: null };
+  const client = fakeClient({
+    [`GET /api/methods/${METHOD_ID}/proposals`]: () => ({ proposals: [] }),
+    [`GET /api/methods/${METHOD_ID}/improvements`]: () => ({ improvements: [improvement] }),
+  });
+  const out = stdout();
+  await proposalCommand(['proposals', file, '--wait'], () => client);
+  expect(printed(out)).toMatchObject({ proposals: [], improvement: { id: 'run_9', status: 'succeeded', outcome: 'none' },
+    next: `The improvement found no safe change. Say what is wrong in a note on a run (method improve ${file} --note TEXT), or record a case with method case new.` });
+});
+
 it('sends the newest run of the Method with a note, and the suggested case names its folder', async () => {
   const { root, file } = setup(method({ a: step('a', 'A.'), b: step('b', 'B.') }));
   const run = (name: string, id: string, dashboard: string, at: number) => {

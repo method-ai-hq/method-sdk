@@ -51,11 +51,14 @@ it('gives declared secrets to scripts, and stops before the first step when one 
 });
 
 it('a device-only inspection keeps the run shape and drops its content', () => {
-  const inspection: any = { schema: 'workflow-inspection/2', workflow: { format: 'method/3.3' }, run_id: 'r', status: 'succeeded', device_name: 'laptop', inputs: { member: 'Maeby' },
+  const inspection: any = { schema: 'workflow-inspection/2', workflow: { format: 'method/3.3' }, run_id: 'r', status: 'failed', error: 'private error', failure: { phase: 'check', expected: 'private expected', observed: 'private observed', evidence: ['quote'] }, device_name: 'laptop', inputs: { member: 'Maeby' },
     resources: { notes: { description: 'Notes', path: '/private/notes' } }, files: [{ name: 'x' }], events: [{ at: 't', type: 'step_started', detail: 'private text' }],
-    invocations: { 'write:0': { step_id: 'write', status: 'passed', inputs: { a: 1 }, outputs: { b: 2 }, prompts: [{}], checks: [{ id: 'c', result: 'pass', summary: 'private', evidence: ['quote'], method: 'agent' }], changes: { x: 1 }, events: [{ at: 't', type: 'model_response', detail: 'answer' }] } } };
+    invocations: { 'write:0': { step_id: 'write', status: 'failed', error: 'private step error', failure: { phase: 'action', expected: 'private', observed: 'private', evidence: ['quote'] }, inputs: { a: 1 }, outputs: { b: 2 }, prompts: [{}], checks: [{ id: 'c', result: 'pass', summary: 'private', evidence: ['quote'], method: 'agent' }], changes: { x: 1 }, events: [{ at: 't', type: 'model_response', detail: 'answer' }] } } };
   const shown = deviceOnly(inspection);
-  expect(shown).toMatchObject({ content: 'device', inputs: {}, device_name: 'laptop', resources: { notes: { description: 'Notes' } }, invocations: { 'write:0': { step_id: 'write', status: 'passed', changes: {} } } });
-  expect(JSON.stringify(shown)).not.toMatch(/Maeby|private|quote|answer|outputs|prompts|files/);
+  expect(shown).toMatchObject({ content: 'device', inputs: {}, device_name: 'laptop', resources: { notes: { description: 'Notes' } }, invocations: { 'write:0': { step_id: 'write', status: 'failed', changes: {} } } });
+  expect(shown.failure).toEqual({ phase: 'check', expected: '', observed: '', evidence: [] });
+  expect(shown.invocations['write:0'].failure).toEqual({ phase: 'action', expected: '', observed: '', evidence: [] });
+  expect(JSON.stringify(shown)).not.toMatch(/Maeby|private|quote|answer|outputs|prompts|files|error/);
+  expect(deviceOnly({ ...inspection, failure: undefined }).failure).toBeUndefined();
 });
 

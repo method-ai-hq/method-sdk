@@ -12,6 +12,7 @@ import { recordKnownVersion } from './outbox.js';
 import { writePrivateJson } from './files.js';
 import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
+import { withInputsFrom } from './inputs-from.js';
 
 // Older versions are listed only after their saved-package tests pass.
 const supportedPackageRuntimes = new Set([runtimeVersion, '0.11.1', '0.11.0', '0.10.0', '0.9.5', '0.9.4', '0.9.3', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
@@ -38,6 +39,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
       await client.request(statePath,'POST',{action:'release',run_id:request.run_id});
     }
     await MethodSync.retry(directory,client);process.stdout.write(JSON.stringify({...completed,sync:'saved'})+'\n');return completed;}}
+  flags=await withInputsFrom(flags,directory,undefined,client);
   const inputFile=join(directory,'requested-inputs.json');
   const inputs=flags.inputs?JSON.parse(readFileSync(resolve(flags.inputs),'utf8')):existsSync(inputFile)?JSON.parse(readFileSync(inputFile,'utf8')):{};
   writePrivateJson(inputFile,inputs);

@@ -12,9 +12,11 @@
 8. **Choose a sample yourself** from the user's data, and check that it has the sources the Method needs. Ask only when there is no good sample.
 9. **Iterate.** `method run` prints a `dashboard` link when the run starts and again with its result. Give the user the link as soon as the run starts. After a good run, show the result and the link, and ask what to change. Change the step and run again. Show only results that a run made: never write or edit a result by hand, and fix a wrong result in the Method, not in the data it reads. If you cannot run, say so.
 10. **Publish** with `method publish FILE --reason TEXT` when the user wants to share or schedule a version. It runs the Method's cases first.
-11. **Talk about the work, not about Method.** Unless the user asks, do not mention Method's versions, formats, settings files, or other internal files, and do not ask the user about them, about models, or about which saved version to use. Method updates itself and converts older Method files when it runs them. When the user asks whether a Method works, or asks you to make it work, run it with the inputs of a recent run and show the result and the dashboard link in a few sentences. Say that it works only after a run completed.
+11. **Talk about the work, not about Method.** Unless the user asks, do not mention Method's versions, formats, settings files, or other internal files, and do not ask the user about them, about models, or about which saved version to use. Method updates itself and converts older Method files when it runs them. When the user asks whether a Method works, or asks you to make it work, run it with the inputs of a recent run (`--inputs-from RUN_ID`) and show the result and the dashboard link in a few sentences. Say that it works only after a run completed.
 12. **One file for each Method.** Change and run a Method in its own file. Do not copy it to a temporary or other folder to change it: Method does not run or save the copy while the Method's file exists, and names that file.
 13. **Questions in a run are for the user.** When a run stops with `needs_input`, ask the user its `question` in plain words, wait for the answer, and continue the run with it as the output says. Never answer it yourself.
+14. **Make each run easy to find and to run again.** Give the Method a `run_label` that tells its runs apart, such as `inputs.topic`. When an input can be empty and a default picks the value, point `run_label` at the step output that holds the resolved value, not at the input. Put the readable output, such as the report text or the message, in `result`, not only in files. Write a `run_prompt` that says where each input comes from (for example "as_of is today's date in YYYY-MM-DD") and what to show at the end. Leave SDK, runtime, and version details out of it.
+15. **Run again from the dashboard.** When the user pastes a "Run again" prompt from the dashboard, run with `--inputs-from RUN_ID` and change only what the prompt names: put those values in a file and add `--inputs FILE`.
 
 When a run fails, read its `fix` and `diagnostics`, change the step, and run again.
 
@@ -241,9 +243,9 @@ These are design outlines, not runnable Method files.
 A method has format, name, goal, steps, and result, and optional id, inputs, secrets, state, environment, files, models, limits, tools, run_data, run_label, and run_prompt (see the field reference in method authoring).
 Each step uses do or ask. The do kinds are run, call, agent, and classify. Give script actions a name and a purpose; describe script checks in reading.check. A classify action takes bound inputs, a question, and one of options (a named choice with probabilities), answer: yes_no (answer and the probability of yes), or levels (2-10 ordered names; the most likely level, an expected level index as score, and probabilities). Use a script to apply business rules to that result.
 run uses runtime and entrypoint; call uses model and prompt; agent can select browser: environment.NAME and optional custom tools.
-Optional run_label selects one saved text, number, or boolean value, such as inputs.topic or steps.prepare.outputs.plan.date. Step references must select a step without each or repeat. Choose a short non-sensitive value. The site uses the current Method's reference with each run's recorded inputs or outputs; absent or empty values keep timestamps. Set it with method set task.method /run_label --json '"steps.prepare.outputs.plan.date"'.
+Optional run_label selects one saved text, number, or boolean value, such as inputs.topic or steps.prepare.outputs.plan.date. Step references must select a step without each or repeat. Choose a short non-sensitive value that tells runs apart. When an input can be empty and a default picks the value, select the step output that holds the resolved value, not the input. The site uses the current Method's reference with each run's recorded inputs or outputs; absent or empty values keep timestamps. Set it with method set task.method /run_label --json '"steps.prepare.outputs.plan.date"'.
 
-Optional run_prompt is plain text for the outside agent that starts a saved Method. Write which Method to run, where to find its inputs, and what to show when finished. Save it with the Method version and update it when inputs or outputs change. The copy button appends the exact version link and shared CLI setup; do not repeat them in run_prompt. This field is not a step prompt and does not expand variables. Set it with method set task.method /run_prompt --text-file run-prompt.txt.
+Optional run_prompt is plain text for the outside agent that starts a saved Method. Write which Method to run, where each input comes from (for example "as_of is today's date in YYYY-MM-DD"), and what to show when finished. Leave out SDK, runtime, and version details. Save it with the Method version and update it when inputs or outputs change. The copy button appends the exact version link and shared CLI setup; do not repeat them in run_prompt. This field is not a step prompt and does not expand variables. Set it with method set task.method /run_prompt --text-file run-prompt.txt.
 
 Model and human prompts use {{date}} for the step input declared as in.date. Nested fields such as {{customer.name}} are allowed. Only text, numbers, and booleans can be inserted; pass lists and records as structured inputs. Whitespace inside braces is allowed. Escape a literal placeholder with a backslash before its opening braces (use a YAML block scalar). Values are inserted once, never evaluated or expanded again. Unknown variables, invalid paths, and non-scalar values fail validation. Missing runtime values fail before model execution. Defaults belong in input declarations. Human ask text uses the same scope; agent check prompts use {{inputs.date}} and {{outputs.answer}}. Script commands, labels, and tool descriptions are not templates. Single braces are ordinary text.
 Runs record prompt.rendered with the template and expanded instructions for each invocation and phase; the run page shows the recorded expansion, with templates in technical details. Model and agent work uses finite default limits; steps can override them.
@@ -314,7 +316,7 @@ destination and the rule used.”
 
 # Execution setup
 
-Use method run FILE_OR_ID [--inputs inputs.json] [--state state.json] [--run-dir DIR] [--workspace HELPERS_FOLDER] [--agent codex|claude] [--background].
+Use method run FILE_OR_ID [--inputs inputs.json] [--inputs-from RUN_ID] [--state state.json] [--run-dir DIR] [--workspace HELPERS_FOLDER] [--agent codex|claude] [--background].
 A Method needs no configuration file. What changes the result is in the Method: models, limits, tools, and secrets (the names). What belongs to this computer is in ~/.config/method/computer.json: method config (local agent, own model key) and method bind (folders and connections). python and node are found on PATH and prepared automatically. A saved version carries its helpers; versions saved without files still need --workspace DIR.
 
 ## Models
@@ -1231,7 +1233,7 @@ Arguments and defaults:
 Lists the proposals in your account and the local proposals beside the file. --wait: when an improvement is running, wait until it ends (usually a few minutes), printing each step it reaches.
 
 Result and changes:
-JSON list of proposals with id, source, status, kind, cause, and steps, and the newest improvement that has no proposal yet, with its status. No changes.
+JSON list of proposals with id, source, status, kind, cause, and steps, and the newest improvement that has no proposal yet, with its status. An improvement that found no safe change has outcome none, and next says what to do instead. No changes.
 
 Example:
 
@@ -1676,6 +1678,7 @@ Arguments and defaults:
 Models come from the Method's models: (or the account default); --agent codex|claude or method config agent runs model steps with a local agent. --workspace selects a different helper folder. See method authoring execution. Optional --state FILE initializes state for a new run. Resume with --resume --run-dir DIR; authorize unfinished work with --retry STEP:ITERATION.
 
 --inputs FILE: JSON input values.
+--inputs-from RUN_ID: use the inputs of that run; --inputs FILE overrides single values.
 --run-dir DIR: the folder for this run's records (new runs too; default .method-runs/ID).
 --agent codex|claude: run every model step of a new run with this local agent.
 --resume: continue the same saved run with its saved agent.

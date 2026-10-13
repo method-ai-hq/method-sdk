@@ -1,3 +1,10 @@
+# 0.15.0
+
+- **Run again with the inputs of an earlier run.** `method run FILE|ID --inputs-from RUN_ID` uses the inputs of that run. `--inputs FILE` given with it replaces single values. The inputs of an account run come from the account. The inputs of a `run_data: device` run come from its run folder on this computer (in `.method-runs` here and beside the Method, and in the CLI's run cache), found by its dashboard run ID; so do the inputs of any run when the account cannot be reached. When no run has the ID, the error says where it looked.
+- **A device run says which phase failed.** A run with `run_data: device` keeps the phase of its failure and of each step's failure (environment, input, action, check, or change) in the record it sends to the dashboard, so the dashboard no longer says that the cause was not recorded. The expected and observed text, the evidence, and the error message stay on this computer.
+- **`method proposals` says when an improvement found no safe change.** When the newest improvement has no proposal and its outcome is `none`, the printed `improvement` has `outcome: "none"`, and `next` says to add a note on a run with `method improve FILE --note TEXT` or to record a case with `method case new`. `--wait` returns with the same result.
+- The authoring guide and the plugin tell the agent to give each Method a `run_label` that tells its runs apart (the resolved value when a default picks it), to put the readable output in `result`, to write a `run_prompt` that says where each input comes from and what to show, and to use `--inputs-from RUN_ID` for a "Run again" prompt from the dashboard.
+
 # 0.14.6
 
 - **A run links to its dashboard page from the start.** When this computer is signed in, the start line of `method run` has `dashboard`, the link to the run's page. The final result and the last line of `method wait` have it too. Before the run's first record arrives, the page waits for it. The `Dashboard:` line on stderr is gone.

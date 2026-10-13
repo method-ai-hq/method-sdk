@@ -18,12 +18,13 @@ import { Outbox, savedVersions } from "./outbox.js";
 import { readComputerSettings } from "./computer-settings.js";
 import { localSetup } from "./local-setup.js";
 import { readDocument } from "./authoring.js";
+import { withInputsFrom } from "./inputs-from.js";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 const help = "Use method run, steps, prompt, inspect, or doctor. See method help.";
 export function parse(args: string[]) {
   return parseArgs({ args, allowPositionals: true, options: {
-    server: {type:"string"}, agent: {type:"string"}, background: {type:"boolean"}, state: {type:"string"}, out: {type:"string"}, inputs: {type:"string"}, workspace: {type:"string"},
+    server: {type:"string"}, agent: {type:"string"}, background: {type:"boolean"}, state: {type:"string"}, out: {type:"string"}, inputs: {type:"string"}, "inputs-from": {type:"string"}, workspace: {type:"string"},
     "run-dir": {type:"string"}, fresh: {type:"boolean"}, rerun: {type:"string",multiple:true}, resume: {type:"boolean"}, human: {type:"string"}, retry: {type:"string",multiple:true},
     "include-files": {type:"boolean"}, verbose: {type:"boolean"}, help: {type:"boolean"}
   }});
@@ -37,6 +38,11 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
   if (notice) process.stderr.write(notice + "\n");
   (await import("./prepare.js")).pruneCachedRuns();
   flags = { ...flags, "run-dir": flags["run-dir"] ?? join(process.cwd(), ".method-runs", randomUUID()) };
+  if (flags["inputs-from"]) {
+    let client: MethodClient | undefined;
+    if (!syncFactory) try { client = new MethodClient(flags.server); } catch { /* not signed in to this server */ }
+    flags = await withInputsFrom(flags, flags["run-dir"]!, path, client);
+  }
   const account = syncFactory ? undefined : await accountSync(path, flags);
   try { await runCurrentFile(path, flags, syncFactory ?? account?.sync); }
   finally {

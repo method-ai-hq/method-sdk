@@ -205,7 +205,7 @@ export async function proposalCommand(args: string[], clientFactory: (server: st
       const [{ proposals }, { improvements }] = await Promise.all([
         client.request<{ proposals: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/proposals`),
         client.request<{ improvements: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/improvements`)]);
-      // The newest improvement that has no proposal yet: still running, or failed. The agent needs to know which.
+      // The newest improvement that has no proposal: still running, failed, or ended with no safe change (outcome none).
       const latest = (improvements ?? []).find(i => !i.proposal_id);
       return { proposals, pending: latest && (latest.created_at ?? '') > String((proposals ?? [])[0]?.created_at ?? '') ? latest : undefined };
     };
@@ -221,10 +221,11 @@ export async function proposalCommand(args: string[], clientFactory: (server: st
     const failedStep = pending?.steps?.find((s: any) => s.status === 'failed')?.step_id;
     const next = !pending ? undefined
       : ['queued', 'running'].includes(pending.status) ? `Improvement ${pending.id} is ${pending.status}. Run method proposals ${target} --wait: it returns when the proposal is ready.`
+      : pending.outcome === 'none' ? `The improvement found no safe change. Say what is wrong in a note on a run (method improve ${target} --note TEXT), or record a case with method case new.`
       : pending.status === 'failed' || pending.status === 'cancelled' ? `Improvement ${pending.id} ${pending.status}${failedStep ? ` at step ${failedStep}` : ''}${pending.error?.message ? `: ${pending.error.message}` : ''}. Run method improve ${target} again, or record the correction with method case new.`
       : undefined;
     return print({ file, method_id: methodId, proposals: [...(proposals ?? []).map(p => summary({ ...p, source: 'account' })), ...local].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
-      ...(pending ? { improvement: { id: pending.id, status: pending.status, ...(failedStep ? { failed_step: failedStep } : {}), ...(pending.error ? { error: pending.error } : {}) } } : {}), ...(next ? { next } : {}) });
+      ...(pending ? { improvement: { id: pending.id, status: pending.status, ...(pending.outcome === 'none' ? { outcome: 'none' } : {}), ...(failedStep ? { failed_step: failedStep } : {}), ...(pending.error ? { error: pending.error } : {}) } } : {}), ...(next ? { next } : {}) });
   }
   const local = localProposals(file);
   let proposal: ProposalRecord | undefined = wanted ? local.find(p => p.id === wanted) : undefined;
