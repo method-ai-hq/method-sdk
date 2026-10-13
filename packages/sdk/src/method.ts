@@ -51,7 +51,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   // An installed CLI keeps itself current in the background, with no output; this command is not delayed.
   void (await import('./update.js')).updateInBackground();
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
-  if (['improve','proposals','apply'].includes(args[0] ?? '')) return (await import('./proposals.js')).proposalCommand(args, clientFactory);
+  if (args[0] === 'judge') return (await import('./judge.js')).judgeCommand(args.slice(1), clientFactory);
+  if (['improve','changes','apply'].includes(args[0] ?? '')) return (await import('./proposals.js')).proposalCommand(args, clientFactory);
   await (await import('./proposals.js')).autoApply(args, clientFactory);
   if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);
   if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));

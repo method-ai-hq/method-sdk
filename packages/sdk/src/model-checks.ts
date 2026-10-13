@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import type { ClassificationProvider } from '@withmethod/runtime';
 import { serializeWorkflow } from '../../workflow-language/src/validate.js';
 import { methodCache } from './prepare.js';
+import { scriptLanguage, staticEffects } from './explain-effects.js';
 
 export type Level = 'error' | 'warning' | 'note';
 export type Issue = { code: string; level: Level; step?: string; field?: string; file?: string; line?: number; message: string; fix: string;
@@ -20,10 +21,17 @@ type Check = {
   /** Which part of the step the check reads; undefined when the check does not apply to the step. */
   script?: (step: Step) => string | undefined;
   applies: (step: Step) => boolean;
+  /** More inputs for Jev, from the Method (for example the definitions of an agent step's tools). */
+  context?: (step: Step, method: any) => Record<string, string>;
+  /** A finding (true) or none (false) that code analysis decides without a question to Jev; undefined asks Jev. */
+  decide?: (inputs: Record<string, string>) => boolean | undefined;
   field: string; message: (id: string) => string; fix: string;
 };
 
 const promptKinds = ['call', 'agent'];
+/** A step that declares a change outside the run: a connection or service in changes, or an effect. */
+const declaresWorldChange = (step: Step) => (step.changes ?? []).some((ref: string) => typeof ref === 'string' && ref.startsWith('environment.')) || Object.keys(step.effects ?? {}).length > 0;
+const agentWithTools = (step: Step) => step.do?.kind === 'agent' && ((step.do.tools ?? []).length > 0 || !!step.do.browser);
 export const checks: Record<string, Check> = {
   script_calls_model: {
     version: 1, level: 'warning', field: 'do',
@@ -67,7 +75,41 @@ export const checks: Record<string, Check> = {
     message: id => `The prompt of ${id} appears to need information that the step does not give it.`,
     fix: 'Add the missing value to in: from an input or an earlier step, or write it in the prompt.',
   },
+  undeclared_change: {
+    version: 1, level: 'warning', field: 'do',
+    question: 'Can this step send, post, or change something outside its own output folder, for example send an email or a message, create or update a record in a service or an API, submit a form, or write files elsewhere, while its changes: and effects: declare no such change? Reading, searching, downloading, and returning a result are not changes.',
+    applies: step => !declaresWorldChange(step) && (step.do?.kind === 'run' || agentWithTools(step)),
+    script: step => step.do?.kind === 'run' ? step.do.entrypoint : undefined,
+    context: (step, method) => step.do?.kind === 'agent' && (step.do.tools ?? []).length
+      ? { tools: limit(serializeWorkflow(Object.fromEntries((step.do.tools as string[]).map(name => [name, method.tools?.[name] ?? null]))), 16_000) } : {},
+    decide: inputs => inputs.script === undefined ? undefined : scanDecision(inputs.step ?? "", inputs.script),
+    message: id => `${id} can send or change things that it does not declare.`,
+    fix: 'Declare what it changes in changes:, so Method can check where its data goes.',
+  },
 };
+
+/** Libraries and calls that can send or change something, but whose target code analysis may not find. */
+const senders = {
+  python: /^\s*(?:import|from)\s+(?:requests|httpx|aiohttp|urllib3?|http\.client|smtplib|email\.mime|boto3|slack_sdk|twilio|sendgrid|googleapiclient|subprocess)\b|\bos\.(?:system|popen)\(/m,
+  node: /\bfetch\(|\brequire\(\s*['"](?:node:)?(?:https?|child_process|axios|node-fetch|got|undici|nodemailer|@sendgrid\/mail|@slack\/web-api|twilio)['"]|\bfrom\s+['"](?:node:)?(?:https?|child_process|axios|node-fetch|got|undici|nodemailer|@sendgrid\/mail|@slack\/web-api|twilio)['"]/,
+};
+/** Temporary files are not a change in the world. */
+const temporaryPath = (path: string) => /^(?:\/tmp\/|\/var\/folders\/|\/private\/tmp\/)/.test(path);
+/**
+ * The script scan of a run step (explain-effects): a network host or a write is a finding with no model call. No host,
+ * no write, and no library that can send: no finding. A library that can send or a subprocess with no host found:
+ * undefined, so Jev answers.
+ */
+export function scanDecision(stepYaml: string, script: string): boolean | undefined {
+  const entrypoint = /^\s*entrypoint:\s*["']?([^\s"']+)/m.exec(stepYaml)?.[1];
+  const language = entrypoint ? scriptLanguage(entrypoint) : undefined;
+  if (!language || !script.trim()) return undefined;
+  let effects;
+  try { effects = staticEffects(language, [{ path: entrypoint!, text: script }], undefined).effects; } catch { return undefined; }
+  if (effects.network.length || effects.writes.some(path => !temporaryPath(path))) return true;
+  if (effects.runs.length || senders[language].test(script)) return undefined;
+  return false;
+}
 
 /**
  * Checks shown to the user. A check moves here from shadow mode only with a results.json that shows its precision
@@ -94,7 +136,7 @@ export function checkTargets(method: any, readText: (path: string) => string | u
     for (const [name, check] of Object.entries(checks)) {
       if (!check.applies(step)) continue;
       const path = check.script?.(step);
-      const inputs: Record<string, string> = { step: stepText(id, step) };
+      const inputs: Record<string, string> = { step: stepText(id, step), ...check.context?.(step, method) };
       if (path) inputs.script = limit(readText(path) ?? '', 40_000);
       targets.push({ check: name, version: check.version, step: id, inputs, key: checkKey(name, check.version, inputs) });
     }
@@ -102,7 +144,7 @@ export function checkTargets(method: any, readText: (path: string) => string | u
   return targets;
 }
 export const checkKey = (check: string, version: number, inputs: Record<string, string>) =>
-  createHash('sha256').update(JSON.stringify([check, version, inputs.step, inputs.script ?? ''])).digest('hex');
+  createHash('sha256').update(JSON.stringify([check, version, inputs.step, inputs.script ?? '', ...(inputs.tools !== undefined ? [inputs.tools] : [])])).digest('hex');
 
 export type Result = { check: string; version: number; step: string; key: string; answer: boolean; probability: number; model: string; at: string };
 export const checksDir = () => join(methodCache(), 'checks');
@@ -121,14 +163,24 @@ function store(result: Result) {
  * probability is that of yes.
  */
 export const answerOptions = { yes: 'Yes: the question describes this step.', no: 'No: the question does not describe this step.' };
+const noProvider = (): never => { throw Error('Model checks need sign-in.'); };
 export async function askCheck(provider: ClassificationProvider, question: string, inputs: Record<string, string>, signal: AbortSignal) {
   const { model } = await provider.resolve(signal);
   const answer = await provider.evaluate({ request_id: randomUUID(), model, question, options: answerOptions, inputs }, signal) as { choice: string; probabilities: Record<string, number> };
   const probability = answer.probabilities.yes ?? 0;
   return { answer: probability >= findingThreshold, probability, model };
 }
-export async function evaluateTarget(provider: ClassificationProvider, target: Target, signal: AbortSignal): Promise<Result> {
-  const answer = await askCheck(provider, checks[target.check]!.question, target.inputs, signal);
+/** The answer of code analysis, when the check has one for these inputs. */
+export function decided(check: string, inputs: Record<string, string>) {
+  const answer = checks[check]?.decide?.(inputs);
+  return answer === undefined ? undefined : { answer, probability: answer ? 1 : 0, model: 'script-scan' };
+}
+/** Answer one target: code analysis when it decides, or else Jev. scanned: code analysis already found it cannot decide. */
+export async function evaluateTarget(provider: ClassificationProvider | undefined, target: Target, signal: AbortSignal, scanned = false): Promise<Result> {
+  const answer = (scanned ? undefined : decided(target.check, target.inputs)) ?? await askCheck(provider ?? noProvider(), checks[target.check]!.question, target.inputs, signal);
+  return record(target, answer);
+}
+function record(target: Target, answer: { probability: number; model: string }): Result {
   const result = { check: target.check, version: target.version, step: target.step, key: target.key, answer: answer.probability >= findingThreshold,
     probability: answer.probability, model: answer.model, at: new Date().toISOString() };
   store(result);
@@ -141,12 +193,16 @@ export async function evaluateTarget(provider: ClassificationProvider, target: T
  */
 export async function runChecks(provider: ClassificationProvider | undefined, targets: Target[], waitMs = 3000) {
   const done: Result[] = [], pending: Target[] = [];
-  const open = targets.filter(target => { const hit = cached(target.key); if (hit) done.push(hit); return !hit; });
+  // Answers that code analysis decides need no provider and no wait.
+  const open = targets.filter(target => {
+    const hit = cached(target.key) ?? (() => { const answer = decided(target.check, target.inputs); return answer && record(target, answer); })();
+    if (hit) done.push(hit); return !hit;
+  });
   if (!open.length) return { done, pending };
   if (!provider) return { done, pending: open };
   const controller = new AbortController();
   const settled = new Set<string>();
-  const work = open.map(target => evaluateTarget(provider, target, controller.signal)
+  const work = open.map(target => evaluateTarget(provider, target, controller.signal, true)
     .then(result => { done.push(result); }).catch(() => {}).finally(() => settled.add(target.key)));
   let timer: NodeJS.Timeout | undefined;
   await Promise.race([Promise.all(work), new Promise(resolve => { timer = setTimeout(resolve, waitMs); })]);

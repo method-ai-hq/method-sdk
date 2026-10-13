@@ -130,11 +130,11 @@ async function markApplied(client: MethodClient | undefined, file: string, propo
 }
 
 const serverFlag = (args: string[]) => { const at = args.findIndex(arg => arg === '--server' || arg.startsWith('--server=')); return at < 0 ? undefined : args[at]!.startsWith('--server=') ? args[at]!.slice(9) : args[at + 1]; };
-const skipAutoApply = new Set(['apply', 'proposals', 'improve', 'init', 'new-id', 'diff', 'help', 'authoring', 'schema', '__worker', '__checks', 'worker', 'keys', 'secret', 'models', 'login', 'logout', 'sync', 'progress']);
+const skipAutoApply = new Set(['apply', 'changes', 'judge', 'improve', 'init', 'new-id', 'diff', 'help', 'authoring', 'schema', '__worker', '__checks', 'worker', 'keys', 'secret', 'models', 'login', 'logout', 'sync', 'progress']);
 /**
- * Before a command that takes a .method FILE: when this computer is signed in and the Method has an accepted proposal,
- * merge it into the file and print one line. A conflict prints what the coding agent must resolve; the command goes on.
- * Offline, signed out, or on any error, it does nothing.
+ * Before a command that takes a .method FILE: when this computer is signed in and Method applied a change to the Method
+ * (an accepted proposal, from the person's judgments), merge it into the file and print one line. A conflict prints
+ * what the coding agent must resolve; the command goes on. Offline, signed out, or on any error, it does nothing.
  */
 export async function autoApply(args: string[], clientFactory: (server: string) => MethodClient) {
   if (!args[0] || skipAutoApply.has(args[0]) || args.includes('--help') || process.env.METHOD_RUN_WORKER === '1') return;
@@ -150,10 +150,10 @@ export async function autoApply(args: string[], clientFactory: (server: string) 
     if (!proposal?.proposed_workflow) return;
     const result = await applyProposal(client, file, proposal, options);
     if (result.status === 'applied') {
-      if (result.steps.length || result.warning) process.stderr.write(`Applied accepted proposal ${proposal.id} to ${target}: ${proposal.cause}${result.steps.length ? ` Changed steps: ${result.steps.join(', ')}.` : ''} Not published.${result.warning ? ` ${result.warning}` : ''}\n`);
+      if (result.steps.length || result.warning) process.stderr.write(`Method changed ${target} (${proposal.id}): ${proposal.cause}${result.steps.length ? ` Changed steps: ${result.steps.join(', ')}.` : ''}${result.warning ? ` ${result.warning}` : ''}\n`);
     } else process.stderr.write(result.status === 'conflict'
-      ? `Accepted proposal ${proposal.id} conflicts with your edits of ${target} in ${result.conflicts.map(c => c.path).join(', ')}. The file is not changed. Run method apply ${target} ${proposal.id} to see both versions, merge them in the file, then run method apply ${target} ${proposal.id} --resolved.\n`
-      : `Accepted proposal ${proposal.id} does not merge into a valid Method: ${result.error} The file is not changed. Run method apply ${target} ${proposal.id} to see it.\n`);
+      ? `Method's change ${proposal.id} conflicts with your edits of ${target} in ${result.conflicts.map(c => c.path).join(', ')}. The file is not changed. Run method apply ${target} ${proposal.id} to see both versions, merge them in the file, then run method apply ${target} ${proposal.id} --resolved.\n`
+      : `Method's change ${proposal.id} does not merge into a valid Method: ${result.error} The file is not changed. Run method apply ${target} ${proposal.id} to see it.\n`);
   } catch { /* offline or signed out: the command goes on without the proposal. */ }
 }
 
@@ -184,49 +184,33 @@ function manualStep(file: string, proposal: ProposalRecord, runFolder?: string) 
 }
 
 const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
-function summary(p: ProposalRecord) {
-  return { id: p.id, source: p.source, status: p.status, kind: p.evidence?.kind ?? null, cause: p.cause, steps: p.evidence?.steps ?? [], base_version_id: p.base_version_id, created_at: p.created_at };
+type Change = { id: string; source: 'account' | 'local'; cause: string; date: string; version_id: string | null; steps: string[] };
+const changeLine = (change: Change) => `${change.date.slice(0, 10)}  ${change.version_id ?? 'not saved as a version'}  ${change.cause}`;
+
+/** `method changes FILE`: the changes that Method applied to the Method, newest first, and those applied on this computer. */
+async function changesCommand(file: string, target: string, methodId: string | null, client: MethodClient, json: boolean) {
+  const local: Change[] = localProposals(file).filter(p => p.status === 'applied').map((p: any) => ({ id: p.id, source: 'local', cause: p.cause, date: String(p.applied_at ?? p.created_at), version_id: p.applied_version_id ?? null, steps: p.evidence?.steps ?? [] }));
+  let account: Change[] = [];
+  if (methodId) {
+    const { proposals } = await client.request<{ proposals: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/proposals?status=accepted`);
+    account = (proposals ?? []).map(p => ({ id: p.id, source: 'account', cause: String(p.cause ?? ''), date: String(p.created_at ?? ''), version_id: p.published_version_id ?? null, steps: p.evidence?.steps ?? [] }));
+  } else if (!local.length) throw Error(`${target} has no id: line, so Method has not changed it. Run it once while signed in.`);
+  const changes = [...account, ...local].sort((a, b) => b.date.localeCompare(a.date));
+  if (json) return print({ file, method_id: methodId, changes });
+  process.stdout.write(changes.length ? changes.map(changeLine).join('\n') + '\n' : `Method has not changed ${target} yet.\n`);
 }
 
-/** `method improve`, `method proposals`, and `method apply`. */
+/** `method improve`, `method changes`, and `method apply`. */
 export async function proposalCommand(args: string[], clientFactory: (server: string) => MethodClient) {
   if (args[0] === 'improve') return (await import('./improve.js')).improveCommand(args.slice(1), clientFactory);
-  const { values, positionals } = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, resolved: { type: 'boolean' }, wait: { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, resolved: { type: 'boolean' }, json: { type: 'boolean' } } });
   const [target, wanted] = positionals;
-  if (!target || positionals.length > (args[0] === 'apply' ? 2 : 1)) throw Error(args[0] === 'apply' ? 'Use method apply FILE [PROPOSAL_ID] [--resolved].' : 'Use method proposals FILE.');
+  if (!target || positionals.length > (args[0] === 'apply' ? 2 : 1)) throw Error(args[0] === 'apply' ? 'Use method apply FILE [PROPOSAL_ID] [--resolved].' : 'Use method changes FILE [--json].');
   const file = authoringPath(target), id = readDocument(file).id;
   const methodId = typeof id === 'string' && methodIdPattern.test(id) ? id : null;
   const client = clientFactory(values.server ?? DEFAULT_SERVER);
   const signedIn = !!client.token();
-  if (args[0] === 'proposals') {
-    const local = localProposals(file).map(summary);
-    if (!methodId || !signedIn) return print({ file, method_id: methodId, proposals: local, ...(methodId ? { next: 'Run method login to see the proposals in your account too.' } : {}) });
-    const read = async () => {
-      const [{ proposals }, { improvements }] = await Promise.all([
-        client.request<{ proposals: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/proposals`),
-        client.request<{ improvements: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/improvements`)]);
-      // The newest improvement that has no proposal: still running, failed, or ended with no safe change (outcome none).
-      const latest = (improvements ?? []).find(i => !i.proposal_id);
-      return { proposals, pending: latest && (latest.created_at ?? '') > String((proposals ?? [])[0]?.created_at ?? '') ? latest : undefined };
-    };
-    let { proposals, pending } = await read();
-    // --wait: one line each time the improvement reaches a new step, until it ends.
-    let shown = '';
-    while (values.wait && pending && ['queued', 'running'].includes(pending.status)) {
-      const step = pending.steps?.find((s: any) => s.status === 'running')?.step_id ?? pending.status;
-      if (step !== shown) { process.stderr.write(`Improvement ${pending.id}: ${step}\n`); shown = step; }
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      ({ proposals, pending } = await read());
-    }
-    const failedStep = pending?.steps?.find((s: any) => s.status === 'failed')?.step_id;
-    const next = !pending ? undefined
-      : ['queued', 'running'].includes(pending.status) ? `Improvement ${pending.id} is ${pending.status}. Run method proposals ${target} --wait: it returns when the proposal is ready.`
-      : pending.outcome === 'none' ? `The improvement found no safe change. Say what is wrong in a note on a run (method improve ${target} --note TEXT), or record a case with method case new.`
-      : pending.status === 'failed' || pending.status === 'cancelled' ? `Improvement ${pending.id} ${pending.status}${failedStep ? ` at step ${failedStep}` : ''}${pending.error?.message ? `: ${pending.error.message}` : ''}. Run method improve ${target} again, or record the correction with method case new.`
-      : undefined;
-    return print({ file, method_id: methodId, proposals: [...(proposals ?? []).map(p => summary({ ...p, source: 'account' })), ...local].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))),
-      ...(pending ? { improvement: { id: pending.id, status: pending.status, ...(pending.outcome === 'none' ? { outcome: 'none' } : {}), ...(failedStep ? { failed_step: failedStep } : {}), ...(pending.error ? { error: pending.error } : {}) } } : {}), ...(next ? { next } : {}) });
-  }
+  if (args[0] === 'changes') return changesCommand(file, target, methodId, client, !!values.json);
   const local = localProposals(file);
   let proposal: ProposalRecord | undefined = wanted ? local.find(p => p.id === wanted) : undefined;
   if (!proposal && wanted) {
@@ -234,11 +218,10 @@ export async function proposalCommand(args: string[], clientFactory: (server: st
     proposal = await accountProposal(client, wanted);
     if (methodId && proposal.method_id !== methodId) throw Error(`Proposal ${wanted} is for another Method.`);
   }
-  if (!proposal && methodId && signedIn) proposal = await newestAccepted(client, methodId);
   proposal ??= local.find(p => p.status === 'open');
-  if (!proposal) throw Error(`${target} has no accepted proposal. Run method proposals ${target}.`);
+  if (!proposal) throw Error(`${target} has no open proposal. Run method improve ${target} --note TEXT first.`);
   if (proposal.status === 'applied') return print({ status: 'applied', file, proposal_id: proposal.id, next: 'This proposal is already applied.' });
-  if (proposal.source === 'account' && proposal.status !== 'accepted') throw Error(`Proposal ${proposal.id} is ${proposal.status}. Accept it on the dashboard first: ${client.server}/methods/${proposal.method_id}`);
+  if (proposal.source === 'account' && proposal.status !== 'accepted') throw Error(`Change ${proposal.id} is ${proposal.status}, so it has nothing to merge.`);
   if (proposal.source === 'local' && proposal.status !== 'open') throw Error(`Proposal ${proposal.id} is ${proposal.status}.`);
   if (values.resolved) return print({ status: 'applied', file, proposal_id: proposal.id, ...await markApplied(client, file, proposal), next: `Run method test ${target}. Publish it when it is right.` });
   if (!proposal.proposed_workflow) {

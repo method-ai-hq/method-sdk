@@ -140,13 +140,13 @@ it('model checks: targets carry the exact inputs, display text and accepts do no
   expect(checkTargets(accepted, () => undefined).find(target => target.step === 'route' && target.check === route.check)!.key).toBe(route.key);
   expect(checkKey('a', 1, { step: 'x' })).not.toBe(checkKey('a', 2, { step: 'x' }));
   // A script check reads the script.
-  const scripted = checkTargets({ steps: { s: { do: { kind: 'run', runtime: 'node', entrypoint: 'a.mjs' } } } }, path => path === 'a.mjs' ? 'fetch()' : undefined);
+  const scripted = checkTargets({ steps: { s: { do: { kind: 'run', runtime: 'node', entrypoint: 'a.mjs' } } } }, path => path === 'a.mjs' ? 'fetch()' : undefined).filter(target => target.check === 'script_calls_model');
   expect(scripted).toEqual([expect.objectContaining({ check: 'script_calls_model', inputs: { step: expect.any(String), script: 'fetch()' } })]);
 });
 
 it('model checks run in parallel, cache their answers, and leave slow ones pending; shadow checks are never shown', async () => {
   const targets = checkTargets({ steps: { a: { do: { kind: 'run', runtime: 'node', entrypoint: 'a.mjs' } }, b: { do: { kind: 'run', runtime: 'node', entrypoint: 'b.mjs' } } } },
-    path => path === 'a.mjs' ? 'fast' : 'slow');
+    path => path === 'a.mjs' ? 'fast' : 'slow').filter(target => target.check === 'script_calls_model');
   let open = 0, most = 0;
   const provider = { resolve: async () => ({ provider: 'typesafe' as const, model: 'jev-test' }),
     evaluate: vi.fn(async (request: any, signal: AbortSignal) => {

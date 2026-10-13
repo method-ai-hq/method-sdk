@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mergeMethod, autoApply, proposalCommand, localProposals } from '../../packages/sdk/src/proposals.js';
-import { improveCommand } from '../../packages/sdk/src/improve.js';
+import { improveCommand, judgmentsLine } from '../../packages/sdk/src/improve.js';
 import { placementFlags, publishWithPlacement } from '../../packages/sdk/src/cloud.js';
 import { buildPackage, runtimeVersion } from '../../packages/sdk/src/method-files.js';
 import { currentVersion, methodContent, writeMethodId } from '../../packages/sdk/src/versions.js';
@@ -75,12 +75,12 @@ function accountRoutes(base: any, proposed: any, baseVersion: string, applied: a
   };
 }
 
-it('applies the newest accepted proposal and records it as applied', async () => {
+it('merges a change that Method applied, given its ID, and records it as applied', async () => {
   const base = method({ a: step('a', 'A.'), b: step('b', 'B.') }), proposed = method({ a: step('a', 'A better.'), b: step('b', 'B.') });
   const { file } = setup(base);
   const applied: any[] = [], client = fakeClient(accountRoutes(base, proposed, (await currentVersion(file))!.version_id, applied));
   const out = stdout();
-  await proposalCommand(['apply', file], () => client);
+  await proposalCommand(['apply', file, 'prop_1'], () => client);
   const result = printed(out);
   expect(result).toMatchObject({ status: 'applied', proposal_id: 'prop_1', steps: ['a'] });
   expect(methodContent(readDocument(file))).toEqual(proposed);
@@ -164,30 +164,48 @@ it('sets the placement after a publish with --cloud or --workers', async () => {
   expect(process.exitCode).toBe(1);
 });
 
-it('starts an account improvement for account run data', async () => {
+it('starts nothing for account run data: judgments start fixes', async () => {
   const { file } = setup(method({ a: step('a', 'A.'), b: step('b', 'B.') }));
-  const client = fakeClient({ [`POST /api/methods/${METHOD_ID}/improvements`]: body => ({ improvement: { id: 'run_9', status: 'queued', note: body.note } }) });
+  const client = fakeClient({ 'GET /api/cli/me': () => ({ organization: { keep_run_content_on_devices: false } }) });
   const out = stdout();
   await improveCommand([file, '--step', 'a', '--note', 'Name the customer.'], () => client, async () => { throw Error('Must not run locally'); });
-  expect(client.calls).toEqual([{ path: `/api/methods/${METHOD_ID}/improvements`, verb: 'POST', body: { step_id: 'a', note: 'Name the customer.' } }]);
-  expect(printed(out)).toMatchObject({ improvement: { id: 'run_9' }, url: `https://example.test/methods/${METHOD_ID}` });
+  expect(out.mock.calls.map(c => String(c[0])).join('')).toBe(`${judgmentsLine}\n`);
+  expect(judgmentsLine).toBe('Method fixes this Method from your judgments. Record the person\'s reaction: method judge RUN_ID wrong --note "...".');
+  expect(client.calls.map((c: any) => `${c.verb} ${c.path}`)).toEqual(['GET /api/cli/me']);
+  expect(process.exitCode ?? 0).toBe(0);
   await expect(improveCommand([file, '--step', 'missing'], () => client)).rejects.toThrow('Step missing is not in');
 });
 
-it('proposals says what to do when the newest improvement found no safe change', async () => {
+it('improves on this computer when the organization keeps run content on devices', async () => {
   const { file } = setup(method({ a: step('a', 'A.') }));
-  const improvement = { id: 'run_9', status: 'succeeded', outcome: 'none', created_at: '2026-10-13T10:00:00Z', proposal_id: null };
-  const client = fakeClient({
-    [`GET /api/methods/${METHOD_ID}/proposals`]: () => ({ proposals: [] }),
-    [`GET /api/methods/${METHOD_ID}/improvements`]: () => ({ improvements: [improvement] }),
-  });
-  const out = stdout();
-  await proposalCommand(['proposals', file, '--wait'], () => client);
-  expect(printed(out)).toMatchObject({ proposals: [], improvement: { id: 'run_9', status: 'succeeded', outcome: 'none' },
-    next: `The improvement found no safe change. Say what is wrong in a note on a run (method improve ${file} --note TEXT), or record a case with method case new.` });
+  const client = fakeClient({ 'GET /api/cli/me': () => ({ organization: { keep_run_content_on_devices: true } }) });
+  stdout(); stderr();
+  // The local flow starts: it asks for improve.method, which this fake server does not have.
+  await expect(improveCommand([file], () => client, async () => { throw Error('not reached'); })).rejects.toThrow('404: GET /api/cli/improve/method');
 });
 
-it('sends the newest run of the Method with a note, and the suggested case names its folder', async () => {
+it('changes lists the changes that Method applied, with cause, date, and version', async () => {
+  const { file } = setup(method({ a: step('a', 'A.') }));
+  const client = fakeClient({
+    [`GET /api/methods/${METHOD_ID}/proposals?status=accepted`]: () => ({ proposals: [
+      { id: 'prop_1', status: 'accepted', cause: 'The summary named no customer.', created_at: '2026-10-09T08:00:00Z', published_version_id: 'v_1', evidence: { kind: 'change', steps: ['a'] } },
+      { id: 'prop_2', status: 'accepted', cause: 'The date was in the wrong form.', created_at: '2026-10-12T08:00:00Z', published_version_id: 'v_2', evidence: { kind: 'change', steps: ['a'] } }] }),
+  });
+  const out = stdout();
+  await proposalCommand(['changes', file], () => client);
+  expect(out.mock.calls.map(c => String(c[0])).join('')).toBe('2026-10-12  v_2  The date was in the wrong form.\n2026-10-09  v_1  The summary named no customer.\n');
+  out.mockClear();
+  await proposalCommand(['changes', file, '--json'], () => client);
+  expect(printed(out).changes[0]).toEqual({ id: 'prop_2', source: 'account', cause: 'The date was in the wrong form.', date: '2026-10-12T08:00:00Z', version_id: 'v_2', steps: ['a'] });
+  const none = fakeClient({ [`GET /api/methods/${METHOD_ID}/proposals?status=accepted`]: () => ({ proposals: [] }) });
+  out.mockClear();
+  await proposalCommand(['changes', file], () => none);
+  expect(out.mock.calls.map(c => String(c[0])).join('')).toBe(`Method has not changed ${file} yet.\n`);
+  // method proposals is gone.
+  await expect(proposalCommand(['proposals', file], () => client)).rejects.toThrow();
+});
+
+it('names the run folder on this computer in the suggested case of a change', async () => {
   const { root, file } = setup(method({ a: step('a', 'A.'), b: step('b', 'B.') }));
   const run = (name: string, id: string, dashboard: string, at: number) => {
     const dir = join(root, 'cache', 'runs', name); mkdirSync(dir, { recursive: true });
@@ -200,14 +218,10 @@ it('sends the newest run of the Method with a note, and the suggested case names
   const newest = run('newest', METHOD_ID, 'run_newest', 2_000);
   run('other', `wf_${'d'.repeat(32)}`, 'run_other', 3_000);
   const client = fakeClient({
-    [`POST /api/methods/${METHOD_ID}/improvements`]: () => ({ improvement: { id: 'run_9', status: 'queued' } }),
     'GET /api/proposals/prop_1': () => ({ proposal: { id: 'prop_1', method_id: METHOD_ID, base_version_id: null, status: 'accepted', cause: 'No case tests this correction.', created_at: '2026-10-09T00:00:00Z',
       evidence: { kind: 'case', steps: [], case_suggestion: { id: 'no-paint', note: 'She does not paint.', run_id: 'run_newest', rubric: ['No painting.'] } }, base_workflow: null, proposed_workflow: null } }),
   });
   const out = stdout();
-  await improveCommand([file, '--note', 'She does not paint.'], () => client);
-  expect(client.calls[0].body).toEqual({ note: 'She does not paint.', run_id: 'run_newest' });
-  out.mockClear();
   await proposalCommand(['apply', file, 'prop_1'], () => client);
   const next = printed(out).next;
   expect(next).toContain(`--run ${JSON.stringify(newest)}`); expect(next).not.toContain('RUN_FOLDER');

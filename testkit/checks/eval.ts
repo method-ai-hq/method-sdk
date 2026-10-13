@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { managedClassification } from '../../packages/sdk/src/classification-client.js';
 import { MethodClient } from '../../packages/sdk/src/method-client.js';
-import { askCheck, checks, findingThreshold, precisionBar } from '../../packages/sdk/src/model-checks.js';
+import { askCheck, checks, decided, findingThreshold, precisionBar } from '../../packages/sdk/src/model-checks.js';
 
 const root = new URL('.', import.meta.url).pathname;
 const { values } = parseArgs({ options: { split: { type: 'string', default: 'heldout' }, check: { type: 'string' }, concurrency: { type: 'string', default: '6' } } });
@@ -41,8 +41,9 @@ for (const name of names) {
   await Promise.all(Array.from({ length: Number(values.concurrency) }, async () => {
     for (let item = queue.shift(); item; item = queue.shift()) {
       try {
-        const answer = await askCheck(provider, check.question, item.inputs, AbortSignal.timeout(120_000));
-        model = answer.model;
+        // A check that code analysis decides for these inputs is measured with that answer, as validate gives it.
+        const answer = decided(name, item.inputs) ?? await askCheck(provider, check.question, item.inputs, AbortSignal.timeout(120_000));
+        if (answer.model !== 'script-scan') model = answer.model;
         rows.push({ ...item, answer: answer.probability >= findingThreshold, probability: answer.probability });
       } catch (error: any) { rows.push({ ...item, answer: false, probability: null, error: error.message }); }
     }

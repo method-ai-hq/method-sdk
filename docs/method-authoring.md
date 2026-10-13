@@ -130,7 +130,7 @@ method run tickets.method --inputs inputs.json   # reuses read, urgency and join
 # After it works
 
 - **Put it in an app:** `method connect APP_FOLDER` publishes it and prints the code to add.
-- **Improve the results:** when the user wants the results changed, `method improve FILE --note TEXT` makes a proposal from the recent runs; `method apply FILE` merges it.
+- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it. Method fixes the Method from wrong judgments; `method changes FILE` lists what it changed. For a Method that keeps run content on this computer, `method improve FILE --note TEXT` makes a local proposal and `method apply FILE` merges it.
 - **Explain the scripts:** `method explain FILE` writes a card for each script step.
 
 # Field reference
@@ -363,7 +363,7 @@ Use reading.output_name to give a returned result a short, honest name. Use read
 ## Corrections become cases
 
 When the user says a result was wrong:
-1. Read the run (result.json, events.jsonl) and fix the Method. Run it again and show the user the new result.
+1. Record it: method judge RUN_ID wrong --note "the user's words" (--corrected FILE when they gave the right result). Do not ask them to confirm it. Then read the run (result.json, events.jsonl) and fix the Method. Run it again and show the user the new result.
 2. If the user wants the fix to stay, ask once: "Keep this as a rule: <the rule in plain words>?"
 3. On yes, record it: method case new FILE --id ID --run BAD_RUN --passing-run NEW_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names the output to judge (default: the Method's result; a path to a file that the run saved is judged by that file's contents). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
 4. Run method test FILE. Every case must pass. method publish refuses a version that breaks a case.
@@ -1194,9 +1194,59 @@ Example:
 method publish task.method --reason 'Shorter introduction'
 ```
 
+## judge
+
+Record the person's reaction to a run's result.
+
+Usage:
+
+```sh
+method judge RUN_ID right|wrong [--step STEP_ID] [--note TEXT] [--corrected FILE] [--json] [--server URL]
+```
+
+Arguments and defaults:
+RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters). --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment makes Method fix the Method in the background: it applies a tested change that the person can undo, or changes nothing. Do not ask the person to confirm a judgment.
+
+Result and changes:
+One line, for example Recorded: wrong on step choose. Method is fixing it in the background. --json prints the judgment and fixing.
+
+Errors:
+An unknown run, a run of a Method that is not in your account, or no sign-in.
+
+Example:
+
+```sh
+method judge 6f1c… wrong --step summary --note 'Name the customer in the first sentence.'
+```
+
+## changes
+
+List the changes that Method applied to a Method.
+
+Usage:
+
+```sh
+method changes FILE [--json] [--server URL]
+```
+
+Arguments and defaults:
+Lists the changes that Method made from wrong judgments, newest first, and the local proposals applied on this computer. Commands that take a signed-in FILE merge a new change into the file first and print one line.
+
+Result and changes:
+One line per change: its date, its version, and its cause. --json prints {file, method_id, changes: [{id, source, cause, date, version_id, steps}]}. No changes.
+
+Errors:
+No id: line and no local change.
+
+Example:
+
+```sh
+method changes task.method
+```
+
 ## improve
 
-Ask Method to propose a better version of a Method.
+Improve a Method that keeps its run content on this computer.
 
 Usage:
 
@@ -1205,13 +1255,13 @@ method improve FILE [--case ID] [--note TEXT] [--step ID] [--server URL]
 ```
 
 Arguments and defaults:
---note: the correction, in your words; it is about the newest run of the Method on this computer, which the improvement reads and a suggested case records. --step: improve only this step. --case: the case the change must pass. A Method with account run data improves in your account; see the progress on the dashboard. A Method with run_data: device improves on this computer, so its run content stays here; the result is a local proposal in .method/proposals/.
+For a Method with run_data: device, or in an organization that keeps run content on devices: runs Method's improvement on this computer, so the run content stays here. --note: the correction, in the person's words; it is about the newest run of the Method on this computer, which the improvement reads and a suggested case records. --step: improve only this step. --case: the case the change must pass. For a Method that keeps run content in the account, it starts nothing and says to use method judge: Method fixes those Methods from the person's judgments.
 
 Result and changes:
-JSON with the improvement and the dashboard link, or the local proposal ID. Nothing is published, and the file does not change.
+JSON with the local proposal ID and the next step; the proposal is in .method/proposals/. Nothing is published, and the file does not change. For an account Method, one line.
 
 Errors:
-No id: line (run the file once while signed in), an unknown step, or an improvement that is already running.
+An unknown step, or a step of the improvement that fails.
 
 Example:
 
@@ -1219,31 +1269,9 @@ Example:
 method improve task.method --step summary --note 'Name the customer in the first sentence.'
 ```
 
-## proposals
-
-List the proposals of a Method.
-
-Usage:
-
-```sh
-method proposals FILE [--wait] [--server URL]
-```
-
-Arguments and defaults:
-Lists the proposals in your account and the local proposals beside the file. --wait: when an improvement is running, wait until it ends (usually a few minutes), printing each step it reaches.
-
-Result and changes:
-JSON list of proposals with id, source, status, kind, cause, and steps, and the newest improvement that has no proposal yet, with its status. An improvement that found no safe change has outcome none, and next says what to do instead. No changes.
-
-Example:
-
-```sh
-method proposals task.method
-```
-
 ## apply
 
-Merge a proposal into the local file.
+Merge a local proposal from method improve into the file.
 
 Usage:
 
@@ -1252,13 +1280,13 @@ method apply FILE [PROPOSAL_ID] [--resolved] [--server URL]
 ```
 
 Arguments and defaults:
-Default: the newest accepted proposal, or else the newest local proposal. The merge is per step: a part that only the proposal changed takes the change; a part that you and the proposal both changed is a conflict. --resolved: you merged a conflict by hand; this marks the proposal applied. Commands that take a signed-in FILE apply an accepted proposal first and print one line.
+Default: the newest open local proposal. The merge is per step: a part that only the proposal changed takes the change; a part that you and the proposal both changed is a conflict. --resolved: you merged a conflict by hand; this marks the proposal applied. When a change that Method applied conflicts with your edits, the line before the command names it; give its ID to see both versions.
 
 Result and changes:
 JSON with status applied and the changed steps; the file changes and the proposal is marked applied. Nothing is published. A conflict lists each part with the base, your, and the proposed value, changes nothing, and exits 1.
 
 Errors:
-No proposal, a proposal that is not accepted, or a conflict.
+No open proposal, or a conflict.
 
 Example:
 

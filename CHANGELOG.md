@@ -1,3 +1,14 @@
+# 0.17.0
+
+Method fixes a Method from the person's reactions to its results.
+
+- **`method judge RUN_ID right|wrong`** records the person's reaction to a run's result. `--note` takes their words (at most 4000 characters), `--corrected FILE` the result they say is right (JSON is sent as JSON, other text as text; at most 1 MB), and `--step` the step whose output was wrong. RUN_ID is the `run_id` of the run's start line or the run ID on the dashboard. A wrong judgment makes Method fix the Method in the background: it applies a tested change that the person can undo, or changes nothing. The command prints one line, for example `Recorded: wrong on step choose. Method is fixing it in the background.`; `--json` prints the judgment.
+- **`method changes FILE`** lists the changes that Method applied to a Method: the date, the version, and the cause of each. Commands that take a signed-in FILE still merge a new change into the file first and print one line. `method proposals` and its `--wait` are removed.
+- **`method improve FILE` is for Methods that keep run content on this computer** (`run_data: device`, or an organization that keeps run content on devices). It runs the improvement on this computer as before, and `method apply FILE` merges its proposal. For a Method that keeps run content in the account, it starts nothing and says to record the person's reaction with `method judge`.
+- **`method apply`** merges local proposals. It no longer takes the newest accepted proposal from the account; give it the ID that a conflict line names to merge a change that Method applied.
+- The plugin and the authoring guide tell the agent to record the person's reaction with `method judge` after it shows a result, without asking the person to confirm it, and then to continue with what they asked.
+- **A new check, `undeclared_change`,** looks for a step that can send or change something (a message, a post, a record in a service, a file outside its output folder) that its `changes` and effects do not declare. For a script step, code analysis decides when it finds a network host or a write, with no model request; when the script uses a library that can send or runs a command, Jev answers one yes/no question. An agent step with tools gets one question. The check starts in shadow mode: its answers are recorded on this computer and not shown, until its precision on the labeled set is measured.
+
 # 0.16.0
 
 A failed run says what went wrong, whose problem it is, and what to do next (runtime 0.13.0).

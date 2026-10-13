@@ -9,10 +9,10 @@ import { DEFAULT_SERVER, type MethodClient } from './method-client.js';
 import { fileHash } from './method-files.js';
 import { methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
-import { currentVersion, methodContent, methodIdPattern } from './versions.js';
+import { currentVersion, methodContent } from './versions.js';
 import { localRuns, saveLocalProposal } from './proposals.js';
 
-/** run_id: the run that the note is about; an account run ID for an account improvement, a run folder for one on this computer. */
+/** run_id: the run folder on this computer that the note is about. */
 export type ImproveRequest = { step_id?: string; note?: string; case_id?: string; run_id?: string };
 type SavedImprove = { workflow_id: string; version_id: string; workflow: any; package?: unknown };
 /** Runs a local Method file; the default is the runtime that `method run FILE` uses. */
@@ -51,9 +51,13 @@ const nextStep = (file: string, id: string, kind: ProposalKind) => ({
 
 const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 
+export const judgmentsLine = 'Method fixes this Method from your judgments. Record the person\'s reaction: method judge RUN_ID wrong --note "...".';
+
 /**
- * `method improve FILE`. A Method with account run data starts an improvement run in the account. A Method with device
- * run data runs improve.method on this computer, so its run content stays here, and saves a local proposal.
+ * `method improve FILE`. A Method that keeps run content in the account is fixed from the person's judgments
+ * (method judge), so this prints that and starts nothing. A Method with device run data (run_data: device, or an
+ * organization that keeps run content on devices) runs improve.method on this computer, so its run content stays here,
+ * and saves a local proposal.
  */
 export async function improveCommand(args: string[], clientFactory: (server: string) => MethodClient, run?: RunFile) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: 'string' }, note: { type: 'string' }, step: { type: 'string' }, server: { type: 'string' } } });
@@ -63,18 +67,11 @@ export async function improveCommand(args: string[], clientFactory: (server: str
   if (values.case && !/^[a-z0-9][a-z0-9-]{0,79}$/.test(values.case)) throw Error('Use a case ID: lowercase letters, digits, and hyphens.');
   if (values.note !== undefined && !values.note.trim()) throw Error('Write the correction after --note.');
   const request: ImproveRequest = { ...(values.step ? { step_id: values.step } : {}), ...(values.note ? { note: values.note.trim() } : {}), ...(values.case ? { case_id: values.case } : {}) };
-  // A note is about the newest run of the Method on this computer.
-  const newest = request.note ? (await localRuns(file))[0] : undefined;
   const client = clientFactory(values.server ?? DEFAULT_SERVER);
   if (!client.token()) await client.login();
-  if (document.run_data !== 'device') {
-    const id = document.id;
-    if (typeof id !== 'string' || !methodIdPattern.test(id)) throw Error(`${positionals[0]} has no id: line, so your account has no version of it. Run method run ${positionals[0]} once while signed in, then run method improve again.`);
-    try {
-      const { improvement } = await client.request<{ improvement: any }>(`/api/methods/${encodeURIComponent(id)}/improvements`, 'POST', { ...request, ...(newest?.account_run_id ? { run_id: newest.account_run_id } : {}) });
-      return print({ improvement, url: `${client.server}/methods/${id}`, next: `Method's improvement agent is working; it takes a few minutes. Run method proposals ${positionals[0]} --wait (give the command 10 minutes): it returns with the proposal. Then show it to the user.` });
-    } catch (error: any) { if (error.code !== 'device_data') throw error; }
-  }
+  if (document.run_data !== 'device' && !await (await import('./method-sync.js')).organizationKeepsContent(client)) { process.stdout.write(judgmentsLine + '\n'); return; }
+  // A note is about the newest run of the Method on this computer.
+  const newest = request.note ? (await localRuns(file))[0] : undefined;
   return print(await improveOnDevice(client, file, { ...request, ...(newest ? { run_id: newest.dir } : {}) }, run));
 }
 
