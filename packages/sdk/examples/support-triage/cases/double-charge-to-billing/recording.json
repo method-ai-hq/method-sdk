@@ -184,7 +184,6 @@
     "format": "method/3.4",
     "name": "Triage a support ticket",
     "goal": "Read a new help desk ticket, choose its queue and priority, draft a first reply, and update the ticket. Ask a person when the team is unclear.",
-    "run_data": "device",
     "models": {
       "writer": {
         "agent": "claude"

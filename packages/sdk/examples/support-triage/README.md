@@ -21,7 +21,6 @@ What the file shows:
 - **Three classify forms**, each with one question. The `unclear` option lets the classifier say that it cannot choose; a guess is not hidden.
 - **The rule is in a script**, not in a prompt, so it is the same on every run and `triage.test.mjs` tests it.
 - **An effect on each help desk change.** The http observer reads the ticket back. A 200 response shows only that the help desk accepted the request. The `update` effect checks the priority but not the queue, because the `move` step changes the queue after a person's answer.
-- **`run_data: device`** keeps the run records on this computer. The classify and call steps still send the ticket text to the classifier and the model.
 
 ## Try it on this computer
 
