@@ -2,9 +2,9 @@
 
 Uses runtime 0.14.1. A converted agent keeps the user's rules, and a case cannot make the Method break them.
 
-- **`method case new` checks a new case against the Method's instructions.** It reads the instructions of the model steps and the information that each step received on the recorded run. When a rule of the case can be met only by breaking an instruction (for example, the rule needs a jurisdiction that the request does not give, and the prompt says "Do not invent missing … jurisdictions"), it refuses the case with `case_conflicts` and names the rule and the instruction. `--accept-conflict "the person's answer"` keeps the case; `case.json` records the answer and the conflicts.
+- **`method case new` checks a new case against the Method's instructions.** It reads the instructions of the model steps and the information that each step received on the recorded run. When a rule of the case can be met only by breaking an instruction (for example, the rule needs a fact that the inputs do not give, and a prompt says not to invent facts; or the rule requires what a prompt forbids), it refuses the case with `case_conflicts` and names the rule and the instruction. `--accept-conflict "the person's answer"` keeps the case; `case.json` records the answer and the conflicts.
 - The authoring guide tells the agent to keep the user's rules word for word when it converts an agent or a prompt: copy the instruction files unchanged, give their complete text to every model step that applies them, and never reword, shorten, or split them. Before the Method replaces the old agent, the agent runs both on the same 3 to 5 sample inputs and shows the user every difference.
-- The correction recipe tells the agent to ask what the user means when their words do not say what the right result is ("attach it with blanks, or fill them in?") before it changes the Method or records a case, and never to choose a reading that breaks the user's instructions.
+- The correction recipe tells the agent to ask what the user means when their words do not say what the right result is before it changes the Method or records a case, and never to choose a reading that breaks the user's instructions.
 - Packages saved with runtime 0.14.0 still run.
 
 # 0.17.1
