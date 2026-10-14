@@ -1,3 +1,10 @@
+# 0.17.3
+
+Methods keep run data in the account unless the user asks.
+
+- The authoring guide and the plugin tell the agent to set `run_data: device` only when the user explicitly asks for it. Before it sets it, the agent gets the user's confirmation and tells them in one line that the dashboard will no longer show inputs or results, and that improvements, Run now and Method Cloud stop working.
+- The `support-triage` example keeps its run data in the account. It set `run_data: device` although its task did not ask for it, and agents copied it into new Methods.
+
 # 0.17.2
 
 Uses runtime 0.14.1. A converted agent keeps the user's rules, and a case cannot make the Method break them.
