@@ -144,7 +144,7 @@ export async function caseCommand(args: string[]) {
   const text = { type: "string" } as const;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { run: text, "passing-run": text, id: text, note: text, rubric: { type: "string", multiple: true }, ref: text, context: { type: "string", multiple: true }, expect: text,
     observations: text, redact: text, runs: text, "min-pass": text, author: text, reason: text, by: text, cases: text, workspace: text, agent: text,
-    "retention-days": text, supersedes: { type: "string", multiple: true } } });
+    "retention-days": text, supersedes: { type: "string", multiple: true }, "accept-conflict": text } });
   const [action, file, id] = positionals as string[];
   if (!file || !["new", "retire", "list"].includes(action ?? "")) throw Error("Use method case new|retire|list FILE. See method help case new.");
   const methodFile = authoringPath(file);
@@ -160,7 +160,7 @@ export async function caseCommand(args: string[]) {
   print(await createCase({ methodFile, runDir: values.run ? authoringPath(values.run) : undefined, passingRun: values["passing-run"] ? authoringPath(values["passing-run"]) : undefined,
     id: values.id, note: values.note, author: values.author ?? null, rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
-    retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, config: prepared.config,
+    retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, acceptConflict: values["accept-conflict"], config: prepared.config,
     options: { runOptions: { processPath: prepared.processPath, secrets: await declaredSecrets(methodFile), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(values.agent ? { agent: values.agent } : {}) } } }));
 }
 
