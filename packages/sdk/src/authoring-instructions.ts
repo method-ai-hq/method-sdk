@@ -163,7 +163,7 @@ export const watchRules = `# Watch it
 export const afterRules = `# After it works
 
 - **Put it in an app:** \`method connect APP_FOLDER\` publishes it and prints the code to add.
-- **Record each reaction:** after you show a result, run \`method judge RUN_ID wrong --note "THEIR WORDS"\` (with \`--corrected FILE\` when they gave the right result) when the user corrects it or asks to change the Method because of it, and \`method judge RUN_ID right\` when they use or approve it. Do not ask them to confirm it. Method fixes the Method from wrong judgments; \`method changes FILE\` lists what it changed. For a Method that keeps run content on this computer, \`method improve FILE --note TEXT\` makes a local proposal and \`method apply FILE\` merges it.
+- **Record each reaction:** after you show a result, run \`method judge RUN_ID wrong --note "THEIR WORDS"\` (with \`--corrected FILE\` when they gave the right result) when the user corrects it or asks to change the Method because of it, and \`method judge RUN_ID right\` when they use or approve it. Do not ask them to confirm it. Method fixes the Method from wrong judgments; \`method changes FILE\` lists what it changed. For a Method that keeps run content on this computer, the judgment keeps the note on this computer; then run \`method improve FILE\`: it makes a local proposal from those judgments, and \`method apply FILE\` merges it.
 - **Explain the scripts:** \`method explain FILE\` writes a card for each script step.
 `;
 

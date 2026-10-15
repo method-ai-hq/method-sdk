@@ -11,9 +11,13 @@ import { methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
 import { currentVersion, methodContent } from './versions.js';
 import { localRuns, saveLocalProposal } from './proposals.js';
+import { localJudgments } from './local-judgments.js';
 
-/** run_id: the run folder on this computer that the note is about. */
-export type ImproveRequest = { step_id?: string; note?: string; run_id?: string };
+/**
+ * run_id: the run folder on this computer that the note is about. judgments: the judgments that method judge kept on
+ * this computer for the Method. run_folders: the Method's run folders on this computer, the judged runs first.
+ */
+export type ImproveRequest = { step_id?: string; note?: string; run_id?: string; judgments?: ReturnType<typeof localJudgments>; run_folders?: string[] };
 type SavedImprove = { workflow_id: string; version_id: string; workflow: any; package?: unknown };
 /** Runs a local Method file; the default is the runtime that `method run FILE` uses. */
 export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory: undefined, onEvent: undefined, client: MethodClient, baseConfig: undefined, secrets: Record<string, string>) => Promise<{ status: string; result?: unknown }>;
@@ -64,13 +68,24 @@ export async function improveCommand(args: string[], clientFactory: (server: str
   const client = clientFactory(values.server ?? DEFAULT_SERVER);
   if (!client.token()) await client.login();
   if (document.run_data !== 'device' && !await (await import('./method-sync.js')).organizationKeepsContent(client)) { process.stdout.write(judgmentsLine + '\n'); return; }
-  // A note is about the newest run of the Method on this computer.
-  const newest = request.note ? (await localRuns(file))[0] : undefined;
-  return print(await improveOnDevice(client, file, { ...request, ...(newest ? { run_id: newest.dir } : {}) }, run));
+  // Every judgment kept on this computer counts, and a note is about the newest run of the Method on this computer.
+  const runs = await localRuns(file), judgments = localJudgments(file);
+  const folders = [...new Set([...judgments.map(j => j.run_dir).filter(dir => typeof dir === 'string' && existsSync(dir)), ...runs.map(r => r.dir)])];
+  const newest = request.note ? runs[0] : undefined;
+  return print(await improveOnDevice(client, file, { ...request, ...(newest ? { run_id: newest.dir } : {}), judgments, run_folders: folders }, run));
 }
 
-/** Download the published improve.method and its files into the Method cache, once per version. */
+/**
+ * Download the published improve.method and its files into the Method cache, once per version. For developers of
+ * improve.method: METHOD_IMPROVE_METHOD=PATH runs that local improve.method file instead, from its own folder.
+ */
 export async function cachedImproveMethod(client: MethodClient) {
+  const local = process.env.METHOD_IMPROVE_METHOD;
+  if (local) {
+    const file = resolve(local);
+    if (!existsSync(file)) throw Error(`METHOD_IMPROVE_METHOD names ${file}, which does not exist.`);
+    return { file, root: dirname(file), version_id: 'local' };
+  }
   const saved = await client.request<SavedImprove>('/api/cli/improve/method');
   if (!/^v_[a-f0-9]{32}$/.test(saved.version_id)) throw Error('Method sent an improvement Method without a version ID.');
   const root = join(methodCache(), 'improve', saved.version_id);
@@ -103,7 +118,13 @@ export async function improveOnDevice(client: MethodClient, file: string, reques
   const improve = await cachedImproveMethod(client);
   const runDir = join(methodCache(), 'runs', randomUUID());
   const inputs = join(runDir, 'improve-inputs.json');
-  writePrivateJson(inputs, { method_file: file, note: request.note ?? '', step_id: request.step_id ?? '', grant_id: '', judgment_id: '', run_id: request.run_id ?? '' });
+  // The judgments with their notes go in a private file of this run; they stay on this computer.
+  const judgments = request.judgments?.length ? join(runDir, 'judgments.json') : '';
+  if (judgments) writePrivateJson(judgments, request.judgments!.map(j => ({ id: j.id, run_id: j.run_id, run_dir: j.run_dir, step_id: j.step_id, verdict: j.verdict,
+    note: j.note, ...(j.corrected !== undefined ? { corrected: j.corrected } : {}), created_at: j.created_at })));
+  writePrivateJson(inputs, { method_file: file, note: request.note ?? '', step_id: request.step_id ?? '', grant_id: '', judgment_id: '', run_id: request.run_id ?? '',
+    judgments_file: judgments, run_folders: request.run_folders ?? [] });
+  if (request.judgments?.length) process.stderr.write(`Using ${request.judgments.length} judgment${request.judgments.length === 1 ? '' : 's'} kept on this computer.\n`);
   const runFile: RunFile = run ?? (await import('./current-runtime.js')).runCurrentFile as unknown as RunFile;
   process.stderr.write(`Improving ${file} on this computer. Its run content stays here.\n`);
   // The run prints its own result; send it to stderr so that stdout holds only the proposal.

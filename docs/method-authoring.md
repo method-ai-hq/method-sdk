@@ -132,7 +132,7 @@ method run tickets.method --inputs inputs.json   # reuses read, urgency and join
 # After it works
 
 - **Put it in an app:** `method connect APP_FOLDER` publishes it and prints the code to add.
-- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it. Method fixes the Method from wrong judgments; `method changes FILE` lists what it changed. For a Method that keeps run content on this computer, `method improve FILE --note TEXT` makes a local proposal and `method apply FILE` merges it.
+- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it. Method fixes the Method from wrong judgments; `method changes FILE` lists what it changed. For a Method that keeps run content on this computer, the judgment keeps the note on this computer; then run `method improve FILE`: it makes a local proposal from those judgments, and `method apply FILE` merges it.
 - **Explain the scripts:** `method explain FILE` writes a card for each script step.
 
 # Field reference
@@ -1210,7 +1210,7 @@ method judge RUN_ID right|wrong [--step STEP_ID] [--note TEXT] [--corrected FILE
 ```
 
 Arguments and defaults:
-RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters). --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment makes Method fix the Method in the background: it applies a tested change that the person can undo, or changes nothing. Do not ask the person to confirm a judgment.
+RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters). --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file, where method improve reads them. For a run from an older CLI, run it in the folder of the Method file. A wrong judgment makes Method fix the Method in the background: it applies a tested change that the person can undo, or changes nothing. Do not ask the person to confirm a judgment.
 
 Result and changes:
 One line, for example Recorded: wrong on step choose. Method is fixing it in the background. --json prints the judgment and fixing.
@@ -1260,7 +1260,7 @@ method improve FILE [--note TEXT] [--step ID] [--server URL]
 ```
 
 Arguments and defaults:
-For a Method with run_data: device, or in an organization that keeps run content on devices: runs Method's improvement on this computer, so the run content stays here. --note: the correction, in the person's words; it is about the newest run of the Method on this computer, which the improvement reads. --step: improve only this step. For a Method that keeps run content in the account, it starts nothing and says to use method judge: Method fixes those Methods from the person's judgments.
+For a Method with run_data: device, or in an organization that keeps run content on devices: runs Method's improvement on this computer, so the run content stays here. The improvement reads every judgment that method judge kept on this computer for the Method (.method/judgments.jsonl), with their notes and runs, and the Method's other runs on this computer. --note: one more correction, in the person's words; it is about the newest run of the Method on this computer. --step: improve only this step. For a Method that keeps run content in the account, it starts nothing and says to use method judge: Method fixes those Methods from the person's judgments.
 
 Result and changes:
 JSON with the local proposal ID and the next step; the proposal is in .method/proposals/. Nothing is published, and the file does not change. For an account Method, one line.

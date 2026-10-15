@@ -6,6 +6,7 @@ import { authoringPath, readDocument, writeDocument } from './authoring.js';
 import { DEFAULT_SERVER, type MethodClient } from './method-client.js';
 import { writePrivateJson } from './files.js';
 import { currentVersion, methodContent, methodIdPattern } from './versions.js';
+import { localMethodFolder } from './local-judgments.js';
 
 /** A proposed change to a Method, from the account (a server proposal) or from `method improve` on this computer. */
 export type ProposalRecord = {
@@ -80,12 +81,11 @@ function writeMethodFile(file: string, id: string | undefined, content: any) {
 }
 
 export const localProposalFolder = (file: string) => join(dirname(file), '.method', 'proposals');
-/** Save a local proposal as a private file. The .method folder is not for Git: its proposals can hold run content. */
+/** Save a local proposal as a private file in the .method folder: its proposals can hold run content. */
 export function saveLocalProposal(file: string, record: Omit<ProposalRecord, 'source'> & Record<string, unknown>) {
-  const folder = localProposalFolder(file), ignore = join(dirname(folder), '.gitignore');
-  const path = join(folder, `${record.id}.json`);
+  localMethodFolder(file);
+  const path = join(localProposalFolder(file), `${record.id}.json`);
   writePrivateJson(path, { ...record, source: 'local', file: basename(file) });
-  if (!existsSync(ignore)) writeFileSync(ignore, '*\n', { mode: 0o600 });
   return path;
 }
 export function localProposals(file: string): (ProposalRecord & { path: string })[] {
@@ -208,7 +208,7 @@ export async function proposalCommand(args: string[], clientFactory: (server: st
     if (methodId && proposal.method_id !== methodId) throw Error(`Proposal ${wanted} is for another Method.`);
   }
   proposal ??= local.find(p => p.status === 'open');
-  if (!proposal) throw Error(`${target} has no open proposal. Run method improve ${target} --note TEXT first.`);
+  if (!proposal) throw Error(`${target} has no open proposal. Record the person's judgments with method judge, then run method improve ${target}.`);
   if (proposal.status === 'applied') return print({ status: 'applied', file, proposal_id: proposal.id, next: 'This proposal is already applied.' });
   if (proposal.source === 'account' && proposal.status !== 'accepted') throw Error(`Change ${proposal.id} is ${proposal.status}, so it has nothing to merge.`);
   if (proposal.source === 'local' && proposal.status !== 'open') throw Error(`Proposal ${proposal.id} is ${proposal.status}.`);

@@ -15,6 +15,7 @@ import { localSetup } from "./local-setup.js";
 import { authoringPath } from "./authoring.js";
 import type { MethodSync } from "./method-sync.js";
 import { failureLines } from "./failure.js";
+import { methodFileRecord } from "./local-judgments.js";
 import type { parse } from "./local-cli.js";
 
 export { executeMethod as runCurrentMethod };
@@ -97,6 +98,8 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     }
     browser = await openBrowser(method,config,flags['run-dir']!,controller.signal);
     const hostedModels = Object.values(config.models ?? {}).some((profile: any) => profile.backend === 'method') ? await hostedModelsFor(client) : undefined;
+    // The run folder records its Method file, so method judge can keep a note next to it.
+    if (flags['run-dir']) writePrivateJson(join(authoringPath(flags['run-dir']), methodFileRecord), { path: authoringPath(file) });
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
       agent: agent as 'codex' | 'claude' | undefined, inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,

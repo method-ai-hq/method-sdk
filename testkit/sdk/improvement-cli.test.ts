@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mergeMethod, autoApply, proposalCommand, localProposals } from '../../packages/sdk/src/proposals.js';
 import { improveCommand, judgmentsLine } from '../../packages/sdk/src/improve.js';
+import { saveLocalJudgment } from '../../packages/sdk/src/local-judgments.js';
 import { placementFlags, publishWithPlacement } from '../../packages/sdk/src/cloud.js';
 import { buildPackage, runtimeVersion } from '../../packages/sdk/src/method-files.js';
 import { currentVersion, methodContent, writeMethodId } from '../../packages/sdk/src/versions.js';
@@ -282,4 +283,51 @@ it('reads the result that improve.method records: the proposal as JSON text, its
   expect(() => readImproveResult(as('change', {}))).toThrow();
   expect(() => readImproveResult(as('case', {}))).toThrow();
   expect(() => readImproveResult({ ...as('none', {}), kind: 'change' })).toThrow();
+});
+
+/** A finished run folder of the Method in the Method cache, as method run writes it. */
+function cachedRun(root: string, name: string, methodId = METHOD_ID) {
+  const dir = join(root, 'cache', 'runs', name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'method.json'), JSON.stringify({ format: 'method/3.4', id: methodId, name: 'Echo', run_data: 'device' }));
+  writeFileSync(join(dir, 'checkpoint.json'), '{}');
+  writeFileSync(join(dir, 'events.jsonl'), '');
+  return dir;
+}
+
+it('gives improve.method every judgment kept on this computer, their run folders first, and the note', async () => {
+  const document = method({ a: step('a', 'A.'), b: step('b', 'B.') }, { run_data: 'device' });
+  const { file, root, folder } = setup(document);
+  const judged = cachedRun(root, 'aaaaaaaa-0000-4000-8000-000000000001'), newer = cachedRun(root, 'aaaaaaaa-0000-4000-8000-000000000002');
+  cachedRun(root, 'aaaaaaaa-0000-4000-8000-000000000003', `wf_${'d'.repeat(32)}`);
+  utimesSync(join(judged, 'checkpoint.json'), new Date('2026-10-01'), new Date('2026-10-01'));
+  const base = { account_run_id: 'run_x', method_id: METHOD_ID, file: 'task.method', step_id: null, created_at: '2026-10-15T10:00:00Z' };
+  saveLocalJudgment(file, { ...base, id: 'jdg_1', run_id: '037a667b-e45d-4461-a319-edc2dc0f64c2', run_dir: judged, verdict: 'wrong', note: 'You missed the non-compete.', corrected: { escalate: ['x'] } });
+  saveLocalJudgment(file, { ...base, id: 'jdg_2', run_id: 'run_91ce', run_dir: newer, verdict: 'right', note: null });
+  // A judgment of another Method file in the same folder is not used.
+  saveLocalJudgment(file, { ...base, id: 'jdg_3', file: 'other.method', run_id: 'r', run_dir: newer, verdict: 'wrong', note: 'Other.' });
+  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'improve.method'));
+  writeFileSync(join(folder, 'improve.method'), '{}');
+  const client = fakeClient({});
+  let given: any, judgments: any;
+  const run = vi.fn(async (improveFile: string, flags: any) => {
+    // The developer override runs the local improve.method from its own folder; nothing is downloaded.
+    expect(improveFile).toBe(join(folder, 'improve.method')); expect(flags.workspace).toBe(folder);
+    given = JSON.parse(readFileSync(flags.inputs, 'utf8'));
+    if (given.judgments_file) { judgments = JSON.parse(readFileSync(given.judgments_file, 'utf8')); expect(statSync(given.judgments_file).mode & 0o777).toBe(0o600); }
+    return { status: 'completed', result: { proposal: JSON.stringify({ cause: 'No change.', evidence: { kind: 'none' } }), kind: 'none', proposal_id: '' } };
+  });
+  stdout(); stderr();
+  await improveCommand([file, '--note', 'Escalate restrictions.'], () => client, run);
+  expect(client.calls).toEqual([]);
+  expect(given).toMatchObject({ method_file: file, note: 'Escalate restrictions.', run_id: newer, run_folders: [judged, newer] });
+  expect(judgments).toEqual([
+    { id: 'jdg_1', run_id: '037a667b-e45d-4461-a319-edc2dc0f64c2', run_dir: judged, step_id: null, verdict: 'wrong', note: 'You missed the non-compete.', corrected: { escalate: ['x'] }, created_at: '2026-10-15T10:00:00Z' },
+    { id: 'jdg_2', run_id: 'run_91ce', run_dir: newer, step_id: null, verdict: 'right', note: null, created_at: '2026-10-15T10:00:00Z' }]);
+  // Without judgments and a note, the inputs say so.
+  rmSync(join(folder, '.method', 'judgments.jsonl'));
+  await improveCommand([file], () => client, run);
+  expect(given).toMatchObject({ note: '', run_id: '', judgments_file: '', run_folders: [newer, judged] });
+  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'missing.method'));
+  await expect(improveCommand([file], () => client, run)).rejects.toThrow('METHOD_IMPROVE_METHOD names');
 });
