@@ -11,12 +11,12 @@ import { writePrivateJson } from "./files.js";
 import { isWorkflowLink, saveWorkflowLink } from "./link.js";
 import { inspectRun } from "./inspect.js";
 import type { MethodSync } from "./method-sync.js";
-import { accountNeeds, checkConfiguration, resolveAgentProfiles } from './capabilities.js';
+import { accountNeeds, checkAgents } from './capabilities.js';
+import { executable } from '@withmethod/runtime/io.js';
 import { MethodClient } from "./method-client.js";
 import { MethodSync as Sync } from "./method-sync.js";
 import { prepareVersion, savedLine, methodContent } from "./versions.js";
 import { Outbox, savedVersions } from "./outbox.js";
-import { readComputerSettings } from "./computer-settings.js";
 import { localSetup } from "./local-setup.js";
 import { readDocument } from "./authoring.js";
 import { withInputsFrom } from "./inputs-from.js";
@@ -25,7 +25,7 @@ import { randomUUID } from "node:crypto";
 const help = "Use method run, steps, prompt, inspect, or doctor. See method help.";
 export function parse(args: string[]) {
   return parseArgs({ args, allowPositionals: true, options: {
-    server: {type:"string"}, agent: {type:"string"}, background: {type:"boolean"}, state: {type:"string"}, out: {type:"string"}, inputs: {type:"string"}, "inputs-from": {type:"string"}, workspace: {type:"string"},
+    server: {type:"string"}, background: {type:"boolean"}, state: {type:"string"}, out: {type:"string"}, inputs: {type:"string"}, "inputs-from": {type:"string"}, workspace: {type:"string"},
     "run-dir": {type:"string"}, fresh: {type:"boolean"}, rerun: {type:"string",multiple:true}, resume: {type:"boolean"}, human: {type:"string"}, retry: {type:"string",multiple:true},
     "include-files": {type:"boolean"}, verbose: {type:"boolean"}, help: {type:"boolean"}
   }});
@@ -76,7 +76,7 @@ async function accountSync(path: string, flags: ReturnType<typeof parse>["values
     }
     const method = readDocument(path);
     const setup = await localSetup(path, flags);
-    const needs = accountNeeds(method, setup.config, setup.agent);
+    const needs = accountNeeds(method, setup.config);
     if (needs.classification && !client.token()) await client.login();
     if (!client.token()) { process.stderr.write(`Sign in to keep versions and runs in your account${needs.models ? " and to use hosted models" : ""}: method login\n`); return undefined; }
     const version = await prepareVersion(client, outbox, path);
@@ -107,12 +107,14 @@ export async function localMain(args = process.argv.slice(2)) {
     const node = checkNode();
     process.stdout.write(node.detail + "\n");
     if (!node.ok) { process.exitCode = 1; return; }
-    const config: any = {allow_local_processes:true}, agent = flags.agent ?? readComputerSettings().agent;
-    // Without a local agent, model steps use hosted models after method login; scripts need no agent.
-    try { config.models = await resolveAgentProfiles({steps:{agent:{do:{kind:'agent',model:'default'}}}}, config, agent); }
-    catch (error: any) { if (agent || error.code !== 'needs_input') throw error; process.stdout.write('No local agent found. Model steps use hosted models after method login.\n'); }
-    await checkConfiguration(config);
-    process.stdout.write('Runtime configuration checked. No method was run. Use method validate FILE to check the Method and its declared dependencies.\n');
+    // Model steps use the Method's models: hosted models after method login, and a local agent only where the Method's
+    // models: name one. Each installed local agent is checked, so such a Method can use it.
+    for (const backend of ['codex', 'claude']) {
+      try { await executable(backend); } catch { continue; }
+      try { await checkAgents({ [backend]: { backend } }); process.stdout.write(`${backend}: installed and signed in.\n`); }
+      catch (error) { process.stdout.write(`${(error as Error).message}\n`); }
+    }
+    process.stdout.write('Model steps use the models that each Method names; hosted models need method login. No method was run. Use method validate FILE to check a Method and its dependencies.\n');
     return;
   }
 

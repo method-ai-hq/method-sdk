@@ -176,7 +176,7 @@ STEP   name, purpose          give a run step both; purpose states its rules, re
        accept: {CODE: reason}   keep a warning or note with the user's reason
 
 models: {NAME: provider/model | {model, max_output_tokens, reasoning_effort}}   hosted models; no key. A step without model uses the account default.
-        NAME: {agent: codex | claude, model, reasoning_effort}   a step with model: NAME runs on that local agent (it must be installed); --agent still overrides.
+        NAME: {agent: codex | claude, model, reasoning_effort}   a step with model: NAME runs on that local agent (it must be installed).
 limits: {timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_concurrency, ..., step: {timeout_ms, max_agent_turns, max_model_requests}}
 tools:  {NAME: {description, in, out, run, effects}}   script tools that agent steps list in tools
 id: wf_...   written by the CLI at the first signed-in save; keep it. method new-id FILE makes a copy a new Method.
@@ -219,7 +219,7 @@ After choosing the step types, read the examples that fit the design. Use their 
 
 # Method concepts
 
-Before describing execution cost, check how the model steps run. With hosted models, a call is one request without tools, and an agent step can make several requests and use tools. With --agent, each model step starts a local agent process. State the expected model requests and agent processes when they are known; mark unknown counts as unknown.
+Before describing execution cost, check how the model steps run. With hosted models, a call is one request without tools, and an agent step can make several requests and use tools. A step on a models: entry with agent: codex or claude starts a local agent process. State the expected model requests and agent processes when they are known; mark unknown counts as unknown.
 
 # Checks
 
@@ -318,13 +318,13 @@ destination and the rule used.”
 
 # Execution setup
 
-Use method run FILE_OR_ID [--inputs inputs.json] [--inputs-from RUN_ID] [--state state.json] [--run-dir DIR] [--workspace HELPERS_FOLDER] [--agent codex|claude] [--background].
-A Method needs no configuration file. What changes the result is in the Method: models, limits, tools, and secrets (the names). What belongs to this computer is in ~/.config/method/computer.json: method config (local agent, own model key) and method bind (folders and connections). python and node are found on PATH and prepared automatically. A saved version carries its helpers; versions saved without files still need --workspace DIR.
+Use method run FILE_OR_ID [--inputs inputs.json] [--inputs-from RUN_ID] [--state state.json] [--run-dir DIR] [--workspace HELPERS_FOLDER] [--background].
+A Method needs no configuration file. What changes the result is in the Method: models, limits, tools, and secrets (the names). What belongs to this computer is in ~/.config/method/computer.json: method config (own model key) and method bind (folders and connections). python and node are found on PATH and prepared automatically. A saved version carries its helpers; versions saved without files still need --workspace DIR.
 
 ## Models
 
 A call or agent step names model: NAME from the Method's models: ({NAME: provider/model | {model, max_output_tokens, reasoning_effort}}), a model ID such as openai/gpt-6-luna, or default. A step without model uses default: the account's default model. Hosted models need no key and no local agent. They are private by default: requests go only to providers that do not train on them and keep no copy (zero data retention). method models lists those models; validate warns with model_not_private when a step names another, and hosted runs refuse it. Hosted models and classification share the account's model credit; the run summary reports usage.cost_usd. When the credit is used, run method config model-key: hosted model and classify steps on this computer then call OpenRouter with the user's own key.
-A models: entry {agent: codex | claude, model, reasoning_effort} runs the steps that name it with that local agent, which must be installed on the computer that runs the Method. --agent codex|claude, or method config agent codex|claude, runs every model step with a local Codex or Claude agent. Declared tools reach the agent through a temporary local MCP connection; no persistent agent configuration is edited. The model choice of a run stays fixed on resume.
+A models: entry {agent: codex | claude, model, reasoning_effort} runs the steps that name it with that local agent, which must be installed on the computer that runs the Method. Only the Method's models: choose a step's model; no flag or computer setting overrides them. Declared tools reach the agent through a temporary local MCP connection; no persistent agent configuration is edited. The model choice of a run stays fixed on resume.
 
 ## Classification
 
@@ -447,27 +447,27 @@ method browser connect
 
 ## doctor
 
-Check Node and the local agent without running a Method.
+Check Node and the installed local agents without running a Method.
 
 Usage:
 
 ```sh
-method doctor [--agent codex|claude]
+method doctor
 ```
 
 Arguments and defaults:
-Checks the agent from --agent, the computer setting (method config agent), or the one installed agent. Use validate FILE for the Method's own dependencies.
+Checks each installed Codex or Claude Code agent, for the Methods whose models: name one. Use validate FILE for a Method's own dependencies.
 
 Result and changes:
 Setup findings; no task execution.
 
 Errors:
-Missing executable, credentials, or provider choice.
+An old Node.js.
 
 Example:
 
 ```sh
-method doctor --agent codex
+method doctor
 ```
 
 ## inspect
@@ -527,18 +527,18 @@ Show or change this computer's settings.
 Usage:
 
 ```sh
-method config [agent codex|claude|none]
+method config
 method config model-key [--off]
 ```
 
 Arguments and defaults:
-Settings live in ~/.config/method/computer.json (private): agent (run every model step with a local agent), bindings (method bind), and model_key_env. model-key imports OPENROUTER_API_KEY from the one nearby key file that holds it, or else opens a private browser form for it (the value stays in this computer's secret store), and then sends every hosted model step and every classify step on this computer to OpenRouter with your key, in place of the account's model credit; the run prints Using your own OpenRouter key. Those requests keep Method's private options: no provider that trains on the data, and zero data retention. --off goes back to the account. Run limits belong to the Method (limits:). Nothing goes into a Method file.
+Settings live in ~/.config/method/computer.json (private): bindings (method bind) and model_key_env. model-key imports OPENROUTER_API_KEY from the one nearby key file that holds it, or else opens a private browser form for it (the value stays in this computer's secret store), and then sends every hosted model step and every classify step on this computer to OpenRouter with your key, in place of the account's model credit; the run prints Using your own OpenRouter key. Those requests keep Method's private options: no provider that trains on the data, and zero data retention. --off goes back to the account. Run limits belong to the Method (limits:). Nothing goes into a Method file.
 
 Result and changes:
 The settings, or one line.
 
 Errors:
-Unknown setting or agent.
+Unknown setting.
 
 Example:
 
@@ -1708,13 +1708,12 @@ method run WORKFLOW_ID [--version VERSION_ID] [--server URL] [OPTIONS]
 ```
 
 Arguments and defaults:
-Models come from the Method's models: (or the account default); --agent codex|claude or method config agent runs model steps with a local agent. --workspace selects a different helper folder. See method authoring execution. Optional --state FILE initializes state for a new run. Resume with --resume --run-dir DIR; authorize unfinished work with --retry STEP:ITERATION.
+Models come from the Method's models: (or the account default). --workspace selects a different helper folder. See method authoring execution. Optional --state FILE initializes state for a new run. Resume with --resume --run-dir DIR; authorize unfinished work with --retry STEP:ITERATION.
 
 --inputs FILE: JSON input values.
 --inputs-from RUN_ID: use the inputs of that run; --inputs FILE overrides single values.
 --run-dir DIR: the folder for this run's records (new runs too; default .method-runs/ID).
---agent codex|claude: run every model step of a new run with this local agent.
---resume: continue the same saved run with its saved agent.
+--resume: continue the same saved run with its saved models.
 --rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
 --fresh: run every step; reuse nothing.
 --human FILE: answers for ask steps, as {steps: {"STEP": {outputs: {...}}}} (STEP:ITERATION, counted from 0, for a step with each or repeat).
@@ -1765,7 +1764,7 @@ Replay recorded cases against this version of a Method. Every case must pass.
 Usage:
 
 ```sh
-method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--cases DIR] [--agent codex|claude]
+method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--cases DIR]
 ```
 
 Arguments and defaults:
@@ -1815,7 +1814,7 @@ Turn a correction into a recorded case.
 Usage:
 
 ```sh
-method case new FILE --id ID --note TEXT (--run BAD_RUN | --passing-run GOOD_RUN | both) (--rubric SENTENCE... | --expect FILE) [--ref outputs.NAME] [--context REF]... [--accept-conflict TEXT] [--agent codex|claude]
+method case new FILE --id ID --note TEXT (--run BAD_RUN | --passing-run GOOD_RUN | both) (--rubric SENTENCE... | --expect FILE) [--ref outputs.NAME] [--context REF]... [--accept-conflict TEXT]
 ```
 
 Arguments and defaults:

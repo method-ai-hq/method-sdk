@@ -228,11 +228,3 @@ it('a folder that cannot be converted stays as it was', async () => {
   expect(snapshot()).toEqual(before);
 });
 
-it('validate names the local agent for model steps when this computer runs them with one', async () => {
-  const { file } = folder(method().replace('      spare: {type: text, description: Not used.}\n', '      spare: {type: text, description: Not used.}\n  draft:\n    name: Draft\n    in: {message: inputs.message}\n    do: {kind: call, model: openai/gpt-5.4, prompt: "Draft {{message}}."}\n    out: {reply: {type: text}}\n'));
-  const { updateComputerSettings } = await import('../../packages/sdk/src/computer-settings.js');
-  updateComputerSettings(settings => { settings.agent = 'codex'; });
-  const result = printed();
-  await methodMain(['validate', file]);
-  expect(result().steps).toEqual(expect.arrayContaining([{ id: 'draft', runs: 'codex' }]));
-});

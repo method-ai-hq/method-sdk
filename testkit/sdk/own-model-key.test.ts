@@ -51,7 +51,7 @@ it('with the own key, hosted model steps and classify call OpenRouter with it, a
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk: any) => { lines.push(String(chunk)); return true; });
   const config: any = {};
   expect(accountNeeds(method, config).classification).toBe(false);
-  const profiles = await resolveAgentProfiles(method, config, undefined, 'openai/gpt-6-luna');
+  const profiles = await resolveAgentProfiles(method, config, 'openai/gpt-6-luna');
   expect(profiles.default).toMatchObject({ backend: 'method', model: 'openai/gpt-6-luna' });
   expect(config.classification).toMatchObject({ provider: 'typesafe', api_key_env: ownKeyName });
   // Every hosted request, the Method's own models too, goes to OpenRouter with the key and the private options.
@@ -63,19 +63,19 @@ it('with the own key, hosted model steps and classify call OpenRouter with it, a
   expect(sent[0].init.headers.authorization).toBe('Bearer sk-or-test');
   expect(JSON.parse(sent[0].init.body)).toMatchObject({ model: 'anthropic/claude-luna', provider: { data_collection: 'deny', zdr: true } });
   vi.unstubAllGlobals();
-  await resolveAgentProfiles(method, {}, undefined, 'openai/gpt-6-luna');
+  await resolveAgentProfiles(method, {}, 'openai/gpt-6-luna');
   expect(lines.filter(line => line.includes('OpenRouter'))).toHaveLength(1);
-  // A local agent runs the model steps; the own key still classifies.
-  const agentConfig: any = {};
-  const local = await resolveAgentProfiles(method, agentConfig, 'codex');
-  expect(local.default).toEqual({ backend: 'codex' });
-  expect(agentConfig.classification).toMatchObject({ api_key_env: ownKeyName });
+  // improve.method leaves the own key out: its steps use the declared models through the account.
+  const improveConfig: any = {};
+  const improve = await resolveAgentProfiles(method, improveConfig, 'openai/gpt-6-luna', false);
+  expect(improve.default).toMatchObject({ backend: 'method', model: 'openai/gpt-6-luna' });
+  expect(improveConfig.classification).toBeUndefined();
 });
 
 it('a missing key value stops the run with the command that sets it', async () => {
   computer();
   await modelKeyCommand([], async () => {});
-  await expect(resolveAgentProfiles(method, {}, undefined, 'openai/gpt-6-luna')).rejects.toThrow(/method config model-key/);
+  await expect(resolveAgentProfiles(method, {}, 'openai/gpt-6-luna')).rejects.toThrow(/method config model-key/);
 });
 
 it('method config model-key imports the key from a nearby key file before it opens the form', async () => {

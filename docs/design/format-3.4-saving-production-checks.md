@@ -27,8 +27,8 @@ steps:
 - `id` is the account Method's ID. The CLI writes it at the first signed-in save, as the second line. The content
   hash (document digest) leaves out `id`. A copy of a folder keeps the ID; `method new-id FILE` writes a new one.
 - `models` values: a model ID string, or `{model, max_output_tokens?, reasoning_effort?}`. These are hosted models
-  (backend `method`) when signed in. `--agent codex|claude` (or the computer setting `agent`) still runs every
-  model step with the local agent instead.
+  (backend `method`) when signed in. `{agent: codex|claude, model?, reasoning_effort?}` runs the steps that name it
+  with that local agent. Only the Method's `models` choose a step's model: no flag or computer setting overrides them.
 - `model` on a step: a `models` name, a model ID (`provider/model`, pattern `^[a-z0-9-]+/[A-Za-z0-9._:-]+$`), or
   absent (account default). The old profile name `default` keeps meaning the account default.
 - `accept: {CODE: reason}` on a step: accepts that warning on that step. Errors cannot be accepted.
@@ -37,11 +37,11 @@ steps:
 
 - The runtime keeps its programmatic `config` argument (RuntimeConfig) as an internal API. No file is read by
   default anymore; the SDK builds the config. `--config` is deleted from the CLI.
-- Method-level `models` resolve before any computer setting. Saved versions that contain a `runtime.json` in their
+- Method-level `models` decide; no computer setting changes them. Saved versions that contain a `runtime.json` in their
   package still run: the runtime reads `models` from it when the document has no `models`.
 - Computer settings live in `~/.config/method/computer.json` (mode 0600), written by the CLI:
-  `{agent?: "codex"|"claude", bindings: {METHOD_ID: {CONNECTION: path}}, limits?: {...}}`.
-  `method bind NAME PATH` (exists) writes `bindings`; `method config agent codex` writes `agent`.
+  `{bindings: {METHOD_ID: {CONNECTION: path}}, model_key_env?: NAME}`.
+  `method bind NAME PATH` (exists) writes `bindings`; `method config model-key` writes `model_key_env`.
   A folder connection inside the project needs no binding (relative to the Method file).
 - Runtimes (python, node) are found on PATH; the run record notes the version. `allow_local_processes` is true for
   the user's own Methods.

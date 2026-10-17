@@ -10,7 +10,6 @@ export const computerFile = () => join(configRoot(), 'computer.json');
 
 // Only settings of this computer. Run limits belong to each Method (format 3.4 limits), never to the computer.
 const Settings = z.object({
-  agent: z.enum(['codex', 'claude']).optional(),
   // METHOD_ID -> connection name -> a folder path, or a connection value (URL or method-browser:NAME).
   bindings: z.record(z.string(), z.record(z.string(), z.string())).default({}),
   // The environment variable with this computer's own OpenRouter key: classify then calls Jev directly with it.
@@ -20,7 +19,7 @@ const Settings = z.object({
 });
 export type ComputerSettings = z.infer<typeof Settings>;
 
-/** The settings of this computer: the local agent, connection bindings, and an own model key. Nothing in a Method file. */
+/** The settings of this computer: connection bindings and an own model key. Nothing in a Method file. */
 export function readComputerSettings(): ComputerSettings {
   const file = computerFile();
   if (!existsSync(file)) return { bindings: {} };
@@ -38,12 +37,10 @@ export function bindConnectionValue(methodId: string, name: string, value: strin
   updateComputerSettings(settings => { settings.bindings[methodId] = { ...settings.bindings[methodId], [name]: value }; });
 }
 
-/** method config: print the computer settings, set the local agent, or turn the own model key on or off. */
+/** method config: print the computer settings, or turn the own model key on or off. */
 export async function configCommand(args: string[]) {
-  const [key, value, extra] = args;
+  const [key] = args;
   if (!key) { process.stdout.write(JSON.stringify({ file: computerFile(), ...readComputerSettings() }, null, 2) + '\n'); return; }
   if (key === 'model-key') return (await import('./own-model-key.js')).modelKeyCommand(args.slice(1));
-  if (key !== 'agent' || !value || extra !== undefined || !['codex', 'claude', 'none'].includes(value)) throw Error('Use method config, method config agent codex|claude|none, or method config model-key [--off].');
-  const saved = updateComputerSettings(settings => { if (value === 'none') delete settings.agent; else settings.agent = value as 'codex' | 'claude'; });
-  process.stdout.write(saved.agent ? `Model steps run with the local ${saved.agent} agent on this computer.\n` : 'Model steps use the Method\'s models and the account default.\n');
+  throw Error('Use method config, or method config model-key [--off].');
 }

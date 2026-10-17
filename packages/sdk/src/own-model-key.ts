@@ -9,7 +9,7 @@ import { findSecrets, importSecrets, resolveSecrets, setSecret } from './secrets
 import type { HostedModels } from '@withmethod/runtime';
 
 export const ownKeyName = 'OPENROUTER_API_KEY';
-/** The name of this computer's own model key, or undefined. A local agent (--agent) replaces it for model steps. */
+/** The name of this computer's own model key, or undefined. */
 export const ownKeyEnv = () => readComputerSettings().model_key_env;
 
 /** method config model-key [--off]: open the private form for the key, then use it for model and classify steps. */

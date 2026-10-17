@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import {mkdtempSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
@@ -11,6 +11,8 @@ const method={format:'method/3.1',name:'Agent selection',goal:'Keep the same age
  confirm:{ask:'Continue?',out:{answer:{type:'text',description:'Confirmation.'}}},
  write:{in:{answer:'answer'},do:{kind:'agent',model:'writer',prompt:'Return {{answer}}.',tools:[]},out:{text:{type:'text',description:'Agent result.'}}},
 },result:'text'};
+// The Method file names its local agent; nothing outside the file changes it.
+const declared={...method,format:'method/3.4',models:{writer:{agent:'claude'}}};
 function fixture(){
  const root=mkdtempSync(join(tmpdir(),'method-agent-selection-'));roots.push(root);
  vi.stubEnv('HOME',root);vi.stubEnv('PATH',root);vi.stubEnv('CODEX_THREAD_ID','outer');vi.stubEnv('CLAUDECODE','1');
@@ -19,29 +21,31 @@ function fixture(){
  vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
  return {root,file,runDir:join(root,'run')};
 }
-it('asks which agent when both callers and agents are present; an explicit agent wins',async()=>{
+it('asks which agent when both callers and agents are present and the Method names none',async()=>{
  fixture();
  await expect(resolveAgentProfiles(method,{})).rejects.toMatchObject({code:'needs_input'});
- await expect(resolveAgentProfiles(method,{},'claude')).resolves.toMatchObject({writer:{backend:'claude'}});
+ await expect(resolveAgentProfiles(declared,{})).resolves.toMatchObject({writer:{backend:'claude'}});
 });
-it('keeps the chosen agent across an actual pause and resume',async()=>{
- const f=fixture();
- const first=await runCurrentFile(f.file,{'run-dir':f.runDir,agent:'claude'});
+it('keeps the declared agent across an actual pause and resume, whatever the caller',async()=>{
+ const f=fixture();writeFileSync(f.file,JSON.stringify(declared));
+ const first=await runCurrentFile(f.file,{'run-dir':f.runDir});
  expect(first).toMatchObject({status:'needs_input'});
  const saved=readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8');
  expect(JSON.parse(saved).models.writer.backend).toBe('claude');
  vi.stubEnv('CLAUDECODE','');vi.stubEnv('CODEX_THREAD_ID','another-task');
  const human=join(f.root,'human.json');writeFileSync(human,JSON.stringify({steps:{'confirm:0':{outputs:{answer:'continue'}}}}));
- const result=await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true,agent:'codex',human});
+ const result=await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true,human});
  expect(result).toMatchObject({status:'completed',result:'claude'});
  expect(readFileSync(join(f.root,'calls'),'utf8')).toBe('claude\n');
  expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(saved);
 });
 
-it('the caller environment picks the agent, and --agent wins',async()=>{
+it('a run does not accept an agent from outside the Method file',async()=>{
  const f=fixture();vi.stubEnv('CLAUDECODE','');
- writeFileSync(f.file,JSON.stringify({...method,steps:{write:{do:{kind:'agent',model:'default',prompt:'Return text.'},out:{text:{type:'text'}}}}}));
- expect(await runCurrentFile(f.file,{'run-dir':f.runDir})).toMatchObject({status:'completed',result:'codex'});
- expect(await runCurrentFile(f.file,{'run-dir':join(f.root,'explicit'),agent:'claude'})).toMatchObject({status:'completed',result:'claude'});
- expect(readFileSync(join(f.root,'calls'),'utf8')).toBe('codex\nclaude\n');
+ writeFileSync(f.file,JSON.stringify({...declared,steps:{write:{do:{kind:'agent',model:'writer',prompt:'Return text.'},out:{text:{type:'text'}}}}}));
+ // A computer.json from an earlier version that still names an agent is ignored.
+ mkdirSync(join(f.root,'.config','method'),{recursive:true});writeFileSync(join(f.root,'.config','method','computer.json'),JSON.stringify({agent:'codex',bindings:{}}));
+ vi.stubEnv('METHOD_CONFIG_DIR',join(f.root,'.config','method'));
+ expect(await runCurrentFile(f.file,{'run-dir':f.runDir})).toMatchObject({status:'completed',result:'claude'});
+ expect(readFileSync(join(f.root,'calls'),'utf8')).toBe('claude\n');
 });

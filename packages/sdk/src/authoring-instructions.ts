@@ -124,7 +124,7 @@ STEP   name, purpose          give a run step both; purpose states its rules, re
        accept: {CODE: reason}   keep a warning or note with the user's reason
 
 models: {NAME: provider/model | {model, max_output_tokens, reasoning_effort}}   hosted models; no key. A step without model uses the account default.
-        NAME: {agent: codex | claude, model, reasoning_effort}   a step with model: NAME runs on that local agent (it must be installed); --agent still overrides.
+        NAME: {agent: codex | claude, model, reasoning_effort}   a step with model: NAME runs on that local agent (it must be installed).
 limits: {timeout_ms, max_model_requests, max_invocations, max_tool_calls, max_concurrency, ..., step: {timeout_ms, max_agent_turns, max_model_requests}}
 tools:  {NAME: {description, in, out, run, effects}}   script tools that agent steps list in tools
 id: wf_...   written by the CLI at the first signed-in save; keep it. method new-id FILE makes a copy a new Method.
@@ -149,7 +149,7 @@ These are design outlines, not runnable Method files.
 
 
 /** Cost rules for a design; in concepts, not in the start of the guide. */
-export const costRules = "Before describing execution cost, check how the model steps run. With hosted models, a call is one request without tools, and an agent step can make several requests and use tools. With --agent, each model step starts a local agent process. State the expected model requests and agent processes when they are known; mark unknown counts as unknown.";
+export const costRules = "Before describing execution cost, check how the model steps run. With hosted models, a call is one request without tools, and an agent step can make several requests and use tools. A step on a models: entry with agent: codex or claude starts a local agent process. State the expected model requests and agent processes when they are known; mark unknown counts as unknown.";
 
 /** What to watch after a Method works. */
 export const watchRules = `# Watch it

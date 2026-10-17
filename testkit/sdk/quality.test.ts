@@ -141,7 +141,7 @@ it('warns that cases hold run data when they would be committed to Git, and not 
   expect(casesPrivacyWarning(file)).toBeUndefined();
 });
 
-it('judges rubric criteria with the account model when signed in, without --agent', async () => {
+it('judges rubric criteria with the account model when signed in', async () => {
   const root = temp();
   vi.stubEnv('METHOD_CONFIG_DIR', join(root, 'config')); vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache')); vi.stubEnv('METHOD_API_KEY', 'mk_test');
   vi.stubEnv('CLAUDECODE', ''); vi.stubEnv('CODEX_THREAD_ID', '');
@@ -154,8 +154,5 @@ it('judges rubric criteria with the account model when signed in, without --agen
   expect(prepared.config.models.judge).toEqual({ backend: 'method', model: 'openai/gpt-6-luna' });
   expect(prepared.hostedModels).toBeTruthy();
   expect(requests).toContain('/api/cli/models/default');
-  // A local agent keeps judging with that agent.
-  const withAgent = await preparedConfig(file, { agent: 'codex' }, { judge: true });
-  expect(withAgent.config.models?.judge).toBeUndefined();
   vi.unstubAllGlobals();
 });

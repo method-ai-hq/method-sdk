@@ -109,7 +109,7 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
         process.exitCode = 1; return true;
       }
       const workflow = loadWorkflow((await import("./versions.js")).methodContent(readDocument(file))); definition = "valid";
-      const { config, sourceRoot, agent } = await localSetup(file, v);
+      const { config, sourceRoot } = await localSetup(file, v);
       const declared = Object.keys((workflow as any).secrets ?? {});
       const secrets = (await import('./secrets.js')).resolveSecrets(declared);
       const { MethodClient } = await import("./method-client.js");
@@ -130,13 +130,11 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
         const runs = step.ask ? "asks the user"
           : exec.kind === "run" ? `${exec.runtime} ${exec.entrypoint}`
           : exec.kind === "classify" ? (config.classification?.api_key_env || ownKey ? "Jev through OpenRouter with your own key" : "Method's classifier")
-          // The computer's agent setting (or --agent) runs every model step, whatever model the Method names.
-          : agent && ["call", "agent"].includes(exec.kind) ? agent
-          : profile?.backend === "method" ? (ownKey && !agent ? `${profile.model} through OpenRouter with your own key` : `the hosted model ${profile.model}`)
+          : profile?.backend === "method" ? (ownKey ? `${profile.model} through OpenRouter with your own key` : `the hosted model ${profile.model}`)
           : profile ? `${profile.backend}${profile.model ? ` ${profile.model}` : ""}`
-          : signedIn ? (ownKey && !agent ? "the account's default model through OpenRouter with your own key" : "the account's hosted model") : "a local Codex or Claude agent";
+          : signedIn ? (ownKey ? "the account's default model through OpenRouter with your own key" : "the account's hosted model") : "a local Codex or Claude agent";
         const needs = [...(exec?.kind === "run" ? missingSecrets.map(name => `secret ${name}`) : []),
-          ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env && !ownKey || ["call", "agent"].includes(exec?.kind) && !profile && !agent) ? [`method login (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
+          ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env && !ownKey || ["call", "agent"].includes(exec?.kind) && !profile) ? [`method login (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
         return { id, runs, ...(needs.length ? { needs } : {}) };
       });
       print({ valid: true, definition, local_setup: missingSetup.length ? "needs_preparation" : "valid", ...(missingSetup.length ? { missing_setup: [...new Set(missingSetup)] } : {}), workspace: sourceRoot, files: files.length, steps, executed: false, ...shown });

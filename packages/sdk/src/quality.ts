@@ -20,23 +20,23 @@ const print = (value: unknown) => process.stdout.write(JSON.stringify(value, nul
 const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
 
 /** The same runtime preparation as method run, without starting a run. Hosted models are used when signed in. */
-export async function preparedConfig(file: string, flags: { workspace?: string; agent?: string }, options: { judge?: boolean } = {}) {
+export async function preparedConfig(file: string, flags: { workspace?: string }, options: { judge?: boolean } = {}) {
   const setup = await localSetup(file, flags);
   const method = readDocument(file);
   const config = setup.config;
   const client = new MethodClient();
   let hostedModel: string | undefined;
   const signedIn = (() => { try { return !!client.token(); } catch { return false; } })();
-  // A rubric judge is a model step too: without a local agent, a signed-in computer judges with the account's model.
-  const judge = options.judge && !setup.agent && !config.models?.judge;
-  if ((accountNeeds(method, config, setup.agent).models || judge) && signedIn) {
+  // A rubric judge is a model step too: a signed-in computer judges with the account's model.
+  const judge = options.judge && !config.models?.judge;
+  if ((accountNeeds(method, config).models || judge) && signedIn) {
     try { hostedModel = await managedModels(client).model(); }
     catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}). Using a local agent.\n`); }
   }
-  config.models = await resolveAgentProfiles(method, config, setup.agent, hostedModel);
+  config.models = await resolveAgentProfiles(method, config, hostedModel);
   if (judge && hostedModel) config.models.judge = { backend: "method", model: hostedModel };
   // Classify steps that run live use the account's classifier, as method run does.
-  const classification = accountNeeds(method, config, setup.agent).classification && signedIn ? managedClassification(client) : undefined;
+  const classification = accountNeeds(method, config).classification && signedIn ? managedClassification(client) : undefined;
   if (classification) config.classification = await classification.resolve(new AbortController().signal);
   await checkAgents(config.models);
   const prepared = await prepareRuntime(setup.sourceRoot, config, method);
@@ -103,16 +103,16 @@ async function declaredSecrets(file: string) {
 }
 
 /** Run the cases of a Method with the same preparation as method run. */
-export async function runCases(file: string, flags: { workspace?: string; agent?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[] } = {}) {
+export async function runCases(file: string, flags: { workspace?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[] } = {}) {
   const prepared = await preparedConfig(file, flags, { judge: true });
   const report = await testSuite(file, prepared.config, { ...options,
-    runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, secrets: await declaredSecrets(file), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(flags.agent ? { agent: flags.agent } : {}) } });
+    runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, secrets: await declaredSecrets(file), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } });
   if (!options.ids && !options.casesDir) recordChecked(file, report);
   return report;
 }
 
 export async function testCommand(args: string[]) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" }, agent: { type: "string" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" } } });
   const file = positionals[0];
   if (!file || positionals.length !== 1) throw Error("Use method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]...");
   const report = await runCases(authoringPath(file), values, { casesDir: values.cases ? authoringPath(values.cases) : undefined, ids: values.case,
@@ -143,7 +143,7 @@ export async function caseGate(file: string, accept: string[] = [], reason?: str
 export async function caseCommand(args: string[]) {
   const text = { type: "string" } as const;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { run: text, "passing-run": text, id: text, note: text, rubric: { type: "string", multiple: true }, ref: text, context: { type: "string", multiple: true }, expect: text,
-    observations: text, redact: text, runs: text, "min-pass": text, author: text, reason: text, by: text, cases: text, workspace: text, agent: text,
+    observations: text, redact: text, runs: text, "min-pass": text, author: text, reason: text, by: text, cases: text, workspace: text,
     "retention-days": text, supersedes: { type: "string", multiple: true }, "accept-conflict": text } });
   const [action, file, id] = positionals as string[];
   if (!file || !["new", "retire", "list"].includes(action ?? "")) throw Error("Use method case new|retire|list FILE. See method help case new.");
@@ -154,14 +154,14 @@ export async function caseCommand(args: string[]) {
   if (action === "retire") { if (!id || !values.reason) throw Error("Supply the case ID and --reason."); await retireCase(methodFile, id, { by: values.by ?? null, reason: values.reason, casesDir }); return print({ retired: id }); }
   if (!values.id || !values.note || (!values.run && !values["passing-run"])) throw Error('Supply --id, --note "the person\'s words", and --run (the run that went wrong) or --passing-run (a run that was right).');
   if (!values.rubric?.length && !values.expect) throw Error('Say what must be true with --rubric "plain sentence" (repeatable), or give --expect FILE.');
-  const prepared = await preparedConfig(methodFile, { ...(values.workspace ? { workspace: values.workspace } : {}), ...(values.agent ? { agent: values.agent } : {}) }, { judge: true });
+  const prepared = await preparedConfig(methodFile, { ...(values.workspace ? { workspace: values.workspace } : {}) }, { judge: true });
   const privacy = casesPrivacyWarning(methodFile, casesDir);
   if (privacy) process.stderr.write(privacy + "\n");
   print(await createCase({ methodFile, runDir: values.run ? authoringPath(values.run) : undefined, passingRun: values["passing-run"] ? authoringPath(values["passing-run"]) : undefined,
     id: values.id, note: values.note, author: values.author ?? null, rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
     retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, acceptConflict: values["accept-conflict"], config: prepared.config,
-    options: { runOptions: { processPath: prepared.processPath, secrets: await declaredSecrets(methodFile), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(values.agent ? { agent: values.agent } : {}) } } }));
+    options: { runOptions: { processPath: prepared.processPath, secrets: await declaredSecrets(methodFile), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } } }));
 }
 
 /**

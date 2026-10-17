@@ -14,7 +14,7 @@ import { typesafeModel } from "@withmethod/runtime/classification.js";
  * binding uses the folder of the same name beside the Method, when it exists.
  * `base` is a configuration that the SDK made itself (a saved version's package); bindings still apply.
  */
-export async function localSetup(file: string, flags: { workspace?: string; agent?: string }, base?: any) {
+export async function localSetup(file: string, flags: { workspace?: string }, base?: any) {
   const path = authoringPath(file), folder = dirname(path);
   const sourceRoot = authoringPath(flags.workspace ?? folder);
   const settings = readComputerSettings();
@@ -33,5 +33,5 @@ export async function localSetup(file: string, flags: { workspace?: string; agen
   // A method/3.4 document declares its own tools; the runtime reads tools from the configuration.
   if (method.tools && Object.keys(method.tools).length) config.tools = { ...config.tools, ...method.tools };
   validateConfig(config);
-  return { config: browserConfig(method, config), sourceRoot, agent: flags.agent ?? settings.agent };
+  return { config: browserConfig(method, config), sourceRoot };
 }
