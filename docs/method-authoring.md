@@ -132,7 +132,7 @@ method run tickets.method --inputs inputs.json   # reuses read, urgency and join
 # After it works
 
 - **Put it in an app:** `method connect APP_FOLDER` publishes it and prints the code to add.
-- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it. Method fixes the Method from wrong judgments; `method changes FILE` lists what it changed. For a Method that keeps run content on this computer, the judgment keeps the note on this computer; then run `method improve FILE`: it makes a local proposal from those judgments, and `method apply FILE` merges it.
+- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it, and do not edit the Method yourself for the same correction: a wrong judgment fixes the Method on this computer, with the user's own Claude Code or Codex, and prints one line about what changed or why nothing did. `method changes FILE` lists what it changed.
 - **Explain the scripts:** `method explain FILE` writes a card for each script step.
 
 # Field reference
@@ -365,13 +365,12 @@ Use reading.output_name to give a returned result a short, honest name. Use read
 ## Corrections become cases
 
 When the user says a result was wrong:
-1. Record it: method judge RUN_ID wrong --note "the user's words" (--corrected FILE when they gave the right result). Do not ask them to confirm it. Then read the run (result.json, events.jsonl).
-2. If the user's words do not say what the right result is, ask before you change anything. Name the readings that the run and the Method's instructions allow, and what each one would change, in one question. A complaint about a missing part of the output can mean "produce it from what the inputs give", "mark what is missing", or "ask for it"; a complaint about wrong content can mean a wrong source, a wrong rule, or a wrong reading of the input. Do not choose a reading yourself, and never one that breaks the user's instructions.
-3. Fix the Method. Run it again and show the user the new result.
-4. If the user wants the fix to stay, ask once: "Keep this as a rule: <the rule in plain words>?"
-5. On yes, record it: method case new FILE --id ID --run BAD_RUN --passing-run NEW_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names the output to judge (default: the Method's result; a path to a file that the run saved is judged by that file's contents). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
-6. case new refuses a case that can pass only by breaking one of the Method's instructions (case_conflicts), for example a rule that needs a fact that the inputs do not give when an instruction says not to invent facts, or a rule that requires what an instruction forbids. Show the user the rule and the instruction, and ask which one is right. When the user says the case is right, change the instruction first and record the case again. Add --accept-conflict "the user's answer" only when the user wants both.
-7. Run method test FILE. Every case must pass. method publish refuses a version that breaks a case.
+1. Record it: method judge RUN_ID wrong --note "the user's words" (--corrected FILE when they gave the right result). Use their words even when they are vague. Do not ask them to confirm it, and do not edit the Method for the same correction: method judge records the correction as a case, finds a change with the user's own agent, and applies it only when it fixes the run and breaks no earlier correction. It takes a few minutes.
+2. Tell the user the line it prints in plain words, then run the Method again and show the new result.
+3. When it prints No safe change found, tell the user the reason. If the user's words do not say what the right result is, ask before you change anything. Name the readings that the run and the Method's instructions allow, and what each one would change, in one question. A complaint about a missing part of the output can mean "produce it from what the inputs give", "mark what is missing", or "ask for it"; a complaint about wrong content can mean a wrong source, a wrong rule, or a wrong reading of the input. Do not choose a reading yourself, and never one that breaks the user's instructions. Then record the user's answer with method judge RUN_ID wrong --note "their answer".
+4. For a rule the user states outside a run, record it: method case new FILE --id ID --run BAD_RUN --passing-run GOOD_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names the output to judge (default: the Method's result; a path to a file that the run saved is judged by that file's contents). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
+5. case new refuses a case that can pass only by breaking one of the Method's instructions (case_conflicts), for example a rule that needs a fact that the inputs do not give when an instruction says not to invent facts, or a rule that requires what an instruction forbids. Show the user the rule and the instruction, and ask which one is right. When the user says the case is right, change the instruction first and record the case again. Add --accept-conflict "the user's answer" only when the user wants both.
+6. After any edit by hand, run method test FILE. Every case must pass. method publish refuses a version that breaks a case.
 For a one-time preference, edit and run again; a case is not needed.
 
 ## Checked on every run, or on every new version
@@ -1201,7 +1200,7 @@ method publish task.method --reason 'Shorter introduction'
 
 ## judge
 
-Record the person's reaction to a run's result.
+Record the person's reaction to a run's result. A wrong one fixes the Method on this computer.
 
 Usage:
 
@@ -1210,18 +1209,18 @@ method judge RUN_ID right|wrong [--step STEP_ID] [--note TEXT] [--corrected FILE
 ```
 
 Arguments and defaults:
-RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters). --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file, where method improve reads them. For a run from an older CLI, run it in the folder of the Method file. A wrong judgment makes Method fix the Method in the background: it applies a tested change that the person can undo, or changes nothing. Do not ask the person to confirm a judgment.
+RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result; it is recorded only. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters), even when they are vague. --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment then fixes the Method in the foreground, with your own Claude Code or Codex (hosted models only when neither is signed in): it records the correction as a case in cases/ next to the Method file, finds the step that causes it, tests up to three small changes against this run, every earlier corrected or approved run, and every case, and changes the file only when a change fixes this run and breaks no earlier correction. The change is saved as a new version; restoring the version before it on the Method page undoes it. It takes a few minutes. Corrections that wait (from the dashboard, or a fix that stopped) are fixed in the same loop. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file. Run it in the folder of the Method file when the run came from an older CLI. Do not ask the person to confirm a judgment, and do not edit the Method yourself for the same correction.
 
 Result and changes:
-One line, for example Recorded: wrong on step choose. Method is fixing it in the background. --json prints the judgment and fixing.
+One line: what changed and how many earlier corrections it passes, with how to undo it; or No safe change found and the reason. A subscription limit or another failure of the model service is an error, and the correction waits for the next method judge or method run. --json prints the judgment and the fix (kind change or none, cause, steps, cases made, version, usage with null dollars on a subscription, what the replay caps left out, and the log file).
 
 Errors:
-An unknown run, a run of a Method that is not in your account, or no sign-in.
+An unknown run, a run of a Method that is not in your account, no sign-in, or a failure of the model service.
 
 Example:
 
 ```sh
-method judge 6f1c… wrong --step summary --note 'Name the customer in the first sentence.'
+method judge 6f1c… wrong --note "it's not even redlined"
 ```
 
 ## changes
@@ -1235,68 +1234,18 @@ method changes FILE [--json] [--server URL]
 ```
 
 Arguments and defaults:
-Lists the changes that Method made from wrong judgments, newest first, and the local proposals applied on this computer. Commands that take a signed-in FILE merge a new change into the file first and print one line.
+Lists, newest first, the changes that method judge applied on this computer and the changes that Method made in the account. Commands that take a signed-in FILE merge a change made in the account into the file first and print one line.
 
 Result and changes:
 One line per change: its date, its version, and its cause. --json prints {file, method_id, changes: [{id, source, cause, date, version_id, steps}]}. No changes.
 
 Errors:
-No id: line and no local change.
+No id: line and no change made on this computer.
 
 Example:
 
 ```sh
 method changes task.method
-```
-
-## improve
-
-Improve a Method that keeps its run content on this computer.
-
-Usage:
-
-```sh
-method improve FILE [--note TEXT] [--step ID] [--server URL]
-```
-
-Arguments and defaults:
-For a Method with run_data: device, or in an organization that keeps run content on devices: runs Method's improvement on this computer, so the run content stays here. The improvement reads every judgment that method judge kept on this computer for the Method (.method/judgments.jsonl), with their notes and runs, and the Method's other runs on this computer. --note: one more correction, in the person's words; it is about the newest run of the Method on this computer. --step: improve only this step. For a Method that keeps run content in the account, it starts nothing and says to use method judge: Method fixes those Methods from the person's judgments.
-
-Result and changes:
-JSON with the local proposal ID and the next step; the proposal is in .method/proposals/. Nothing is published, and the file does not change. For an account Method, one line.
-
-Errors:
-An unknown step, or a step of the improvement that fails.
-
-Example:
-
-```sh
-method improve task.method --step summary --note 'Name the customer in the first sentence.'
-```
-
-## apply
-
-Merge a local proposal from method improve into the file.
-
-Usage:
-
-```sh
-method apply FILE [PROPOSAL_ID] [--resolved] [--server URL]
-```
-
-Arguments and defaults:
-Default: the newest open local proposal. The merge is per step: a part that only the proposal changed takes the change; a part that you and the proposal both changed is a conflict. --resolved: you merged a conflict by hand; this marks the proposal applied. When a change that Method applied conflicts with your edits, the line before the command names it; give its ID to see both versions.
-
-Result and changes:
-JSON with status applied and the changed steps; the file changes and the proposal is marked applied. Nothing is published. A conflict lists each part with the base, your, and the proposed value, changes nothing, and exits 1.
-
-Errors:
-No open proposal, or a conflict.
-
-Example:
-
-```sh
-method apply task.method
 ```
 
 ## secret
@@ -1718,6 +1667,7 @@ Models come from the Method's models: (or the account default). --workspace sele
 --fresh: run every step; reuse nothing.
 --human FILE: answers for ask steps, as {steps: {"STEP": {outputs: {...}}}} (STEP:ITERATION, counted from 0, for a step with each or repeat).
 --verbose: print runtime events.
+Before a signed-in run of a FILE, corrections of the Method that wait (from the dashboard, or a fix that stopped) are fixed first, as method judge fixes them, with one line on stderr.
 Use method doctor to check the installed Node and configured tools.
 
 Result and changes:

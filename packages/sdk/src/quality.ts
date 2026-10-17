@@ -108,20 +108,20 @@ async function declaredSecrets(file: string) {
 }
 
 /** Run the cases of a Method with the same preparation as method run. */
-export async function runCases(file: string, flags: { workspace?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[] } = {}) {
+export async function runCases(file: string, flags: { workspace?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[]; once?: boolean } = {}) {
   const prepared = await preparedConfig(file, flags, { judge: true });
   const report = await testSuite(file, prepared.config, { ...options,
     runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, secrets: await declaredSecrets(file), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } });
-  if (!options.ids && !options.casesDir) recordChecked(file, report);
+  if (!options.ids && !options.casesDir && !options.once) recordChecked(file, report);
   return report;
 }
 
 export async function testCommand(args: string[]) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" }, once: { type: "boolean" } } });
   const file = positionals[0];
-  if (!file || positionals.length !== 1) throw Error("Use method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]...");
+  if (!file || positionals.length !== 1) throw Error("Use method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--once]");
   const report = await runCases(authoringPath(file), values, { casesDir: values.cases ? authoringPath(values.cases) : undefined, ids: values.case,
-    baseline: values.baseline ? authoringPath(values.baseline) : undefined, newIds: values.new ?? [] });
+    baseline: values.baseline ? authoringPath(values.baseline) : undefined, newIds: values.new ?? [], once: !!values.once });
   print(report);
   process.exitCode = report.passed ? 0 : 1;
 }

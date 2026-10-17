@@ -45,6 +45,20 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
   await startRunWorker(workerArgs, directory, flags.background, server);
   return true;
 }
+/**
+ * Before method run FILE: corrections that wait for this Method (from the dashboard, or a loop that stopped) are fixed
+ * first, with one line about them. A failure of the loop is one line too; the run goes on. Signed out, offline, a
+ * resumed run, or the run worker: nothing.
+ */
+async function fixWaitingCorrections(args: string[], clientFactory: (server: string) => MethodClient) {
+  if (process.env.METHOD_RUN_WORKER === '1' || args.includes('--resume') || !existsSync(args[1]!)) return;
+  const server = parseArgs({ args: args.slice(2), strict: false, options: { server: { type: 'string' } } }).values.server;
+  let client: MethodClient;
+  try { client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER); if (!client.token()) return; } catch { return; }
+  const { fixCorrections, waitingLine } = await import('./improve.js');
+  try { const fix = await fixCorrections(client, authoringPath(args[1]!), { waitMs: 3000 }); if (fix) process.stderr.write(waitingLine(fix) + '\n'); }
+  catch (error) { if (!/^(fetch failed|401:|404:)|abort|timed? ?out/i.test((error as Error).message)) process.stderr.write(`The waiting corrections are not fixed yet: ${(error as Error).message}\n`); }
+}
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
   const resumed = (await import('./resume-release.js')).resumeWithOriginalRelease(args);
   if (resumed !== undefined) { process.exitCode = resumed; return; }
@@ -52,10 +66,12 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   void (await import('./update.js')).updateInBackground();
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
   if (args[0] === 'judge') return (await import('./judge.js')).judgeCommand(args.slice(1), clientFactory);
-  if (['improve','changes','apply'].includes(args[0] ?? '')) return (await import('./proposals.js')).proposalCommand(args, clientFactory);
+  if (args[0] === 'changes') return (await import('./proposals.js')).changesMain(args.slice(1), clientFactory);
   await (await import('./proposals.js')).autoApply(args, clientFactory);
+  if (args[0] === 'run' && /\.method$/i.test(args[1] ?? '') && !args.includes('--help')) await fixWaitingCorrections(args, clientFactory);
   if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);
   if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));
+  if (args[0] === '__model') return (await import('./model-call.js')).modelCallCommand(args.slice(1));
   if (args[0] === 'connect' || args[0] === 'answer') {
     const server = parseArgs({ args: args.slice(1), strict: false, options: { server: { type: 'string' } } }).values.server;
     const client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER);

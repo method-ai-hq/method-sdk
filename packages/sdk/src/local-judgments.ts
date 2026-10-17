@@ -6,7 +6,7 @@ import { methodCache } from './prepare.js';
 /**
  * A judgment that method judge keeps on this computer, for a Method whose run content stays here (run_data: device, or
  * an organization that keeps run content on devices). The account keeps the judgment without its note and corrected
- * result; this record keeps them, for method improve.
+ * result; this record keeps them, for the improvement loop on this computer.
  */
 export type LocalJudgment = {
   id: string; run_id: string; account_run_id: string | null; run_dir: string; method_id: string | null; file: string;
@@ -54,6 +54,20 @@ export function findRunFolder(runId: string) {
     }
   }
   return undefined;
+}
+
+/** Every run folder on this computer by each of its IDs, read once (for many judgments). */
+export function runFolderIndex() {
+  const index = new Map<string, string>();
+  for (const root of [join(process.cwd(), '.method-runs'), join(methodCache(), 'runs')]) {
+    let names: string[] = [];
+    try { names = readdirSync(root); } catch { continue; }
+    for (const name of names) {
+      const dir = join(root, name);
+      if (existsSync(join(dir, 'method.json'))) for (const id of runFolderIds(dir)) index.set(id, dir);
+    }
+  }
+  return index;
 }
 
 /** Whether a run folder's Method keeps run content on this computer. */

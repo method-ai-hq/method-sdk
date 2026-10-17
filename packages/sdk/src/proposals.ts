@@ -8,7 +8,7 @@ import { writePrivateJson } from './files.js';
 import { currentVersion, methodContent, methodIdPattern } from './versions.js';
 import { localMethodFolder } from './local-judgments.js';
 
-/** A proposed change to a Method, from the account (a server proposal) or from `method improve` on this computer. */
+/** A change to a Method: from the account (a change Method made there), or from the improvement loop on this computer. */
 export type ProposalRecord = {
   id: string;
   source: 'account' | 'local';
@@ -70,7 +70,7 @@ export function changedSteps(before: any, after: any) {
 }
 
 /** Write Method content to a file and keep its id: line. A JSON file stays JSON. */
-function writeMethodFile(file: string, id: string | undefined, content: any) {
+export function writeMethodFile(file: string, id: string | undefined, content: any) {
   const { format, ...rest } = content;
   const document = { ...(format !== undefined ? { format } : {}), ...(id ? { id } : {}), ...rest };
   if (/^\s*\{/.test(readFileSync(file, 'utf8'))) {
@@ -81,7 +81,7 @@ function writeMethodFile(file: string, id: string | undefined, content: any) {
 }
 
 export const localProposalFolder = (file: string) => join(dirname(file), '.method', 'proposals');
-/** Save a local proposal as a private file in the .method folder: its proposals can hold run content. */
+/** Record what the improvement loop on this computer did (applied, or none) as a private file in the .method folder: it can hold run content. */
 export function saveLocalProposal(file: string, record: Omit<ProposalRecord, 'source'> & Record<string, unknown>) {
   localMethodFolder(file);
   const path = join(localProposalFolder(file), `${record.id}.json`);
@@ -109,8 +109,8 @@ async function newestAccepted(client: MethodClient, methodId: string, options: R
 }
 
 type Applied = { status: 'applied'; steps: string[]; version_id: string | undefined; warning?: string } | { status: 'conflict'; conflicts: MergeConflict[] } | { status: 'invalid'; error: string };
-/** Merge a proposal into the file. A clean merge writes the file and marks the proposal applied. Never publishes. */
-export async function applyProposal(client: MethodClient | undefined, file: string, proposal: ProposalRecord, options: RequestOptions = {}): Promise<Applied> {
+/** Merge a change Method made in the account into the file. A clean merge writes the file and records the change as applied. Never publishes. */
+async function applyProposal(client: MethodClient, file: string, proposal: ProposalRecord, options: RequestOptions = {}): Promise<Applied> {
   const document = readDocument(file), ours = methodContent(document);
   const merged = mergeMethod(proposal.base_workflow, ours, proposal.proposed_workflow);
   if (!merged.clean) return { status: 'conflict', conflicts: merged.conflicts };
@@ -118,23 +118,19 @@ export async function applyProposal(client: MethodClient | undefined, file: stri
   if (!isDeepStrictEqual(merged.workflow, ours)) writeMethodFile(file, typeof document.id === 'string' ? document.id : undefined, merged.workflow);
   return { status: 'applied', steps: changedSteps(ours, merged.workflow), ...await markApplied(client, file, proposal, options) };
 }
-async function markApplied(client: MethodClient | undefined, file: string, proposal: ProposalRecord, options: RequestOptions = {}) {
+async function markApplied(client: MethodClient, file: string, proposal: ProposalRecord, options: RequestOptions = {}) {
   const version_id = (await currentVersion(file).catch(() => undefined))?.version_id;
-  if (proposal.source === 'local') {
-    const path = join(localProposalFolder(file), `${proposal.id}.json`), record = JSON.parse(readFileSync(path, 'utf8'));
-    writePrivateJson(path, { ...record, status: 'applied', applied_at: new Date().toISOString(), ...(version_id ? { applied_version_id: version_id } : {}) });
-    return { version_id };
-  }
-  try { await client!.request(`/api/proposals/${encodeURIComponent(proposal.id)}/applied`, 'POST', version_id ? { version_id } : {}, true, options); return { version_id }; }
+  try { await client.request(`/api/proposals/${encodeURIComponent(proposal.id)}/applied`, 'POST', version_id ? { version_id } : {}, true, options); return { version_id }; }
   catch (error) { return { version_id, warning: `The file is changed, but Method did not record the proposal as applied: ${(error as Error).message}` }; }
 }
 
 const serverFlag = (args: string[]) => { const at = args.findIndex(arg => arg === '--server' || arg.startsWith('--server=')); return at < 0 ? undefined : args[at]!.startsWith('--server=') ? args[at]!.slice(9) : args[at + 1]; };
-const skipAutoApply = new Set(['apply', 'changes', 'judge', 'improve', 'init', 'new-id', 'diff', 'help', 'authoring', 'schema', '__worker', '__checks', 'worker', 'keys', 'secret', 'models', 'login', 'logout', 'sync', 'progress']);
+const skipAutoApply = new Set(['changes', 'judge', 'init', 'new-id', 'diff', 'help', 'authoring', 'schema', '__worker', '__checks', '__model', 'worker', 'keys', 'secret', 'models', 'login', 'logout', 'sync', 'progress']);
 /**
- * Before a command that takes a .method FILE: when this computer is signed in and Method applied a change to the Method
- * (an accepted proposal, from the person's judgments), merge it into the file and print one line. A conflict prints
- * what the coding agent must resolve; the command goes on. Offline, signed out, or on any error, it does nothing.
+ * Before a command that takes a .method FILE: when this computer is signed in and Method changed the Method in the
+ * account (keeping run data in the account, or a fix of a Method that had not run on a computer), merge the change into
+ * the file and print one line. A conflict leaves the file unchanged and writes both versions of each conflicting part
+ * to a file for the coding agent to merge; the command goes on. Offline, signed out, or on any error, it does nothing.
  */
 export async function autoApply(args: string[], clientFactory: (server: string) => MethodClient) {
   if (!args[0] || skipAutoApply.has(args[0]) || args.includes('--help') || process.env.METHOD_RUN_WORKER === '1') return;
@@ -151,10 +147,17 @@ export async function autoApply(args: string[], clientFactory: (server: string) 
     const result = await applyProposal(client, file, proposal, options);
     if (result.status === 'applied') {
       if (result.steps.length || result.warning) process.stderr.write(`Method changed ${target} (${proposal.id}): ${proposal.cause}${result.steps.length ? ` Changed steps: ${result.steps.join(', ')}.` : ''}${result.warning ? ` ${result.warning}` : ''}\n`);
-    } else process.stderr.write(result.status === 'conflict'
-      ? `Method's change ${proposal.id} conflicts with your edits of ${target} in ${result.conflicts.map(c => c.path).join(', ')}. The file is not changed. Run method apply ${target} ${proposal.id} to see both versions, merge them in the file, then run method apply ${target} ${proposal.id} --resolved.\n`
-      : `Method's change ${proposal.id} does not merge into a valid Method: ${result.error} The file is not changed. Run method apply ${target} ${proposal.id} to see it.\n`);
-  } catch { /* offline or signed out: the command goes on without the proposal. */ }
+      return;
+    }
+    // The agent merges by hand from the saved versions; the change is recorded as applied, so it is not merged again.
+    localMethodFolder(file);
+    const path = join(dirname(file), '.method', `conflict-${proposal.id}.json`);
+    writePrivateJson(path, { proposal_id: proposal.id, cause: proposal.cause, ...(result.status === 'conflict' ? { conflicts: result.conflicts } : { error: result.error }), proposed_workflow: proposal.proposed_workflow });
+    await markApplied(client, file, proposal, options).catch(() => undefined);
+    process.stderr.write(result.status === 'conflict'
+      ? `Method's change ${proposal.id} (${proposal.cause}) conflicts with your edits of ${target} in ${result.conflicts.map(c => c.path).join(', ')}. The file is not changed. Both versions of each part are in ${path}: edit ${target} so each part keeps both changes.\n`
+      : `Method's change ${proposal.id} does not merge into a valid Method: ${result.error} The file is not changed. The changed version is in ${path}.\n`);
+  } catch { /* offline or signed out: the command goes on without the change. */ }
 }
 
 /** Run folders of this Method on this computer, newest first, with the account run ID of each run that was saved to the account. */
@@ -176,7 +179,7 @@ const print = (value: unknown) => process.stdout.write(JSON.stringify(value, nul
 type Change = { id: string; source: 'account' | 'local'; cause: string; date: string; version_id: string | null; steps: string[] };
 const changeLine = (change: Change) => `${change.date.slice(0, 10)}  ${change.version_id ?? 'not saved as a version'}  ${change.cause}`;
 
-/** `method changes FILE`: the changes that Method applied to the Method, newest first, and those applied on this computer. */
+/** `method changes FILE`: the changes that Method applied in the account and on this computer, newest first. */
 async function changesCommand(file: string, target: string, methodId: string | null, client: MethodClient, json: boolean) {
   const local: Change[] = localProposals(file).filter(p => p.status === 'applied').map((p: any) => ({ id: p.id, source: 'local', cause: p.cause, date: String(p.applied_at ?? p.created_at), version_id: p.applied_version_id ?? null, steps: p.evidence?.steps ?? [] }));
   let account: Change[] = [];
@@ -189,35 +192,14 @@ async function changesCommand(file: string, target: string, methodId: string | n
   process.stdout.write(changes.length ? changes.map(changeLine).join('\n') + '\n' : `Method has not changed ${target} yet.\n`);
 }
 
-/** `method improve`, `method changes`, and `method apply`. */
-export async function proposalCommand(args: string[], clientFactory: (server: string) => MethodClient) {
-  if (args[0] === 'improve') return (await import('./improve.js')).improveCommand(args.slice(1), clientFactory);
-  const { values, positionals } = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, resolved: { type: 'boolean' }, json: { type: 'boolean' } } });
-  const [target, wanted] = positionals;
-  if (!target || positionals.length > (args[0] === 'apply' ? 2 : 1)) throw Error(args[0] === 'apply' ? 'Use method apply FILE [PROPOSAL_ID] [--resolved].' : 'Use method changes FILE [--json].');
+/** `method changes FILE [--json]`. */
+export async function changesMain(args: string[], clientFactory: (server: string) => MethodClient) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { server: { type: 'string' }, json: { type: 'boolean' } } });
+  const [target] = positionals;
+  if (!target || positionals.length !== 1) throw Error('Use method changes FILE [--json].');
   const file = authoringPath(target), id = readDocument(file).id;
   const methodId = typeof id === 'string' && methodIdPattern.test(id) ? id : null;
   const client = clientFactory(values.server ?? DEFAULT_SERVER);
-  const signedIn = !!client.token();
-  if (args[0] === 'changes') return changesCommand(file, target, methodId, client, !!values.json);
-  const local = localProposals(file);
-  let proposal: ProposalRecord | undefined = wanted ? local.find(p => p.id === wanted) : undefined;
-  if (!proposal && wanted) {
-    if (!signedIn) await client.login();
-    proposal = await accountProposal(client, wanted);
-    if (methodId && proposal.method_id !== methodId) throw Error(`Proposal ${wanted} is for another Method.`);
-  }
-  proposal ??= local.find(p => p.status === 'open');
-  if (!proposal) throw Error(`${target} has no open proposal. Record the person's judgments with method judge, then run method improve ${target}.`);
-  if (proposal.status === 'applied') return print({ status: 'applied', file, proposal_id: proposal.id, next: 'This proposal is already applied.' });
-  if (proposal.source === 'account' && proposal.status !== 'accepted') throw Error(`Change ${proposal.id} is ${proposal.status}, so it has nothing to merge.`);
-  if (proposal.source === 'local' && proposal.status !== 'open') throw Error(`Proposal ${proposal.id} is ${proposal.status}.`);
-  if (values.resolved) return print({ status: 'applied', file, proposal_id: proposal.id, ...await markApplied(client, file, proposal), next: `Run method test ${target}. Publish it when it is right.` });
-  if (!proposal.proposed_workflow) return print({ status: 'none', file, proposal_id: proposal.id, cause: proposal.cause, next: 'No change passed the tests; there is nothing to apply.' });
-  const result = await applyProposal(client, file, proposal);
-  if (result.status === 'applied') return print({ ...result, file, proposal_id: proposal.id, cause: proposal.cause, next: `Run method test ${target}. Publish it when it is right.` });
-  process.exitCode = 1;
-  if (result.status === 'invalid') return print({ status: 'invalid', file, proposal_id: proposal.id, error: result.error, next: 'The file is not changed. Merge the proposed version by hand.' });
-  print({ status: 'conflict', file, proposal_id: proposal.id, cause: proposal.cause, conflicts: result.conflicts,
-    next: `The file is not changed. Your edits and the proposal both change each listed part. Edit ${target} so that each part keeps both changes, then run method apply ${target} ${proposal.id} --resolved.` });
+  if (methodId && !client.token()) await client.login();
+  return changesCommand(file, target, methodId, client, !!values.json);
 }

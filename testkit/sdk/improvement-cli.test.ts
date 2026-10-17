@@ -2,10 +2,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { mergeMethod, autoApply, proposalCommand, localProposals } from '../../packages/sdk/src/proposals.js';
-import { improveCommand, judgmentsLine } from '../../packages/sdk/src/improve.js';
-import { saveLocalJudgment } from '../../packages/sdk/src/local-judgments.js';
+import { dirname, join } from 'node:path';
+import { mergeMethod, autoApply, changesMain } from '../../packages/sdk/src/proposals.js';
+import { methodMain } from '../../packages/sdk/src/method.js';
 import { placementFlags, publishWithPlacement } from '../../packages/sdk/src/cloud.js';
 import { buildPackage, runtimeVersion } from '../../packages/sdk/src/method-files.js';
 import { currentVersion, methodContent, writeMethodId } from '../../packages/sdk/src/versions.js';
@@ -76,21 +75,7 @@ function accountRoutes(base: any, proposed: any, baseVersion: string, applied: a
   };
 }
 
-it('merges a change that Method applied, given its ID, and records it as applied', async () => {
-  const base = method({ a: step('a', 'A.'), b: step('b', 'B.') }), proposed = method({ a: step('a', 'A better.'), b: step('b', 'B.') });
-  const { file } = setup(base);
-  const applied: any[] = [], client = fakeClient(accountRoutes(base, proposed, (await currentVersion(file))!.version_id, applied));
-  const out = stdout();
-  await proposalCommand(['apply', file, 'prop_1'], () => client);
-  const result = printed(out);
-  expect(result).toMatchObject({ status: 'applied', proposal_id: 'prop_1', steps: ['a'] });
-  expect(methodContent(readDocument(file))).toEqual(proposed);
-  expect(readDocument(file).id).toBe(METHOD_ID);
-  expect(applied).toEqual([{ version_id: (await currentVersion(file))!.version_id }]);
-  expect(result.version_id).toBe(applied[0].version_id);
-});
-
-it('auto-applies before a file command: one line for an unchanged file, a merge for a changed file, and the conflict to resolve', async () => {
+it('auto-applies a change made in the account before a file command: one line, a merge, or the conflict saved for the agent to merge', async () => {
   const base = method({ a: step('a', 'A.'), b: step('b', 'B.') }), proposed = method({ a: step('a', 'A better.'), b: step('b', 'B.') });
   // Unchanged file: apply and print one line.
   let { file } = setup(base);
@@ -117,15 +102,15 @@ it('auto-applies before a file command: one line for an unchanged file, a merge 
   err = stderr();
   await autoApply(['check', file], () => client);
   expect(methodContent(readDocument(file))).toEqual(ours);
-  expect(applied).toEqual([]);
-  expect(String(err.mock.calls[0]![0])).toContain('conflicts with your edits of');
-  expect(String(err.mock.calls[0]![0])).toContain('in steps.a.');
-  expect(String(err.mock.calls[0]![0])).toContain('--resolved');
-  // method apply prints both versions and exits 1.
-  const out = stdout();
-  await proposalCommand(['apply', file, 'prop_1'], () => client);
-  expect(printed(out)).toMatchObject({ status: 'conflict', conflicts: [{ path: 'steps.a', ours: step('a', 'A ours.'), theirs: step('a', 'A better.') }] });
-  expect(process.exitCode).toBe(1);
+  const line = String(err.mock.calls[0]![0]);
+  expect(line).toContain('conflicts with your edits of');
+  expect(line).toContain('in steps.a.');
+  expect(line).not.toContain('method apply');
+  // Both versions of each part are saved for the agent to merge, and the change is not merged again.
+  const saved = JSON.parse(readFileSync(join(dirname(file), '.method', 'conflict-prop_1.json'), 'utf8'));
+  expect(saved.conflicts).toEqual([{ path: 'steps.a', base: step('a', 'A.'), ours: step('a', 'A ours.'), theirs: step('a', 'A better.') }]);
+  expect(statSync(join(dirname(file), '.method', 'conflict-prop_1.json')).mode & 0o777).toBe(0o600);
+  expect(applied).toHaveLength(1);
 });
 
 it('skips auto-apply silently when signed out, offline, or without an id: line', async () => {
@@ -165,26 +150,6 @@ it('sets the placement after a publish with --cloud or --workers', async () => {
   expect(process.exitCode).toBe(1);
 });
 
-it('starts nothing for account run data: judgments start fixes', async () => {
-  const { file } = setup(method({ a: step('a', 'A.'), b: step('b', 'B.') }));
-  const client = fakeClient({ 'GET /api/cli/me': () => ({ organization: { keep_run_content_on_devices: false } }) });
-  const out = stdout();
-  await improveCommand([file, '--step', 'a', '--note', 'Name the customer.'], () => client, async () => { throw Error('Must not run locally'); });
-  expect(out.mock.calls.map(c => String(c[0])).join('')).toBe(`${judgmentsLine}\n`);
-  expect(judgmentsLine).toBe('Method fixes this Method from your judgments. Record the person\'s reaction: method judge RUN_ID wrong --note "...".');
-  expect(client.calls.map((c: any) => `${c.verb} ${c.path}`)).toEqual(['GET /api/cli/me']);
-  expect(process.exitCode ?? 0).toBe(0);
-  await expect(improveCommand([file, '--step', 'missing'], () => client)).rejects.toThrow('Step missing is not in');
-});
-
-it('improves on this computer when the organization keeps run content on devices', async () => {
-  const { file } = setup(method({ a: step('a', 'A.') }));
-  const client = fakeClient({ 'GET /api/cli/me': () => ({ organization: { keep_run_content_on_devices: true } }) });
-  stdout(); stderr();
-  // The local flow starts: it asks for improve.method, which this fake server does not have.
-  await expect(improveCommand([file], () => client, async () => { throw Error('not reached'); })).rejects.toThrow('404: GET /api/cli/improve/method');
-});
-
 it('changes lists the changes that Method applied, with cause, date, and version', async () => {
   const { file } = setup(method({ a: step('a', 'A.') }));
   const client = fakeClient({
@@ -193,65 +158,17 @@ it('changes lists the changes that Method applied, with cause, date, and version
       { id: 'prop_2', status: 'accepted', cause: 'The date was in the wrong form.', created_at: '2026-10-12T08:00:00Z', published_version_id: 'v_2', evidence: { kind: 'change', steps: ['a'] } }] }),
   });
   const out = stdout();
-  await proposalCommand(['changes', file], () => client);
+  await changesMain([file], () => client);
   expect(out.mock.calls.map(c => String(c[0])).join('')).toBe('2026-10-12  v_2  The date was in the wrong form.\n2026-10-09  v_1  The summary named no customer.\n');
   out.mockClear();
-  await proposalCommand(['changes', file, '--json'], () => client);
+  await changesMain([file, '--json'], () => client);
   expect(printed(out).changes[0]).toEqual({ id: 'prop_2', source: 'account', cause: 'The date was in the wrong form.', date: '2026-10-12T08:00:00Z', version_id: 'v_2', steps: ['a'] });
   const none = fakeClient({ [`GET /api/methods/${METHOD_ID}/proposals?status=accepted`]: () => ({ proposals: [] }) });
   out.mockClear();
-  await proposalCommand(['changes', file], () => none);
+  await changesMain([file], () => none);
   expect(out.mock.calls.map(c => String(c[0])).join('')).toBe(`Method has not changed ${file} yet.\n`);
-  // method proposals is gone.
-  await expect(proposalCommand(['proposals', file], () => client)).rejects.toThrow();
-});
-
-it('runs improve.method on this computer for device run data and saves a local proposal', async () => {
-  const document = method({ a: step('a', 'A.'), b: step('b', 'B.') }, { run_data: 'device' });
-  const { file, root, folder } = setup(document);
-  const script = new TextEncoder().encode('print("improve")\n');
-  const sha256 = createHash('sha256').update(script).digest('hex');
-  const improveWorkflow = method({ a: step('a', 'Improve.') });
-  const files = [{ path: 'improve.py', sha256, size: script.length }];
-  const pack = { schema: 'method-package/1', runtime: runtimeVersion, files, digest: packageDigest(improveWorkflow, { runtime: runtimeVersion, files }) };
-  const versionId = 'v_' + 'b'.repeat(32);
-  const client = fakeClient({
-    'GET /api/cli/improve/method': () => ({ workflow_id: `wf_${'c'.repeat(32)}`, version_id: versionId, workflow: improveWorkflow, package: pack }),
-    [`GET /api/cli/improve/files/${sha256}`]: () => script,
-  });
-  const proposed = method({ a: step('a', 'A better.'), b: step('b', 'B.') }, { run_data: 'device' });
-  const run = vi.fn(async (improveFile: string, flags: any, sync: unknown, _event: unknown, given: unknown, _base: unknown, secrets: Record<string, string>) => {
-    expect(improveFile).toBe(join(root, 'cache', 'improve', versionId, 'improve.method'));
-    expect(readFileSync(join(root, 'cache', 'improve', versionId, 'improve.py'), 'utf8')).toBe('print("improve")\n');
-    expect(JSON.parse(readFileSync(flags.inputs, 'utf8'))).toMatchObject({ method_file: file, note: 'Too long.', judgment_id: '' });
-    expect(sync).toBeUndefined(); expect(given).toBe(client);
-    // The run gets the signed-in key and server as improve.method's secrets, for this run only.
-    expect(secrets).toEqual({ IMPROVE_API_KEY: 'method_x', IMPROVE_SERVER: 'https://example.test' });
-    process.stdout.write('{"run":"result"}\n');
-    return { status: 'completed', result: { proposal: JSON.stringify({ cause: 'Step a wrote too much.', workflow: proposed, evidence: { kind: 'change', steps: ['a'] } }), kind: 'change', proposal_id: '' } };
-  });
-  const out = stdout(); stderr();
-  await improveCommand([file, '--note', 'Too long.'], () => client, run);
-  expect(client.calls.map((c: any) => c.path)).toEqual(['/api/cli/improve/method']);
-  const result = printed(out);
-  expect(result).toMatchObject({ source: 'local', kind: 'change', cause: 'Step a wrote too much.', steps: ['a'] });
-  const saved = JSON.parse(readFileSync(result.proposal_file, 'utf8'));
-  expect(result.proposal_file).toBe(join(folder, '.method', 'proposals', `${result.proposal_id}.json`));
-  expect(statSync(result.proposal_file).mode & 0o777).toBe(0o600);
-  expect(saved).toMatchObject({ status: 'open', base_version_id: (await currentVersion(file))!.version_id, proposed_workflow: proposed, base_workflow: document });
-  expect(readFileSync(join(folder, '.method', '.gitignore'), 'utf8')).toBe('*\n');
-  // The file is unchanged until method apply; local apply marks the proposal file applied and sends nothing.
-  expect(methodContent(readDocument(file))).toEqual(document);
-  out.mockClear();
-  const offline = fakeClient({}, null as any);
-  await proposalCommand(['apply', file, result.proposal_id], () => offline);
-  expect(printed(out)).toMatchObject({ status: 'applied', steps: ['a'] });
-  expect(methodContent(readDocument(file))).toEqual(proposed);
-  expect(localProposals(file)[0]).toMatchObject({ status: 'applied' });
-  expect(offline.request).not.toHaveBeenCalled();
-  // A second improve reuses the cached files.
-  await improveCommand([file], () => client, run.mockImplementationOnce(async () => ({ status: 'completed', result: { proposal: JSON.stringify({ cause: 'No change.', evidence: { kind: 'none' } }), kind: 'none', proposal_id: '' } })));
-  expect(client.transfer).toHaveBeenCalledTimes(1);
+  // method improve, method apply, and method proposals are gone.
+  for (const command of ['improve', 'apply', 'proposals']) await expect(methodMain([command, file], () => client)).rejects.toThrow(/Usage|method COMMAND|Learn:/);
 });
 
 it('saves the cases folder with the version for account run data only', async () => {
@@ -268,90 +185,19 @@ it('saves the cases folder with the version for account run data only', async ()
   expect(device.pack.files.map(f => f.path)).toEqual(['echo.mjs']);
 });
 
-it('reads the result that improve.method records: the proposal as JSON text, its kind, and the proposal ID', async () => {
+it('reads the result that improve.method records: the proposal as JSON text, its kind, the proposal ID, and what was capped', async () => {
   const { readImproveResult } = await import('../../packages/sdk/src/improve.js');
-  // Recorded from `method improve` on the tiny fixture of improve.method, against a fake Method server.
+  // The form of improve.method's result on the tiny fixture when no candidate fixes the corrected run, on a subscription.
   const recorded = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'improve-result.json'), 'utf8'));
-  expect(Object.keys(recorded).sort()).toEqual(['kind', 'proposal', 'proposal_id']);
+  expect(Object.keys(recorded).sort()).toEqual(['capped', 'kind', 'proposal', 'proposal_id']);
   const read = readImproveResult(recorded);
-  expect(read).toMatchObject({ workflow: null, evidence: { kind: 'none', steps: ['summarize'] } });
+  expect(read).toMatchObject({ workflow: null, files: [], capped: '', evidence: { kind: 'none', steps: ['summarize'] } });
   expect(read.cause).toMatch(/^No safe change was found\./);
-  expect(read.evidence.budget).toMatchObject({ model_calls: expect.any(Number) });
+  expect(read.evidence.budget).toEqual({ model_calls: 12, usd: null, minutes: 0.03 });
   // A change carries the tested workflow; none has none. Other kinds are refused.
   const as = (kind: string, extra: object, workflow?: unknown) => ({ kind, proposal_id: '', proposal: JSON.stringify({ cause: 'c', ...(workflow ? { workflow } : {}), evidence: { kind, steps: ['a'], ...extra } }) });
   expect(readImproveResult(as('change', {}, { steps: {} })).workflow).toEqual({ steps: {} });
   expect(() => readImproveResult(as('change', {}))).toThrow();
   expect(() => readImproveResult(as('case', {}))).toThrow();
   expect(() => readImproveResult({ ...as('none', {}), kind: 'change' })).toThrow();
-});
-
-/** A finished run folder of the Method in the Method cache, as method run writes it. */
-function cachedRun(root: string, name: string, methodId = METHOD_ID) {
-  const dir = join(root, 'cache', 'runs', name);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'method.json'), JSON.stringify({ format: 'method/3.4', id: methodId, name: 'Echo', run_data: 'device' }));
-  writeFileSync(join(dir, 'checkpoint.json'), '{}');
-  writeFileSync(join(dir, 'events.jsonl'), '');
-  return dir;
-}
-
-it('gives improve.method every judgment kept on this computer, their run folders first, and the note', async () => {
-  const document = method({ a: step('a', 'A.'), b: step('b', 'B.') }, { run_data: 'device' });
-  const { file, root, folder } = setup(document);
-  const judged = cachedRun(root, 'aaaaaaaa-0000-4000-8000-000000000001'), newer = cachedRun(root, 'aaaaaaaa-0000-4000-8000-000000000002');
-  cachedRun(root, 'aaaaaaaa-0000-4000-8000-000000000003', `wf_${'d'.repeat(32)}`);
-  utimesSync(join(judged, 'checkpoint.json'), new Date('2026-10-01'), new Date('2026-10-01'));
-  const base = { account_run_id: 'run_x', method_id: METHOD_ID, file: 'task.method', step_id: null, created_at: '2026-10-15T10:00:00Z' };
-  saveLocalJudgment(file, { ...base, id: 'jdg_1', run_id: '037a667b-e45d-4461-a319-edc2dc0f64c2', run_dir: judged, verdict: 'wrong', note: 'You missed the non-compete.', corrected: { escalate: ['x'] } });
-  saveLocalJudgment(file, { ...base, id: 'jdg_2', run_id: 'run_91ce', run_dir: newer, verdict: 'right', note: null });
-  // A judgment of another Method file in the same folder is not used.
-  saveLocalJudgment(file, { ...base, id: 'jdg_3', file: 'other.method', run_id: 'r', run_dir: newer, verdict: 'wrong', note: 'Other.' });
-  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'improve.method'));
-  writeFileSync(join(folder, 'improve.method'), '{}');
-  const client = fakeClient({});
-  let given: any, judgments: any;
-  const run = vi.fn(async (improveFile: string, flags: any) => {
-    // The developer override runs the local improve.method from its own folder; nothing is downloaded.
-    expect(improveFile).toBe(join(folder, 'improve.method')); expect(flags.workspace).toBe(folder);
-    given = JSON.parse(readFileSync(flags.inputs, 'utf8'));
-    if (given.judgments_file) { judgments = JSON.parse(readFileSync(given.judgments_file, 'utf8')); expect(statSync(given.judgments_file).mode & 0o777).toBe(0o600); }
-    return { status: 'completed', result: { proposal: JSON.stringify({ cause: 'No change.', evidence: { kind: 'none' } }), kind: 'none', proposal_id: '' } };
-  });
-  stdout(); stderr();
-  await improveCommand([file, '--note', 'Escalate restrictions.'], () => client, run);
-  expect(client.calls).toEqual([]);
-  expect(given).toMatchObject({ method_file: file, note: 'Escalate restrictions.', run_id: newer, run_folders: [judged, newer] });
-  expect(judgments).toEqual([
-    { id: 'jdg_1', run_id: '037a667b-e45d-4461-a319-edc2dc0f64c2', run_dir: judged, step_id: null, verdict: 'wrong', note: 'You missed the non-compete.', corrected: { escalate: ['x'] }, created_at: '2026-10-15T10:00:00Z' },
-    { id: 'jdg_2', run_id: 'run_91ce', run_dir: newer, step_id: null, verdict: 'right', note: null, created_at: '2026-10-15T10:00:00Z' }]);
-  // Without judgments and a note, the inputs say so.
-  rmSync(join(folder, '.method', 'judgments.jsonl'));
-  await improveCommand([file], () => client, run);
-  expect(given).toMatchObject({ note: '', run_id: '', judgments_file: '', run_folders: [newer, judged] });
-  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'missing.method'));
-  await expect(improveCommand([file], () => client, run)).rejects.toThrow('METHOD_IMPROVE_METHOD names');
-});
-
-it('improve.method follows the same model rule: its model steps start on the agent that started method improve', async () => {
-  const { file, root, folder } = setup(method({ a: step('a', 'A.') }, { run_data: 'device' }));
-  // A small improve.method whose one model step names no model.
-  const text = (description: string) => ({ type: 'text', description });
-  writeFileSync(join(folder, 'improve.method'), JSON.stringify({ format: 'method/3.4', name: 'Improve', goal: 'Propose no change.',
-    inputs: Object.fromEntries(['grant_id', 'method_file', 'judgment_id', 'note', 'step_id', 'run_id', 'judgments_file'].map(name => [name, { ...text(name), default: '' }]).concat([['run_folders', { type: 'list', items: 'text', description: 'Run folders.', default: [] }]])),
-    steps: { find: { name: 'Find', purpose: 'Propose.', do: { kind: 'agent', prompt: 'Propose a change.', tools: [] }, out: { proposal: text('Proposal.'), kind: text('Kind.'), proposal_id: text('ID.') } } },
-    result: { proposal: 'proposal', kind: 'kind', proposal_id: 'proposal_id' } }));
-  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'improve.method'));
-  const bin = join(root, 'bin'); mkdirSync(bin);
-  const output = JSON.stringify({ proposal: JSON.stringify({ cause: 'No change.', evidence: { kind: 'none' } }), kind: 'none', proposal_id: '' });
-  for (const agent of ['claude', 'codex']) writeFileSync(join(bin, agent), `#!${process.execPath}
-const fs=require('node:fs'),args=process.argv.slice(2);if(args[0]==='auth'||args[0]==='login'){console.log(JSON.stringify({loggedIn:true}));process.exit(0);}
-fs.appendFileSync(${JSON.stringify(join(root, 'calls'))},'${agent}\\n');
-if('${agent}'==='claude')console.log(JSON.stringify({type:'result',subtype:'success',structured_output:${output}}));else fs.writeFileSync(args[args.indexOf('--output-last-message')+1],${JSON.stringify(output)});`, { mode: 0o700 });
-  vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(':')); vi.stubEnv('CLAUDECODE', '1'); vi.stubEnv('CODEX_THREAD_ID', '');
-  const client = fakeClient({});
-  stdout(); stderr();
-  await improveCommand([file], () => client, undefined);
-  expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('claude\n');
-  // No hosted model was asked for: a local agent runs the step.
-  expect(client.calls.map((c: any) => c.path)).not.toContain('/api/cli/models/default');
 });
