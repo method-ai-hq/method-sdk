@@ -10,6 +10,7 @@ import { createCase, retireCase, listCases, testSuite, defaultCasesDir } from "@
 import { authoringPath, editDocument, readDocument } from "./authoring.js";
 import { localSetup } from "./local-setup.js";
 import { resolveAgentProfiles, checkAgents, accountNeeds } from "./capabilities.js";
+import { localAgent, resolveModels } from "@withmethod/runtime/agents.js";
 import { hostedModelsFor, managedModels } from "./hosted-models.js";
 import { managedClassification } from "./classification-client.js";
 import { MethodClient } from "./method-client.js";
@@ -27,14 +28,18 @@ export async function preparedConfig(file: string, flags: { workspace?: string }
   const client = new MethodClient();
   let hostedModel: string | undefined;
   const signedIn = (() => { try { return !!client.token(); } catch { return false; } })();
-  // A rubric judge is a model step too: a signed-in computer judges with the account's model.
+  // A rubric judge is a model step too: it follows the same rule (the user's own local agent, else hosted).
   const judge = options.judge && !config.models?.judge;
-  if ((accountNeeds(method, config).models || judge) && signedIn) {
+  // The hosted model is asked for only when no local agent can run the model steps.
+  if ((accountNeeds(method, config).models || judge) && signedIn && !await localAgent()) {
     try { hostedModel = await managedModels(client).model(); }
-    catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}). Using a local agent.\n`); }
+    catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}).\n`); }
   }
   config.models = await resolveAgentProfiles(method, config, hostedModel);
-  if (judge && hostedModel) config.models.judge = { backend: "method", model: hostedModel };
+  if (judge) {
+    try { config.models.judge = (await resolveModels({ steps: { judge: { do: { kind: 'call', model: 'judge' } } } }, {}, { hostedModel })).judge; }
+    catch (error: any) { if (error.code !== 'needs_input') throw error; }
+  }
   // Classify steps that run live use the account's classifier, as method run does.
   const classification = accountNeeds(method, config).classification && signedIn ? managedClassification(client) : undefined;
   if (classification) config.classification = await classification.resolve(new AbortController().signal);

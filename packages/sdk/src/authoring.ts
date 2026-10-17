@@ -124,6 +124,9 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
       // What each step executes, and what it still needs on this computer.
       const missingSecrets = declared.filter(name => !secrets[name]);
       const ownKey = (await import("./own-model-key.js")).ownKeyEnv();
+      // Steps that name no model run on the user's own Claude Code or Codex when one is signed in, as in method run.
+      const agent = await (await import("@withmethod/runtime/agents.js")).localAgent();
+      const agentName = agent === "claude" ? "Claude Code" : "Codex";
       const steps = Object.entries(workflow.steps).map(([id, step]: [string, any]) => {
         const exec = step.do, named = (workflow as any).models?.[exec?.model] ?? (isModelId(exec?.model) ? exec.model : undefined);
         const profile = named?.agent ? { backend: named.agent, model: named.model } : named ? { backend: "method", model: typeof named === "string" ? named : named.model } : config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
@@ -132,9 +135,10 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
           : exec.kind === "classify" ? (config.classification?.api_key_env || ownKey ? "Jev through OpenRouter with your own key" : "Method's classifier")
           : profile?.backend === "method" ? (ownKey ? `${profile.model} through OpenRouter with your own key` : `the hosted model ${profile.model}`)
           : profile ? `${profile.backend}${profile.model ? ` ${profile.model}` : ""}`
-          : signedIn ? (ownKey ? "the account's default model through OpenRouter with your own key" : "the account's hosted model") : "a local Codex or Claude agent";
+          : agent ? `${agentName} with your own subscription`
+          : signedIn ? (ownKey ? "the account's default model through OpenRouter with your own key" : "the account's hosted model on account credit") : "Claude Code or Codex once one is signed in on this computer";
         const needs = [...(exec?.kind === "run" ? missingSecrets.map(name => `secret ${name}`) : []),
-          ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env && !ownKey || ["call", "agent"].includes(exec?.kind) && !profile) ? [`method login (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
+          ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env && !ownKey || ["call", "agent"].includes(exec?.kind) && !profile && !agent) ? [`method login (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
         return { id, runs, ...(needs.length ? { needs } : {}) };
       });
       print({ valid: true, definition, local_setup: missingSetup.length ? "needs_preparation" : "valid", ...(missingSetup.length ? { missing_setup: [...new Set(missingSetup)] } : {}), workspace: sourceRoot, files: files.length, steps, executed: false, ...shown });

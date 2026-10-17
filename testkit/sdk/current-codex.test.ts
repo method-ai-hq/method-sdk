@@ -27,6 +27,7 @@ function fixture(body: string, timeout = 10000) {
 }
 const client = `
 const fs=require('node:fs');const args=process.argv.slice(2);
+if(args[0]==='login')process.exit(0);
 if(args[0]!=='exec'||args.includes('--ignore-user-config')||args.includes('--model'))process.exit(8);
 const url=JSON.parse(args.find(a=>a.startsWith('mcp_servers.method_step.url=')).split('=').slice(1).join('='));
 const rpc=async(method,params={})=>(await fetch(url,{method:'POST',headers:{authorization:'Bearer '+process.env.METHOD_CODEX_TOOL_TOKEN},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})})).json();

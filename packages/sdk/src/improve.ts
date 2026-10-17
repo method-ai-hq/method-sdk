@@ -20,7 +20,7 @@ import { localJudgments } from './local-judgments.js';
 export type ImproveRequest = { step_id?: string; note?: string; run_id?: string; judgments?: ReturnType<typeof localJudgments>; run_folders?: string[] };
 type SavedImprove = { workflow_id: string; version_id: string; workflow: any; package?: unknown };
 /** Runs a local Method file; the default is the runtime that `method run FILE` uses. */
-export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory: undefined, onEvent: undefined, client: MethodClient, baseConfig: undefined, secrets: Record<string, string>, options: { accountModels: true }) => Promise<{ status: string; result?: unknown }>;
+export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory: undefined, onEvent: undefined, client: MethodClient, baseConfig: undefined, secrets: Record<string, string>) => Promise<{ status: string; result?: unknown }>;
 /** The SubmitProposal that improve.method returns, read from its result. */
 export type ImproveProposal = { cause: string; workflow: unknown | null; evidence: { kind: ProposalKind; steps?: string[]; [key: string]: unknown } };
 type ProposalKind = 'change' | 'none';
@@ -110,7 +110,7 @@ export async function cachedImproveMethod(client: MethodClient) {
 /**
  * Run improve.method on this computer and save its result as a local proposal of the file. The run gets the signed-in
  * key and server as its IMPROVE_API_KEY and IMPROVE_SERVER secrets, for this run only: they stay in memory. Its model
- * steps run on the models that improve.method declares, through the account, never on this computer's own model key.
+ * steps follow the same rule as any run: the user's own Claude Code or Codex first, hosted models only without one.
  */
 export async function improveOnDevice(client: MethodClient, file: string, request: ImproveRequest, run?: RunFile) {
   const token = client.token();
@@ -132,8 +132,7 @@ export async function improveOnDevice(client: MethodClient, file: string, reques
   const write = process.stdout.write;
   process.stdout.write = ((chunk: any, ...rest: any[]) => (process.stderr.write as any)(chunk, ...rest)) as typeof process.stdout.write;
   let result: Awaited<ReturnType<RunFile>>;
-  // improve.method runs on the models that it declares, with Method's key through the signed-in account.
-  try { result = await runFile(improve.file, { inputs, 'run-dir': runDir, workspace: improve.root, server: client.server }, undefined, undefined, client, undefined, secrets, { accountModels: true }); }
+  try { result = await runFile(improve.file, { inputs, 'run-dir': runDir, workspace: improve.root, server: client.server }, undefined, undefined, client, undefined, secrets); }
   finally { process.stdout.write = write; }
   if (result.status !== 'completed') throw Error(`The improvement run stopped with status ${result.status}. Its records are in ${runDir}.`);
   let submitted: ImproveProposal;

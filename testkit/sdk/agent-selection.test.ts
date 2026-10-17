@@ -21,10 +21,30 @@ function fixture(){
  vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
  return {root,file,runDir:join(root,'run')};
 }
-it('asks which agent when both callers and agents are present and the Method names none',async()=>{
+const events=(runDir:string)=>readFileSync(join(runDir,'events.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+it('a step that names no model runs on Claude Code when both agents are installed and no single caller started the run',async()=>{
  fixture();
- await expect(resolveAgentProfiles(method,{})).rejects.toMatchObject({code:'needs_input'});
+ await expect(resolveAgentProfiles(method,{})).resolves.toMatchObject({writer:{backend:'claude'}});
  await expect(resolveAgentProfiles(declared,{})).resolves.toMatchObject({writer:{backend:'claude'}});
+});
+it('a step that names no model runs on the agent that started the run, and the run record names it',async()=>{
+ const f=fixture();vi.stubEnv('CLAUDECODE','');
+ writeFileSync(f.file,JSON.stringify({...method,steps:{write:{do:{kind:'agent',prompt:'Return text.'},out:{text:{type:'text'}}}}}));
+ expect(await runCurrentFile(f.file,{'run-dir':f.runDir})).toMatchObject({status:'completed',result:'codex'});
+ expect(events(f.runDir).filter(e=>e.event==='model.used')).toMatchObject([{step:'write',phase:'action',backend:'codex',model:null,message:'Step "write" runs on Codex.'}]);
+ const claude=join(f.root,'claude-run');vi.stubEnv('CLAUDECODE','1');vi.stubEnv('CODEX_THREAD_ID','');
+ expect(await runCurrentFile(f.file,{'run-dir':claude})).toMatchObject({status:'completed',result:'claude'});
+ expect(events(claude).find(e=>e.event==='model.used')).toMatchObject({backend:'claude'});
+});
+it('hosted models are used only when no local agent is installed and signed in; a named hosted model stays hosted',async()=>{
+ const f=fixture();
+ // Neither agent is signed in.
+ for(const agent of ['codex','claude'])writeFileSync(join(f.root,agent),`#!${process.execPath}\nprocess.exit(1);`,{mode:0o700});
+ await expect(resolveAgentProfiles(method,{},'x/hosted')).resolves.toMatchObject({writer:{backend:'method',model:'x/hosted'}});
+ await expect(resolveAgentProfiles(method,{})).rejects.toMatchObject({code:'needs_input'});
+ fixture();
+ await expect(resolveAgentProfiles({...method,format:'method/3.4',models:{writer:'openai/gpt-x'}},{},'x/hosted')).resolves.toMatchObject({writer:{backend:'method',model:'openai/gpt-x'}});
+ await expect(resolveAgentProfiles({...method,format:'method/3.4',models:{writer:{agent:'codex',model:'gpt-5'}}},{},'x/hosted')).resolves.toMatchObject({writer:{backend:'codex',model:'gpt-5'}});
 });
 it('keeps the declared agent across an actual pause and resume, whatever the caller',async()=>{
  const f=fixture();writeFileSync(f.file,JSON.stringify(declared));

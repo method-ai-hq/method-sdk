@@ -331,3 +331,27 @@ it('gives improve.method every judgment kept on this computer, their run folders
   vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'missing.method'));
   await expect(improveCommand([file], () => client, run)).rejects.toThrow('METHOD_IMPROVE_METHOD names');
 });
+
+it('improve.method follows the same model rule: its model steps start on the agent that started method improve', async () => {
+  const { file, root, folder } = setup(method({ a: step('a', 'A.') }, { run_data: 'device' }));
+  // A small improve.method whose one model step names no model.
+  const text = (description: string) => ({ type: 'text', description });
+  writeFileSync(join(folder, 'improve.method'), JSON.stringify({ format: 'method/3.4', name: 'Improve', goal: 'Propose no change.',
+    inputs: Object.fromEntries(['grant_id', 'method_file', 'judgment_id', 'note', 'step_id', 'run_id', 'judgments_file'].map(name => [name, { ...text(name), default: '' }]).concat([['run_folders', { type: 'list', items: 'text', description: 'Run folders.', default: [] }]])),
+    steps: { find: { name: 'Find', purpose: 'Propose.', do: { kind: 'agent', prompt: 'Propose a change.', tools: [] }, out: { proposal: text('Proposal.'), kind: text('Kind.'), proposal_id: text('ID.') } } },
+    result: { proposal: 'proposal', kind: 'kind', proposal_id: 'proposal_id' } }));
+  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'improve.method'));
+  const bin = join(root, 'bin'); mkdirSync(bin);
+  const output = JSON.stringify({ proposal: JSON.stringify({ cause: 'No change.', evidence: { kind: 'none' } }), kind: 'none', proposal_id: '' });
+  for (const agent of ['claude', 'codex']) writeFileSync(join(bin, agent), `#!${process.execPath}
+const fs=require('node:fs'),args=process.argv.slice(2);if(args[0]==='auth'||args[0]==='login'){console.log(JSON.stringify({loggedIn:true}));process.exit(0);}
+fs.appendFileSync(${JSON.stringify(join(root, 'calls'))},'${agent}\\n');
+if('${agent}'==='claude')console.log(JSON.stringify({type:'result',subtype:'success',structured_output:${output}}));else fs.writeFileSync(args[args.indexOf('--output-last-message')+1],${JSON.stringify(output)});`, { mode: 0o700 });
+  vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(':')); vi.stubEnv('CLAUDECODE', '1'); vi.stubEnv('CODEX_THREAD_ID', '');
+  const client = fakeClient({});
+  stdout(); stderr();
+  await improveCommand([file], () => client, undefined);
+  expect(readFileSync(join(root, 'calls'), 'utf8')).toBe('claude\n');
+  // No hosted model was asked for: a local agent runs the step.
+  expect(client.calls.map((c: any) => c.path)).not.toContain('/api/cli/models/default');
+});

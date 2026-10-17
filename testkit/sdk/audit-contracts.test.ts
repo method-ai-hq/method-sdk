@@ -15,15 +15,16 @@ it('doctor accepts a computer without an agent',async()=>{
  const out=vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
  await expect(methodMain(['doctor'])).resolves.toBeUndefined();expect(out).toHaveBeenCalled();
 });
-it('doctor checks each installed agent and takes no agent choice',async()=>{
- const dir=temp();const command=join(dir,'claude');writeFileSync(command,`#!${process.execPath}\nconsole.log(JSON.stringify({loggedIn:true}));`,{mode:0o700});vi.stubEnv('PATH',dir);
+it('doctor checks each installed agent, says which one runs steps that name no model, and takes no agent choice',async()=>{
+ const dir=temp();const command=join(dir,'claude');writeFileSync(command,`#!${process.execPath}\nconsole.log(JSON.stringify({loggedIn:true}));`,{mode:0o700});vi.stubEnv('PATH',dir);vi.stubEnv('CLAUDECODE','');vi.stubEnv('CODEX_THREAD_ID','');
  const out=vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
  const text=()=>out.mock.calls.map(call=>String(call[0])).join('');
  await expect(methodMain(['doctor'])).resolves.toBeUndefined();
  expect(text()).toContain('claude: installed and signed in.');expect(text()).not.toContain('codex');
+ expect(text()).toContain('Steps that name no model run on Claude Code with your own subscription.');
  out.mockClear();writeFileSync(command,`#!${process.execPath}\nconsole.log(JSON.stringify({loggedIn:false}));`,{mode:0o700});
  await expect(methodMain(['doctor'])).resolves.toBeUndefined();
- expect(text()).toMatch(/claude access check failed/);
+ expect(text()).toMatch(/claude: installed, not signed in/);expect(text()).toMatch(/hosted models on account credit/);
  await expect(methodMain(['doctor','--agent','claude'])).rejects.toThrow();
 });
 it('a local background run creates a worker that wait can reconnect to, and a second start in its run directory works',async()=>{

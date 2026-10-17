@@ -4,6 +4,7 @@ import {openBrowser} from './browser.js';
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from 'node:path';
 import { hostedModelsFor, managedModels } from './hosted-models.js';
+import { localAgent } from '@withmethod/runtime/agents.js';
 import { resolveSecrets } from './secrets.js';
 import { randomUUID } from 'node:crypto';
 import { assertCheckpointExecutor } from '@withmethod/runtime/executor-version.js';
@@ -44,11 +45,9 @@ export function answers(human: any) {
  * Run a local Method file. The run starts at once: saving and run records go through the outbox and never stop or fail
  * the run. baseConfig is a configuration the SDK made (a saved version's package); otherwise localSetup builds it.
  * runSecrets are values that the SDK gives this run only (such as the signed-in key for improve.method); they come
- * before the shell and the secret store, and are never saved. accountModels sends the hosted model steps through the
- * signed-in account and never this computer's own model key: improve.method uses it, so that its model steps use
- * Method's key, as its scripts do.
+ * before the shell and the secret store, and are never saved.
  */
-export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, runSecrets: Record<string, string> = {}, options: { accountModels?: boolean } = {}) {
+export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, runSecrets: Record<string, string> = {}) {
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
   const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
@@ -84,11 +83,12 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       if (flags.resume && resolvedFile && existsSync(resolvedFile)) config = JSON.parse(readFileSync(resolvedFile,'utf8'));
       else {
         let hostedModel: string | undefined;
-        if (needs.models && client.token()) {
+        // The hosted model is asked for only when no local agent (Claude Code or Codex) can run the model steps.
+        if (needs.models && client.token() && !await localAgent()) {
           try { hostedModel = await managedModels(client).model(); }
-          catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}). Using a local agent.\n`); }
+          catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}).\n`); }
         }
-        config.models = await resolveAgentProfiles(method, config, hostedModel, !options.accountModels);
+        config.models = await resolveAgentProfiles(method, config, hostedModel);
         if (classification) config.classification = await classification.resolve(controller.signal);
       }
       await checkAgents(config.models);
@@ -98,7 +98,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       if(flags['run-dir']){const path=join(authoringPath(flags['run-dir']),'setup.json');const events=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):[];writePrivateJson(path,[...events,{at:new Date().toISOString(),type:'setup_completed'}]);}
     }
     browser = await openBrowser(method,config,flags['run-dir']!,controller.signal);
-    const hostedModels = Object.values(config.models ?? {}).some((profile: any) => profile.backend === 'method') ? options.accountModels ? managedModels(client) : await hostedModelsFor(client) : undefined;
+    const hostedModels = Object.values(config.models ?? {}).some((profile: any) => profile.backend === 'method') ? await hostedModelsFor(client) : undefined;
     // The run folder records its Method file, so method judge can keep a note next to it.
     if (flags['run-dir']) writePrivateJson(join(authoringPath(flags['run-dir']), methodFileRecord), { path: authoringPath(file) });
     const result = await executeMethod(authoringPath(file), config, {

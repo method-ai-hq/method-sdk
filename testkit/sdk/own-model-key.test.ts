@@ -65,11 +65,6 @@ it('with the own key, hosted model steps and classify call OpenRouter with it, a
   vi.unstubAllGlobals();
   await resolveAgentProfiles(method, {}, 'openai/gpt-6-luna');
   expect(lines.filter(line => line.includes('OpenRouter'))).toHaveLength(1);
-  // improve.method leaves the own key out: its steps use the declared models through the account.
-  const improveConfig: any = {};
-  const improve = await resolveAgentProfiles(method, improveConfig, 'openai/gpt-6-luna', false);
-  expect(improve.default).toMatchObject({ backend: 'method', model: 'openai/gpt-6-luna' });
-  expect(improveConfig.classification).toBeUndefined();
 });
 
 it('a missing key value stops the run with the command that sets it', async () => {

@@ -11,7 +11,8 @@ import { writePrivateJson } from "./files.js";
 import { isWorkflowLink, saveWorkflowLink } from "./link.js";
 import { inspectRun } from "./inspect.js";
 import type { MethodSync } from "./method-sync.js";
-import { accountNeeds, checkAgents } from './capabilities.js';
+import { accountNeeds } from './capabilities.js';
+import { agentSignedIn, localAgent } from '@withmethod/runtime/agents.js';
 import { executable } from '@withmethod/runtime/io.js';
 import { MethodClient } from "./method-client.js";
 import { MethodSync as Sync } from "./method-sync.js";
@@ -107,14 +108,13 @@ export async function localMain(args = process.argv.slice(2)) {
     const node = checkNode();
     process.stdout.write(node.detail + "\n");
     if (!node.ok) { process.exitCode = 1; return; }
-    // Model steps use the Method's models: hosted models after method login, and a local agent only where the Method's
-    // models: name one. Each installed local agent is checked, so such a Method can use it.
+    // Each installed local agent is checked; steps that name no model run on the calling or installed agent.
     for (const backend of ['codex', 'claude']) {
       try { await executable(backend); } catch { continue; }
-      try { await checkAgents({ [backend]: { backend } }); process.stdout.write(`${backend}: installed and signed in.\n`); }
-      catch (error) { process.stdout.write(`${(error as Error).message}\n`); }
+      process.stdout.write(await agentSignedIn(backend) ? `${backend}: installed and signed in.\n` : `${backend}: installed, not signed in. Sign in with ${backend}.\n`);
     }
-    process.stdout.write('Model steps use the models that each Method names; hosted models need method login. No method was run. Use method validate FILE to check a Method and its dependencies.\n');
+    const agent = await localAgent();
+    process.stdout.write(`${agent ? `Steps that name no model run on ${agent === 'claude' ? 'Claude Code' : 'Codex'} with your own subscription.` : 'No signed-in Claude Code or Codex: steps that name no model use hosted models on account credit after method login.'} No method was run. Use method validate FILE to check a Method and its dependencies.\n`);
     return;
   }
 
