@@ -143,7 +143,6 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
   for (let attempt = 0; attempt < 2; attempt++) {
     const answer = await callModel({ schema: caseSchema, user: reason ? `${user}\n\nYour last sentences could not be used: ${reason}` : user,
       system: 'A person corrected the result of a run of a Method. Write 1 to 3 plain sentences that a right result of this run meets and that this result does not meet, so a later version can be checked against the correction. The person\'s words may be vague, such as "the Ashby one\'s wrong" or "it\'s not even redlined": use the result to find what they mean. Each sentence names one checkable thing in the result, without names or numbers that only this run has unless the correction is about them. Do not ask for anything that the correction does not ask for.' });
-    if ('unavailable' in answer) throw Error(answer.reason);
     const criteria = (Array.isArray(answer.value?.criteria) ? answer.value.criteria : []).map((c: unknown) => String(c).trim()).filter(Boolean).slice(0, 3);
     if (!criteria.length) { reason = 'There were no sentences.'; continue; }
     try {

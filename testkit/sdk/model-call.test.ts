@@ -38,22 +38,16 @@ it('turns a JSON schema into Method types and keeps prompt braces out of the pro
   expect(requestMethod({ system: 's', user: 'u', schema, model: 'writer', models: { writer: 'openai/gpt-x' } })).toMatchObject({ models: { writer: 'openai/gpt-x' }, steps: { answer: { do: { model: 'writer' } } } });
 });
 
-it("runs on the caller's own agent, a second family only when asked and signed in, and never on hosted models while an agent is signed in", async () => {
+it("runs every request on the one agent that the runtime chooses, the caller first, and never on hosted models while an agent is signed in", async () => {
   const calls = agents({ claude: true, codex: true });
   // Signed in to Method: the hosted model would be available, but a local agent is signed in, so it is not asked for.
   vi.stubEnv('METHOD_API_KEY', 'method_test'); vi.stubEnv('METHOD_SERVER', 'http://127.0.0.1:9');
   const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-  vi.stubEnv('CODEX_THREAD_ID', 'task');
-  expect(await callModel({ system: 'Name yourself.', user: 'Who are you?', schema })).toMatchObject({ value: { answer: 'codex', items: ['a'] }, agent: 'codex', usd: null });
-  vi.stubEnv('CODEX_THREAD_ID', ''); vi.stubEnv('CLAUDECODE', '1');
-  expect(await callModel({ system: 'Name yourself.', user: 'Who are you?', schema })).toMatchObject({ agent: 'claude', usd: null });
-  expect(await callModel({ system: 'Name yourself.', user: 'Who are you?', schema, second: true })).toMatchObject({ agent: 'codex' });
-  expect(calls()).toEqual(['codex', 'claude', 'codex']);
+  vi.stubEnv('CLAUDECODE', '1');
+  for (let i = 0; i < 3; i++) expect(await callModel({ system: 'Name yourself.', user: 'Who are you?', schema })).toMatchObject({ value: { answer: 'claude', items: ['a'] }, agent: 'claude', usd: null });
+  // Codex is installed and signed in, but it is not the caller: it is never started.
+  expect(calls()).toEqual(['claude', 'claude', 'claude']);
+  vi.stubEnv('CLAUDECODE', ''); vi.stubEnv('CODEX_THREAD_ID', 'task');
+  expect(await callModel({ system: 's', user: 'u', schema })).toMatchObject({ agent: 'codex' });
   expect(stderr.mock.calls.map(c => String(c[0])).join('')).not.toMatch(/Hosted models/);
-});
-
-it('has no second judge with one signed-in agent', async () => {
-  const calls = agents({ claude: true, codex: false });
-  expect(await callModel({ system: 's', user: 'u', schema, second: true })).toEqual({ unavailable: true, reason: 'Only one local agent is signed in.' });
-  expect(calls()).toEqual([]);
 });

@@ -71,7 +71,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (args[0] === 'run' && /\.method$/i.test(args[1] ?? '') && !args.includes('--help')) await fixWaitingCorrections(args, clientFactory);
   if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);
   if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));
-  if (args[0] === '__model') return (await import('./model-call.js')).modelCallCommand(args.slice(1));
+  if (args[0] === '__model') return (await import('./model-call.js')).modelCallCommand();
   if (args[0] === 'connect' || args[0] === 'answer') {
     const server = parseArgs({ args: args.slice(1), strict: false, options: { server: { type: 'string' } } }).values.server;
     const client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER);
