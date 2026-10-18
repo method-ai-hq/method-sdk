@@ -1,7 +1,10 @@
-# Unreleased
+# 0.18.0
 
-A correction fixes the Method on the person's computer, in one step.
+Uses runtime 0.15.0. Model steps run on your own Claude Code or Codex subscription, and a correction fixes the Method on your computer in one step.
 
+- **Model steps run on your own Claude Code or Codex subscription when one is available.** A step that names no model runs on the agent that called `method` (Claude Code or Codex), else on a Claude Code or Codex that is installed and signed in on this computer. Hosted models on account credit are used only when neither is available. A model that the Method file names always wins.
+- **`method config agent` and the `--agent` flag are removed.** The Method file and the agent you work in choose the model; there is no separate setting.
+- Scripts get `USER`, `TMPDIR`, and the calling agent's variable (`CLAUDECODE` or `CODEX_THREAD_ID`).
 - **`method judge RUN_ID wrong --note "…"` runs the improvement loop in the foreground**, on the user's own Claude Code or Codex (hosted models only when neither is signed in). It records the correction as a regression case in `cases/` (a model writes rule sentences from the note and the run's result, even from vague words, and keeps them only when they fail on the run), finds the step that causes the failure, makes up to three small changes, replays them on the corrected run, every earlier corrected run and approved run, and runs every case once. It changes the file only when a change fixes the run and breaks no earlier correction or case, saves it as a new version (restoring the version before it on the Method page undoes it), and prints one line: what changed and how many earlier corrections it passes, or `No safe change found` and why. `method judge RUN_ID right` records only.
 - **Corrections that wait are fixed first.** A correction from the dashboard, or one whose fix stopped, waits in the account; the next `method run FILE` or `method judge` of that Method on a computer fixes it with the same loop and says so in one line.
 - **`method improve` and `method apply` are gone.** A change Method made in the account that conflicts with your edits no longer needs `method apply`: the line names the parts, and both versions are saved in `.method/` for the agent to merge.

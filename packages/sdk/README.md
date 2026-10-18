@@ -3,7 +3,7 @@
 MIT-licensed JavaScript API and the `method` CLI. Source and releases: https://github.com/method-ai-hq/method-sdk
 
 ```sh
-npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.17.3/method-ai-hq-sdk-0.17.3.tgz
+npm install https://github.com/method-ai-hq/method-sdk/releases/download/v0.18.0/method-ai-hq-sdk-0.18.0.tgz
 npx method --version
 ```
 
