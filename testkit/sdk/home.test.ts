@@ -1,11 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { claimHome, followAccount, homeKey, readHome, recordHome, writtenFiles } from '../../packages/sdk/src/home.js';
-import { fileHash } from '../../packages/sdk/src/method-files.js';
-import { packageDigest } from '../../packages/contracts/src/method-package.js';
-import { readDocument } from '../../packages/sdk/src/authoring.js';
+import { claimHome, homeKey, readHome } from '../../packages/sdk/src/home.js';
 
 const server = 'https://method.test', id = `wf_${'b'.repeat(32)}`;
 const roots: string[] = [];
@@ -58,36 +55,4 @@ it('every checkout of one Git repository shares the home', () => {
   expect(homeKey(side)).toBe(homeKey(main));
   claimHome(server, id, main);
   expect(() => claimHome(server, id, side)).not.toThrow();
-});
-
-/** A server whose latest version renames the Method and changes its script. */
-function account(dir: string) {
-  const script = new TextEncoder().encode('console.log("{\\"text\\":\\"new\\"}")');
-  const workflow = { ...readDocument(join(dir, 'echo.method')), name: 'Echo again' }; delete workflow.id;
-  const files = [{ path: 'echo.mjs', sha256: fileHash(script), size: script.length }];
-  const pack = { schema: 'method-package/1', runtime: '0.12.0', files, digest: packageDigest(workflow, { runtime: '0.12.0', files }) };
-  return { server, token: () => 'token', request: vi.fn(async () => ({ workflow_id: id, version_id: 'v_new', version_number: 7, workflow, package: pack })), transfer: vi.fn(async () => script) };
-}
-
-it('an unchanged home file takes the newer version from the account, with no output', async () => {
-  const { real } = folders();
-  const file = write(join(real, 'follow'));
-  recordHome(server, id, file, { version_id: 'v_old', files: writtenFiles(file, [{ path: 'echo.mjs', sha256: fileHash(readFileSync(join(real, 'follow', 'echo.mjs'))) }]) });
-  const client = account(join(real, 'follow'));
-  expect(await followAccount(client, file)).toBe(true);
-  expect(readDocument(file)).toMatchObject({ id, name: 'Echo again' });
-  expect(readFileSync(join(real, 'follow', 'echo.mjs'), 'utf8')).toContain('new');
-  expect(readHome(server, id)).toMatchObject({ version_id: 'v_new' });
-  expect(await followAccount(client, file)).toBe(false);
-});
-
-it('a home file with the user\'s own change keeps it', async () => {
-  const { real } = folders();
-  const file = write(join(real, 'edited'));
-  recordHome(server, id, file, { version_id: 'v_old', files: writtenFiles(file, []) });
-  writeFileSync(file, methodText('Edited by the user'));
-  const client = account(join(real, 'edited'));
-  expect(await followAccount(client, file)).toBe(false);
-  expect(client.request).not.toHaveBeenCalled();
-  expect(readDocument(file).name).toBe('Edited by the user');
 });

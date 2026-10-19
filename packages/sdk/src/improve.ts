@@ -10,7 +10,8 @@ import { fileHash } from './method-files.js';
 import { methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
 import { currentVersion, methodContent, methodIdPattern } from './versions.js';
-import { changedSteps, localRuns, saveLocalProposal, writeMethodFile } from './proposals.js';
+import { localRuns, saveLocalProposal, writeMethodFile } from './proposals.js';
+import { changedSteps } from './merge.js';
 import { localJudgments, runFolderIndex, type LocalJudgment } from './local-judgments.js';
 
 // The improvement loop on this computer. method judge runs it at once for a wrong judgment, and method run and method
@@ -24,7 +25,10 @@ export type ImproveJudgment = {
   id: string; run_id: string; run_dir?: string; step_id: string | null; verdict: 'right' | 'wrong'; note: string | null; corrected?: unknown;
   case_id?: string; source: string; created_at: string; new?: boolean; run?: unknown;
 };
-type AccountJudgment = { id: string; run_id: string; step_id: string | null; verdict: 'right' | 'wrong'; note: string | null; corrected: unknown; source: string; created_at: string; pending: boolean };
+type AccountJudgment = { id: string; run_id: string; step_id: string | null; verdict: 'right' | 'wrong'; note: string | null; corrected: unknown; source: string; created_at: string; pending: boolean;
+  noted_by?: string | null; outcome?: string | null; handled_by?: string | null; held_with?: string | null };
+/** What the loop did with one correction, as the account records it. */
+export type CorrectionOutcome = { id: string; outcome: 'fixed' | 'no_change' | 'already_changed' | 'held'; detail?: string };
 type SavedImprove = { workflow_id: string; version_id: string; workflow: any; package?: unknown };
 /** Runs a local Method file; the default is the runtime that `method run FILE` uses. */
 export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory: undefined, onEvent: undefined, client: MethodClient, baseConfig: undefined, secrets: Record<string, string>) => Promise<{ status: string; result?: unknown; failure?: any }>;
@@ -33,7 +37,7 @@ export type ImproveProposal = { cause: string; workflow: unknown | null; files: 
 export type FixOutcome = {
   file: string; judgments: string[]; corrections: number; from_dashboard: number; kind: 'change' | 'none'; line: string; cause: string; steps: string[];
   cases: { made: string[]; not_made: { id: string; reason: string }[] }; earlier_passed: number; version?: { version_id: string; url: string; undo: string } | undefined;
-  usage: { model_calls: number; usd: number | null; minutes: number } | null; capped: string; log: string; changed?: string;
+  usage: { model_calls: number; usd: number | null; minutes: number } | null; capped: string; log: string; changed?: string; outcomes?: CorrectionOutcome[];
 };
 
 /**
@@ -123,7 +127,7 @@ const caseSchema = { type: 'object', properties: { criteria: { type: 'array', it
  * 3 plain sentences from the note and the run's result, and method case new keeps them only when they fail on the run.
  * A rule that fails nothing gets one more try with the reason. The person's words decide a conflict with an instruction.
  */
-export async function caseFromCorrection(file: string, judgment: { id: string; note: string | null; corrected?: unknown }, runDir: string) {
+export async function caseFromCorrection(file: string, judgment: { id: string; note: string | null; corrected?: unknown; noted_by?: string | null }, runDir: string) {
   const id = correctionCaseId(judgment.id);
   if (existsSync(join(dirname(file), 'cases', id, 'case.json'))) return { id, made: false };
   const { outcomeOfRun, createCase } = await import('@withmethod/runtime/cases.js');
@@ -146,7 +150,7 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
     const criteria = (Array.isArray(answer.value?.criteria) ? answer.value.criteria : []).map((c: unknown) => String(c).trim()).filter(Boolean).slice(0, 3);
     if (!criteria.length) { reason = 'There were no sentences.'; continue; }
     try {
-      await createCase({ methodFile: file, runDir, id, note, rubric: criteria, ref: `outputs.${ref}`, acceptConflict: note, config: prepared.config,
+      await createCase({ methodFile: file, runDir, id, note, author: judgment.noted_by ?? null, rubric: criteria, ref: `outputs.${ref}`, acceptConflict: note, config: prepared.config,
         options: { runOptions: { processPath: prepared.processPath, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } } });
       return { id, made: true };
     } catch (error: any) {
@@ -187,13 +191,24 @@ export async function fixCorrections(client: MethodClient, file: string, options
   if (!waiting.length) return undefined;
   const handled = (ids: string[], value: boolean) => client.request<{ changed: string[] }>(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/handled`, 'POST', { ids, handled: value });
   const taken = new Set((await handled(waiting.map(j => j.id), true)).changed);
-  const fresh = waiting.filter(j => taken.has(j.id));
-  if (!fresh.length) return undefined;
-  const fromDashboard = fresh.filter(j => j.source === 'dashboard').length;
-  process.stderr.write(`Fixing ${basename(file)} from ${plural(fresh.length, 'correction')} on this computer. This takes a few minutes.\n`);
+  const claimed = waiting.filter(j => taken.has(j.id));
+  if (!claimed.length) return undefined;
   const base = methodContent(document), baseVersion = await currentVersion(file).catch(() => undefined);
   let decided = false;
+  const outcomes: CorrectionOutcome[] = [];
+  const report = () => reportOutcomes(client, methodId, outcomes);
   try {
+    // A correction of a step whose text changed since its run is not fixed: the change may already answer it.
+    const stale = await changedSinceRun(client, methodId, claimed, base);
+    outcomes.push(...stale);
+    const fresh = claimed.filter(j => !stale.some(c => c.id === j.id));
+    const fromDashboard = fresh.filter(j => j.source === 'dashboard').length;
+    if (!fresh.length) {
+      decided = true; await report();
+      return { file, judgments: claimed.map(j => j.id), corrections: claimed.length, from_dashboard: claimed.filter(j => j.source === 'dashboard').length, kind: 'none', cause: '', steps: [], cases: { made: [], not_made: [] }, earlier_passed: 0,
+        usage: null, capped: '', log: '', outcomes, line: `Not fixed: ${stale.map(c => c.detail).join(' ')}` };
+    }
+    process.stderr.write(`Fixing ${basename(file)} from ${plural(fresh.length, 'correction')} on this computer. This takes a few minutes.\n`);
     // A regression case per correction, so every later change is checked against it.
     const cases: FixOutcome['cases'] = { made: [], not_made: [] };
     for (const j of fresh) {
@@ -218,11 +233,20 @@ export async function fixCorrections(client: MethodClient, file: string, options
     const earlier = (evidence.cases ?? []).filter((c: any) => !c.target && c.after === 'pass').length;
     const usage = evidence.budget ?? null;
     const used = usage ? ` (${plural(usage.model_calls, 'model call')}, ${usage.minutes < 1 ? 'under a minute' : `${Math.round(usage.minutes)} min`}${typeof usage.usd === 'number' ? `, $${usage.usd.toFixed(2)}` : ''})` : '';
-    const outcome = { file, judgments: [...freshIds], corrections: fresh.length, from_dashboard: fromDashboard, cause: improved.cause, cases, earlier_passed: earlier, usage, capped: improved.capped, log: improved.log };
+    const outcome = { file, judgments: claimed.map(j => j.id), corrections: fresh.length, from_dashboard: fromDashboard, cause: improved.cause, cases, earlier_passed: earlier, usage, capped: improved.capped, log: improved.log, outcomes };
     const record = (kind: 'applied' | 'none', extra: Record<string, unknown> = {}) => saveLocalProposal(file, { id: `lp_${randomBytes(8).toString('hex')}`, method_id: methodId, base_version_id: baseVersion?.version_id ?? null,
       status: kind, cause: improved.cause, evidence, created_at: new Date().toISOString(), base_workflow: base, proposed_workflow: improved.workflow, judgments: [...freshIds], ...extra });
+    // A change that passes only by breaking another person's case is held: two people want different results.
+    const held = heldBy(file, fresh, evidence);
+    if (held.length) {
+      record('none', { reason: 'held' });
+      outcomes.push(...fresh.map(j => held.find(h => h.id === j.id) ?? { id: j.id, outcome: 'no_change' as const }));
+      await report();
+      return { ...outcome, kind: 'none', steps: evidence.steps ?? [], line: `Held, nothing changed: ${held.map(h => h.detail).join(' ')} Decide which result is right with them.` };
+    }
     if (evidence.kind !== 'change') {
       record('none');
+      outcomes.push(...fresh.map(j => ({ id: j.id, outcome: 'no_change' as const }))); await report();
       const why = improved.cause.replace(/^No safe change was found\.\s*/, '').split('\n')[0]!.slice(0, 300);
       return { ...outcome, kind: 'none', steps: evidence.steps ?? [], line: `No safe change found: ${why}${used}` };
     }
@@ -238,12 +262,14 @@ export async function fixCorrections(client: MethodClient, file: string, options
     const steps = applyChange(file, methodId, improved);
     const version = await saveFixedVersion(client, outbox, file, methodId, improved.cause, before?.version_id);
     record('applied', { applied_at: new Date().toISOString(), ...(version ? { applied_version_id: version.version_id } : {}) });
+    outcomes.push(...fresh.map(j => ({ id: j.id, outcome: 'fixed' as const }))); await report();
     const changed = `Changed ${steps.length ? `step ${steps.join(', ')}` : 'its files'} of ${basename(file)}: ${improved.cause}`, undo = version ? ` ${version.undo}` : '';
     return { ...outcome, kind: 'change', steps, version, changed: `${changed}${undo}${used}`,
       line: `${changed} It fixes the corrected run and passes ${plural(earlier, 'earlier correction')}.${undo}${used}` };
   } catch (error) {
     // Stopped before it decided: the corrections wait for the next loop.
-    if (!decided) await handled([...taken], false).catch(() => undefined);
+    if (!decided) await handled([...taken].filter(id => !outcomes.some(o => o.id === id)), false).catch(() => undefined);
+    if (!decided && outcomes.length) await report();
     throw Object.assign(error instanceof Error ? error : Error(String(error)), { judgments: [...taken] });
   }
 }
@@ -334,6 +360,57 @@ export async function fixCorrection(client: MethodClient, file: string, judgment
     if (!joined) { process.stderr.write(`Method is fixing ${basename(file)} on this computer; this correction joins that fix.\n`); joined = true; }
     await new Promise(done => setTimeout(done, options.pollMs ?? 500));
   }
+}
+
+/** Send what the loop did with each correction. An older server without the route keeps today's record. */
+async function reportOutcomes(client: MethodClient, methodId: string, outcomes: CorrectionOutcome[]) {
+  if (!outcomes.length) return;
+  try { await client.request(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/outcomes`, 'POST', { outcomes: outcomes.map(o => ({ id: o.id, outcome: o.outcome, ...(o.detail ? { detail: o.detail.slice(0, 500) } : {}) })) }); }
+  catch (error: any) { if (error?.status !== 404 && !/^404:/.test(String(error?.message))) process.stderr.write(`The account did not record what happened to the corrections: ${error.message}\n`); }
+}
+
+/** The version that a judged run ran: from its run folder here, else from its account record. */
+async function runVersion(client: MethodClient, j: { run_id: string; run_dir?: string | undefined }) {
+  if (j.run_dir) { try { const sync = JSON.parse(readFileSync(join(j.run_dir, 'method-sync.json'), 'utf8')); if (typeof sync.version_id === 'string') return sync.version_id as string; } catch { /* no account link */ } }
+  try { return (await client.request<{ run: { workflow_version_id?: string } }>(`/api/workspace/runs/${encodeURIComponent(j.run_id)}`)).run?.workflow_version_id; } catch { return undefined; }
+}
+/**
+ * The corrections of a step whose text in the run's version differs from the file: outcome already_changed, with the
+ * person who saved the newest version when that version has the file's text of the step.
+ */
+async function changedSinceRun(client: MethodClient, methodId: string, judgments: Array<AccountJudgment & { run_dir?: string | undefined }>, current: any) {
+  const changed: CorrectionOutcome[] = [], versions = new Map<string, Promise<any>>();
+  let file: any;
+  try { file = loadWorkflow(current); } catch { return changed; }
+  const saved = (version?: string) => {
+    const key = version ?? '';
+    if (!versions.has(key)) versions.set(key, client.request<any>(`/api/cli/methods/${encodeURIComponent(methodId)}${version ? `?version=${encodeURIComponent(version)}` : ''}`).catch(() => undefined));
+    return versions.get(key)!;
+  };
+  for (const j of judgments) {
+    if (!j.step_id || !Object.hasOwn(file.steps ?? {}, j.step_id)) continue;
+    const version = await runVersion(client, j), ran = version ? await saved(version) : undefined;
+    if (!ran?.workflow?.steps || isDeepStrictEqual(ran.workflow.steps[j.step_id], file.steps[j.step_id])) continue;
+    const newest = await saved();
+    const by = newest?.saved_by && isDeepStrictEqual(newest.workflow?.steps?.[j.step_id], file.steps[j.step_id]) ? newest.saved_by : undefined;
+    changed.push({ id: j.id, outcome: 'already_changed', detail: by ? `${by} changed step ${j.step_id} after this run.` : `Step ${j.step_id} changed after this run.` });
+  }
+  return changed;
+}
+
+/**
+ * The corrections whose tested change breaks a case that another person made (a case that passed before and fails
+ * after), with both names. A case or a correction with no name is not held.
+ */
+function heldBy(file: string, fresh: AccountJudgment[], evidence: any): CorrectionOutcome[] {
+  const broken = (Array.isArray(evidence?.cases) ? evidence.cases : []).filter((c: any) => !c.target && c.before === 'pass' && c.after !== 'pass').map((c: any) => {
+    try { const made = JSON.parse(readFileSync(join(dirname(file), 'cases', c.id, 'case.json'), 'utf8')); return { id: c.id as string, author: made.author as string | null, note: String(made.note ?? '') }; }
+    catch { return undefined; }
+  }).filter((c: any) => c?.author);
+  return fresh.flatMap(j => {
+    const other = j.noted_by ? broken.find((c: any) => c.author !== j.noted_by) : undefined;
+    return other ? [{ id: j.id, outcome: 'held' as const, detail: `A fix for ${j.noted_by}'s correction breaks ${other.author}'s case ${other.id}: ${other.note.slice(0, 200)}`.replace(/[.\s]*$/, '.') }] : [];
+  });
 }
 
 /** Write the tested change: the Method content (its id: line kept) and a changed package file of a script change. */

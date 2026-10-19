@@ -4,7 +4,7 @@ import runtimeInfo from '@withmethod/runtime/package.json' with { type: 'json' }
 import { startRunWorker, waitForRun, cancelRun, workerAlive } from './run-worker.js';
 import { methodCache } from './prepare.js';
 import { restorePackage } from './method-files.js';
-import { publish, methodContent } from './versions.js';
+import { publish, methodContent, methodIdPattern } from './versions.js';
 import { runSaved } from './run-saved.js';
 import { bindInput, bindConnection } from './bindings.js';
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -51,6 +51,47 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
   await startRunWorker(workerArgs, directory, flags.background, server);
   return true;
 }
+/** Print a result that stops a command before it starts: the JSON on stdout, the three failure lines on stderr. Exit code 2. */
+async function stopForPerson(result: { failure: any }) {
+  process.stderr.write((await import('./failure.js')).failureLines(result.failure));
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n'); process.exitCode = 2;
+}
+/**
+ * Bring a Method file to the newest version of its Method before a run or a publish, with one line on stderr. Returns
+ * the catch-up status; conflict when the person must combine two texts first: then nothing runs and no file changes.
+ */
+export async function catchUpFile(client: MethodClient | undefined, file: string, doing = 'running') {
+  if (!client) return 'skipped';
+  const result = await (await import('./home.js')).catchUp(client, file, doing);
+  if (result.status === 'conflict') await stopForPerson(result.result);
+  else if ('line' in result) process.stderr.write(result.line + '\n');
+  return result.status;
+}
+/** The line that says the same run (same version, same inputs) is already going. Never blocks; nothing for device runs. */
+async function sameRunLine(client: MethodClient | undefined, methodId: string, versionId: string, flags: ReturnType<typeof parse>['values'], device: boolean) {
+  if (!client || device || process.env.METHOD_RUN_WORKER === '1' || flags.resume || flags['inputs-from']) return;
+  let inputs: unknown = {};
+  try { if (flags.inputs) inputs = JSON.parse(readFileSync(resolve(flags.inputs), 'utf8')); } catch { return; }
+  const line = await (await import('./method-sync.js')).sameRunNotice(client, methodId, versionId, inputs);
+  if (line) process.stderr.write(line + '\n');
+}
+/**
+ * Before method run FILE in the parent process: the file takes the newest version of its Method, corrections that wait
+ * are fixed, and the same-run line is printed. Returns false when the run must not start.
+ */
+async function beforeFileRun(args: string[], clientFactory: (server: string) => MethodClient) {
+  if (process.env.METHOD_RUN_WORKER === '1' || args.includes('--resume') || !existsSync(args[1]!)) return true;
+  const server = parseArgs({ args: args.slice(2), strict: false, options: { server: { type: 'string' } } }).values.server;
+  let client: MethodClient | undefined;
+  try { client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER); if (!client.token()) client = undefined; } catch { client = undefined; }
+  const file = authoringPath(args[1]!);
+  const caught = await catchUpFile(client, file);
+  if (caught === 'conflict') return false;
+  await fixWaitingCorrections(args, clientFactory);
+  const version = client && caught !== 'offline' ? await (await import('./versions.js')).currentVersion(file).catch(() => undefined) : undefined;
+  if (version) { let flags; try { flags = parse(args.slice(2)).values; } catch { return true; } await sameRunLine(client, version.method_id, version.version_id, flags, readDocument(file).run_data === 'device'); }
+  return true;
+}
 /**
  * Before method run FILE: corrections that wait for this Method (from the dashboard, or a loop that stopped) are fixed
  * first, with one line about them. When a fix of the Method already runs on this computer, the run does not wait: that
@@ -66,6 +107,25 @@ async function fixWaitingCorrections(args: string[], clientFactory: (server: str
   try { for (const fix of await fixWaiting(client, authoringPath(args[1]!), { waitMs: 3000 }) ?? []) process.stderr.write(waitingLine(fix) + '\n'); }
   catch (error) { if (!/^(fetch failed|401:|404:)|abort|timed? ?out/i.test((error as Error).message)) process.stderr.write(`The waiting corrections are not fixed yet: ${(error as Error).message}\n`); }
 }
+/**
+ * The ID of the workspace's Method with this name (case-insensitive, archived Methods left out), or null when none has
+ * it. Several matches list their names and IDs and run nothing (exit code 2): then undefined.
+ */
+async function methodByName(client: MethodClient, name: string) {
+  const found: Array<{ id: string; name: string }> = [];
+  for (let cursor: string | null = null, first = true; first || cursor; first = false) {
+    const page: { workflows?: any[]; next_cursor?: string | null } = await client.request(`/api/methods?limit=500${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    found.push(...(page.workflows ?? []).filter(w => !w.archived_at && typeof w.name === 'string' && w.name.trim().toLowerCase() === name.trim().toLowerCase()));
+    cursor = page.next_cursor ?? null;
+  }
+  if (found.length === 1) return found[0]!.id;
+  if (!found.length) return null;
+  const message = `${found.length} Methods are named "${name}". Run one by its ID: ${found.map(w => `method run ${w.id} (${w.name})`).join(', ')}.`;
+  process.stderr.write(message + '\n');
+  process.stdout.write(JSON.stringify({ status: 'needs_you', message, matches: found.map(w => ({ name: w.name, id: w.id })) }, null, 2) + '\n');
+  process.exitCode = 2;
+  return undefined;
+}
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
   const resumed = (await import('./resume-release.js')).resumeWithOriginalRelease(args);
   if (resumed !== undefined) { process.exitCode = resumed; return; }
@@ -74,8 +134,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
   if (args[0] === 'judge') return (await import('./judge.js')).judgeCommand(args.slice(1), clientFactory);
   if (args[0] === 'changes') return (await import('./proposals.js')).changesMain(args.slice(1), clientFactory);
-  await (await import('./proposals.js')).autoApply(args, clientFactory);
-  if (args[0] === 'run' && /\.method$/i.test(args[1] ?? '') && !args.includes('--help')) await fixWaitingCorrections(args, clientFactory);
+  if (args[0] === 'run' && /\.method$/i.test(args[1] ?? '') && !args.includes('--help') && !await beforeFileRun(args, clientFactory)) return;
   if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);
   if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));
   if (args[0] === '__model') return (await import('./model-call.js')).modelCallCommand();
@@ -164,7 +223,8 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       values[match[1]!] = value;
     } else rest.push(args[i]!);
   }
-  const [command, target, step] = rest;
+  const [command, , step] = rest;
+  let target = rest[1];
   if (!command || command === "--help" || command === "help") {
     process.stdout.write(help);
     return;
@@ -264,10 +324,19 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   }
   if (command === "publish") {
     if (!authorFile) throw Error("Use method publish FILE [--reason TEXT] [--cloud|--workers] [--env NAME].");
+    if (await catchUpFile(client, safePath(authorFile), 'publishing') === 'conflict') return;
     print(await (await import("./cloud.js")).publishWithPlacement(client, rest, () => publish(client, safePath(authorFile), values.reason, (values["accept-failing-case"] ?? "").split(",").map(id => id.trim()).filter(Boolean))));
     return;
   }
   if (!target) throw Error(help);
+  // method run NAME: the Method of the workspace with this name, run as method run ID runs it.
+  let named: string | undefined;
+  if (command === "run" && !methodIdPattern.test(target) && !existsSync(target)) {
+    const found = await methodByName(client, target);
+    if (found === undefined) return;
+    if (found) { const at = args.indexOf(target); args = [...args.slice(0, at), found, ...args.slice(at + 1)]; target = found; }
+    else named = target;
+  }
   const path = `/api/cli/methods/${encodeURIComponent(target)}`;
   if (!["get", "steps", "step", "run"].includes(command)) throw Error(help);
   const saved = await client.request<{
@@ -276,10 +345,14 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     version_number: number;
     workflow: unknown;
     package?: any;
+    saved_by?: string | null;
   }>(
     path +
       (values.version ? `?version=${encodeURIComponent(values.version)}` : ""),
-  );
+  ).catch(error => {
+    if (named && /^40[34]:/.test(error.message)) throw Error(`No Method named "${named}" in your workspace, and no file or Method ID ${named}. Run method list to see the names.`);
+    throw error;
+  });
   const workflow = command === "get" ? saved.workflow as any : loadWorkflow(saved.workflow);
   if (command === "steps") {
     print({ version_id: saved.version_id, steps: workflow.steps });
@@ -307,10 +380,10 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       // An older saved version carries runtime.json; the file gets it in the Method, as in format 3.4.
       (await import("./legacy.js")).convertLegacyOrThrow(out);
       writeMethodId(out, saved.workflow_id);
-      (await import("./outbox.js")).recordCheckout(client.server, saved.workflow_id, saved.version_id, saved.version_number, methodContent(workflow));
+      (await import("./outbox.js")).recordCheckout(client.server, saved.workflow_id, saved.version_id, saved.version_number, methodContent(workflow), { saved_by: saved.saved_by ?? null });
       // The new file becomes the Method's home on this computer unless another file already is.
       const home = await import("./home.js");
-      try { home.claimHome(client.server, saved.workflow_id, out); home.recordHome(client.server, saved.workflow_id, out, { version_id: saved.version_id, files: home.writtenFiles(out, saved.package?.files ?? []) }); } catch { /* a copy for reading */ }
+      try { home.claimHome(client.server, saved.workflow_id, out); } catch { /* a copy for reading */ }
       print({
         workflow_id: saved.workflow_id,
         version_id: saved.version_id,
@@ -321,6 +394,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return;
   }
   const flags = parse(rest.slice(2)).values;
+  await sameRunLine(client, saved.workflow_id, saved.version_id, flags, (saved.workflow as any)?.run_data === 'device');
   if(await dispatchRunWorker(args, flags, values.version ? [] : ['--version', saved.version_id], client)) return;
   await runSaved(saved, flags, client);
 

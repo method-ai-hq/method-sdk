@@ -34,7 +34,6 @@ export function parse(args: string[]) {
 export async function run(target: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync): Promise<void> {
   const path = isWorkflowLink(target) ? (await saveWorkflowLink(target, process.cwd())).path : resolve(target);
   (await import("./legacy.js")).convertLegacyOrThrow(path);
-  if (!syncFactory) await (await import("./home.js")).followAccount(new MethodClient(flags.server), path);
   loadWorkflow(methodContent(readDocument(path)));
   const notice = await (await import("./quality.js")).casesNotice(path);
   if (notice) process.stderr.write(notice + "\n");

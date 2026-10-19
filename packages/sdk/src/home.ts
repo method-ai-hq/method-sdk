@@ -10,10 +10,9 @@ import { fileHash } from './method-files.js';
 /**
  * Each Method has one home file on this computer: the file its versions are saved from. A copy in a temporary folder,
  * or in another folder while the home file still exists, is not saved, so one Method never grows two histories.
- * Git worktrees and clones of one repository share a home. The home record also holds what the last save or checkout
- * wrote, so an unchanged home file can take a newer version from the account.
+ * Git worktrees and clones of one repository share a home.
  */
-export type Home = { path: string; key: string; version_id?: string; files?: Record<string, string> };
+export type Home = { path: string; key: string };
 const homeFile = (server: string, methodId: string) => join(methodCache(), 'homes', `${sha256(`${server}\n${methodId}`).slice(0, 24)}.json`);
 export function readHome(server: string, methodId: string): Home | undefined {
   try { return JSON.parse(readFileSync(homeFile(server, methodId), 'utf8')); } catch { return undefined; }
@@ -42,13 +41,8 @@ export function homeKey(file: string) {
   return repo ? `${repo.main}:${relative(repo.root, path)}` : path;
 }
 
-/** What a save or checkout wrote: the Method file and each package file, by hash. */
-export function writtenFiles(file: string, packageFiles: Array<{ path: string; sha256: string }>) {
-  const path = authoringPath(file);
-  return { [relative(dirname(path), path)]: fileHash(readFileSync(path)), ...Object.fromEntries(packageFiles.map(f => [f.path, f.sha256])) };
-}
-export function recordHome(server: string, methodId: string, file: string, version?: { version_id: string; files: Record<string, string> }) {
-  writePrivateJson(homeFile(server, methodId), { path: authoringPath(file), key: homeKey(file), ...version });
+export function recordHome(server: string, methodId: string, file: string) {
+  writePrivateJson(homeFile(server, methodId), { path: authoringPath(file), key: homeKey(file) });
 }
 
 /**
@@ -58,54 +52,121 @@ export function recordHome(server: string, methodId: string, file: string, versi
  */
 export function claimHome(server: string, methodId: string, file: string) {
   const home = readHome(server, methodId), key = homeKey(file);
-  if (home && home.key === key) { if (home.path !== authoringPath(file)) recordHome(server, methodId, file, home.version_id ? { version_id: home.version_id, files: home.files ?? {} } : undefined); return; }
+  if (home && home.key === key) { if (home.path !== authoringPath(file)) recordHome(server, methodId, file); return; }
   const homeLives = (() => { try { return !!home && readDocument(home.path).id === methodId; } catch { return false; } })();
   if (home && homeLives && (temporary(file) || !temporary(home.path)))
     throw Object.assign(Error(`This Method is saved from ${home.path}. Make the change in that file and run it there; this copy was not run or saved.`), { code: 'other_home', home: home.path });
   recordHome(server, methodId, file);
 }
 
-/** True when every file that the last save or checkout wrote is still unchanged in the home folder. */
-export function unchangedSinceSave(home: Home) {
-  if (!home.version_id || !home.files) return false;
-  const root = dirname(home.path);
-  return Object.entries(home.files).every(([name, hash]) => { try { return fileHash(readFileSync(join(root, name))) === hash; } catch { return false; } });
-}
+
+type Saved = { workflow_id: string; version_id: string; version_number: number; workflow: any; package?: { files: Array<{ path: string; sha256: string; size: number }> } | null; saved_by?: string | null; saved_at?: string | null };
+type Client = Pick<import('./method-client.js').MethodClient, 'server' | 'token' | 'request' | 'transfer'>;
+/** Both texts of one part that this computer and a teammate changed in different ways. */
+export type CombineConflict = { part: string; file: string; yours: unknown; theirs: unknown };
+export type CatchUp = { status: 'skipped' | 'current' } | { status: 'offline' | 'updated'; line: string }
+  | { status: 'conflict'; result: { status: 'needs_you'; failure: import('../../workflow-language/src/inspection.js').RunFailure; conflicts: CombineConflict[] } };
+
+const list = (word: string, items: string[]) => items.length ? `${word}${items.length === 1 ? '' : 's'} ${items.join(', ')}` : '';
+const parts = (steps: string[], files: string[]) => [list('step', steps), list('file', files)].filter(Boolean).join(' and ');
+const clock = (at?: string | null) => { const date = at ? new Date(at) : undefined; return date && !isNaN(+date) ? ` from ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}` : ''; };
+const clip = (text: string) => text.length > 20_000 ? `${text.slice(0, 20_000)}…` : text;
+const unreachable = (error: any) => error?.code === 'network' || error?.code === 'stalled' || error?.name === 'TimeoutError' || error?.name === 'AbortError' || error?.status >= 500 || error?.status === 429;
 
 /**
- * Before a run of the home file: when nothing in it changed since the last save or checkout on this computer and the
- * account has a newer version (saved from another computer or folder), write that version here first. Says nothing;
- * any problem leaves the files as they are.
+ * Before a run, a fix or a publish of a Method file: bring the file to the newest version of its Method. base is the
+ * version this computer last saved or got, ours the file, theirs the newest version. An unchanged file takes theirs;
+ * a changed one combines step by step and file by file (an empty base when this computer has none). A part that both
+ * sides changed in different ways is a conflict: nothing changes, and the result has both texts. Offline, the file
+ * runs as it is. Signed out, a file with no id: line, or a Method with no version yet: nothing.
  */
-export async function followAccount(client: { server: string; token(): string | null | undefined; request<T>(path: string): Promise<T>; transfer(path: string): Promise<Uint8Array> }, file: string) {
-  const path = authoringPath(file);
-  try {
-    const id = (await import('./authoring.js')).readDocument(path).id;
-    if (typeof id !== 'string' || !client.token()) return false;
-    const home = readHome(client.server, id);
-    if (!home || home.key !== homeKey(path) || !unchangedSinceSave(home)) return false;
-    const latest = await client.request<any>(`/api/cli/methods/${encodeURIComponent(id)}`);
-    if (!latest?.version_id || latest.version_id === home.version_id) return false;
-    const { mkdtempSync, rmSync, copyFileSync, mkdirSync } = await import('node:fs');
-    const { restorePackage } = await import('./method-files.js');
-    const staging = mkdtempSync(join(methodCache(), 'follow-'));
-    try {
-      await restorePackage(latest, staging, client as any);
-      const root = dirname(path), incoming = latest.package?.files ?? [];
-      // A local file that the last save did not write, and that differs, is the user's: then nothing changes.
-      for (const f of incoming) {
-        const local = join(root, f.path);
-        if (existsSync(local) && !home.files?.[f.path] && fileHash(readFileSync(local)) !== f.sha256) return false;
-      }
-      for (const f of incoming) { mkdirSync(dirname(join(root, f.path)), { recursive: true, mode: 0o700 }); copyFileSync(join(staging, f.path), join(root, f.path)); }
-    } finally { rmSync(staging, { recursive: true, force: true }); }
-    const { writeDocument } = await import('./authoring.js');
-    const { methodContent, writeMethodId } = await import('./versions.js');
-    writeDocument(path, methodContent(latest.workflow));
-    (await import('./legacy.js')).convertLegacy(path);
-    writeMethodId(path, id);
-    (await import('./outbox.js')).recordCheckout(client.server, id, latest.version_id, latest.version_number, methodContent(latest.workflow));
-    recordHome(client.server, id, path, { version_id: latest.version_id, files: writtenFiles(path, latest.package?.files ?? []) });
-    return true;
-  } catch { return false; }
+export async function catchUp(client: Client, file: string, doing = 'running'): Promise<CatchUp> {
+  const path = authoringPath(file), root = dirname(path);
+  const { methodContent, methodIdPattern, versionIdFor } = await import('./versions.js');
+  let document: any;
+  try { document = readDocument(path); if (typeof document.id !== 'string' || !methodIdPattern.test(document.id) || !client.token()) return { status: 'skipped' }; }
+  catch { return { status: 'skipped' }; }
+  const id: string = document.id, options = { signal: AbortSignal.timeout(5000), stallMs: 5000 };
+  const methodPath = `/api/cli/methods/${encodeURIComponent(id)}`;
+  let theirs: Saved;
+  try { theirs = await client.request<Saved>(methodPath, 'GET', undefined, true, options); }
+  catch (error) { return unreachable(error) ? { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` } : { status: 'skipped' }; }
+  const { loadWorkflow } = await import('../../workflow-language/src/validate.js');
+  const { buildPackage } = await import('./method-files.js');
+  const { lastSaved, recordCheckout } = await import('./outbox.js');
+  // A file that does not load fails its run with its own error.
+  let ours: { workflow: any; files: Array<{ path: string; sha256: string }>; version_id: string };
+  try { const workflow = loadWorkflow(methodContent(document)), { pack } = await buildPackage(path, workflow); ours = { workflow, files: pack.files, version_id: versionIdFor(id, pack.digest) }; }
+  catch { return { status: 'skipped' }; }
+  const record = lastSaved(client.server, id), savedBy = theirs.saved_by ?? null;
+  if (ours.version_id === theirs.version_id) {
+    if (record?.version_id !== theirs.version_id) recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy });
+    return { status: 'current' };
+  }
+  if (record?.version_id === theirs.version_id) return { status: 'current' };
+  let base: { workflow: any; files: Array<{ path: string; sha256: string }> } = { workflow: {}, files: [] };
+  if (record?.version_id) {
+    try { const saved = await client.request<Saved>(`${methodPath}?version=${encodeURIComponent(record.version_id)}`, 'GET', undefined, true, options); base = { workflow: saved.workflow, files: saved.package?.files ?? [] }; }
+    catch (error) { if (unreachable(error)) return { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` }; base = { workflow: record.workflow ?? {}, files: [] }; }
+  }
+  const { mergeMethod, mergeFiles, changedSteps } = await import('./merge.js');
+  const theirFiles = theirs.package?.files ?? [];
+  const steps = mergeMethod(base.workflow, ours.workflow, theirs.workflow), files = mergeFiles(base.files, ours.files, theirFiles);
+  const ourHashes = new Map(ours.files.map(f => [f.path, f.sha256]));
+  // Files that come from theirs. A file here that no save wrote and that differs is the person's own: a conflict too.
+  const incoming = files.files.filter(f => ourHashes.get(f.path) !== f.sha256);
+  const local = (name: string) => { try { return fileHash(readFileSync(join(root, name))); } catch { return undefined; } };
+  const fileConflicts = [...files.conflicts.map(c => c.path), ...incoming.filter(f => !ourHashes.has(f.path) && local(f.path) !== undefined && local(f.path) !== f.sha256).map(f => f.path)];
+  const download = async (f: { path: string; sha256: string }) => {
+    const bytes = await client.transfer(`${methodPath}/files/${f.sha256}?version=${encodeURIComponent(theirs.version_id)}`);
+    if (fileHash(bytes) !== f.sha256) throw Error(`The newer version's file ${f.path} does not match its checksum.`);
+    return bytes;
+  };
+  const who = savedBy ?? 'A teammate', name = relative(root, path);
+  if (!steps.clean || fileConflicts.length) {
+    const conflicts: CombineConflict[] = [];
+    for (const c of steps.clean ? [] : steps.conflicts) conflicts.push({ part: c.path.replace(/^steps\./, 'step '), file: name, yours: c.ours, theirs: c.theirs });
+    for (const at of fileConflicts) {
+      const theirFile = theirFiles.find(f => f.path === at);
+      const text = async () => { try { return clip(Buffer.from(await download(theirFile!)).toString('utf8')); } catch (error) { return `(not read: ${(error as Error).message})`; } };
+      conflicts.push({ part: `file ${at}`, file: at, yours: (() => { try { return clip(readFileSync(join(root, at), 'utf8')); } catch { return null; } })(), theirs: theirFile ? await text() : null });
+    }
+    const where = [...new Set(conflicts.map(c => c.file))];
+    const headline = `${who} also changed ${conflicts.map(c => c.part).join(', ')}. Combine the two texts in ${where.join(' and ')}, then run again.`;
+    return { status: 'conflict', result: { status: 'needs_you', failure: combineFailure(headline, conflicts, who), conflicts } };
+  }
+  try { loadWorkflow(steps.workflow); }
+  catch (error) {
+    const headline = `Your changes and ${savedBy ? `${savedBy}'s` : 'the newest'} version combine into a Method that does not load: ${(error as Error).message} Combine them in ${name} by hand, then run again.`;
+    return { status: 'conflict', result: { status: 'needs_you', failure: combineFailure(headline, [], who), conflicts: [] } };
+  }
+  // Every file is read before any file changes, so a failed download changes nothing.
+  let written: Array<{ path: string; bytes: Uint8Array }>;
+  try { written = await Promise.all(incoming.map(async f => ({ path: f.path, bytes: await download(f) }))); }
+  catch (error) { return unreachable(error) ? { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` } : { status: 'skipped' }; }
+  const { mkdirSync, renameSync, writeFileSync } = await import('node:fs');
+  const { packagePath } = await import('../../contracts/src/method-package.js');
+  for (const f of written) {
+    const target = resolve(root, packagePath(f.path));
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+    writeFileSync(`${target}.download`, f.bytes, { mode: 0o600 }); renameSync(`${target}.download`, target);
+  }
+  const { isDeepStrictEqual } = await import('node:util');
+  if (!isDeepStrictEqual(steps.workflow, ours.workflow)) (await import('./proposals.js')).writeMethodFile(path, id, steps.workflow);
+  (await import('./legacy.js')).convertLegacy(path);
+  const fileChanges = (from: Array<{ path: string; sha256: string }>, to: Array<{ path: string; sha256: string }>) => [...new Set([...from, ...to].map(f => f.path))].filter(at => from.find(f => f.path === at)?.sha256 !== to.find(f => f.path === at)?.sha256);
+  const yours = parts(changedSteps(base.workflow, ours.workflow), fileChanges(base.files, ours.files));
+  const kept = !isDeepStrictEqual(ours.workflow, base.workflow) || fileChanges(base.files, ours.files).length > 0;
+  // theirs is the parent of the next save; a side version of this computer that the file now combines goes with it.
+  recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy, ...(kept && record?.side_version_id ? { merged_version_id: record.side_version_id } : {}) });
+  const changed = parts(changedSteps(base.workflow, theirs.workflow), fileChanges(base.files, theirFiles));
+  return { status: 'updated', line: `Updated to ${savedBy ? `${savedBy}'s` : 'the newest'} version${clock(theirs.saved_at)}${changed ? ` (changed ${changed})` : ''}.${kept ? ` Your changes${yours ? ` to ${yours}` : ''} are kept.` : ''}` };
+}
+
+/** The failure record of a combine that needs the person: needs_you, with both texts of each part as evidence. */
+function combineFailure(headline: string, conflicts: CombineConflict[], who: string) {
+  const text = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value);
+  return { owner: 'needs_you' as const, code: 'combine_versions', headline, step: null, step_name: null, iteration: null, failed_iterations: [], total: null, phase: 'setup' as const, check_name: null,
+    next: { action: 'fix_method' as const, text: 'Edit the file so that each part keeps both changes, then run again. No run started and no file changed.' },
+    evidence: conflicts.flatMap(c => [`Your ${c.part}: ${text(c.yours)}`, `${who}'s ${c.part}: ${text(c.theirs)}`]) };
 }

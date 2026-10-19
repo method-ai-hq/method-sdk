@@ -9,6 +9,7 @@ import { inspectRun } from "./inspect.js";
 import { setupFailure, unreadableRecord } from "./failure.js";
 import { writePrivateJson } from "./files.js";
 import { MethodClient } from "./method-client.js";
+import { canonicalJson, sha256 } from "../../contracts/src/identity.js";
 import {
   InspectionSchema,
   deviceOnly,
@@ -25,6 +26,8 @@ const SyncSchema = z.object({
   dashboard_id: z.string().optional(),
   // The run's content stays on this computer, also when the sync is retried later.
   device: z.literal(true).optional(),
+  // sha256 of the requested inputs, sent so that a second start of the same run can say so. Never for a device run.
+  inputs_sha256: z.string().optional(),
 });
 export class MethodSync {
   private state: z.infer<typeof SyncSchema>;
@@ -96,6 +99,8 @@ export class MethodSync {
       version_id: this.state.version_id,
       sequence: ++this.state.sequence,
       inspection,
+      // A hash of short inputs can show them, so a run whose content stays on devices sends none.
+      ...(!this.device && this.state.inputs_sha256 ? { inputs_sha256: this.state.inputs_sha256 } : {}),
     };
     this.save();
     if (inspection.files?.length) {
@@ -131,6 +136,8 @@ export class MethodSync {
   ) {
     try {
       if (this.live) return;
+      // The first start has the requested inputs; the runtime's start adds defaults.
+      if (!this.state.inputs_sha256 && !this.device) { this.state.inputs_sha256 = inputsSha256(inputs); this.save(); }
       this.initial = {
         schema: "workflow-inspection/2",
         workflow,
@@ -267,6 +274,26 @@ export class MethodSync {
     await sync.upload(inspection);
     sync.outbox.remove(sync.item);
   }
+}
+
+/** The hash of a run's requested inputs: sha256 of their canonical JSON. */
+export const inputsSha256 = (inputs: unknown) => sha256(canonicalJson(inputs ?? {}));
+
+/**
+ * The line that says that the same run is going: a running run of this version with the same inputs, from anyone in the
+ * workspace. Undefined when there is none, or the list cannot be read (offline). Never blocks the run.
+ */
+export async function sameRunNotice(client: Pick<MethodClient, 'server' | 'request' | 'token'>, methodId: string, versionId: string, inputs: unknown) {
+  try {
+    if (!client.token()) return undefined;
+    const hash = inputsSha256(inputs);
+    const { runs } = await client.request<{ runs?: any[] }>(`/api/workspace/runs?workflow_id=${encodeURIComponent(methodId)}`, 'GET', undefined, true, { signal: AbortSignal.timeout(3000), stallMs: 3000 });
+    const same = (runs ?? []).filter(r => r?.status === 'running' && r.workflow_version_id === versionId && r.inputs_sha256 === hash)
+      .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+    if (!same) return undefined;
+    const minutes = Math.max(0, Math.round((Date.now() - Date.parse(same.created_at)) / 60_000));
+    return `${same.started_by ?? 'A teammate'} started this same run ${minutes} minute${minutes === 1 ? '' : 's'} ago: ${client.server}/runs/${same.id}. This run starts too.`;
+  } catch { return undefined; }
 }
 
 /** The dashboard page of a run: its saved ID, or before the first record, the ID that this computer gave it. */

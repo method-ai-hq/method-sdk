@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { mergeMethod, autoApply, changesMain } from '../../packages/sdk/src/proposals.js';
+import { changesMain } from '../../packages/sdk/src/proposals.js';
 import { methodMain } from '../../packages/sdk/src/method.js';
 import { placementFlags, publishWithPlacement } from '../../packages/sdk/src/cloud.js';
 import { buildPackage, runtimeVersion } from '../../packages/sdk/src/method-files.js';
@@ -42,94 +42,6 @@ function fakeClient(routes: Record<string, (body: any) => any>, token = 'method_
     }),
     transfer: vi.fn(async (path: string) => { const route = routes[`GET ${path}`]; if (!route) throw Error(`404: ${path}`); return route(undefined); }) } as any;
 }
-
-it('merges per step and per top-level key, or lists the conflicts', () => {
-  const base = method({ a: step('a', 'A.'), b: step('b', 'B.') });
-  // Only theirs changed a step: take it.
-  expect(mergeMethod(base, base, method({ a: step('a', 'A2.'), b: step('b', 'B.') }))).toEqual({ clean: true, workflow: method({ a: step('a', 'A2.'), b: step('b', 'B.') }) });
-  // Only ours changed: keep ours.
-  const ours = method({ a: step('a', 'A.'), b: step('b', 'B ours.') });
-  expect(mergeMethod(base, ours, base)).toEqual({ clean: true, workflow: ours });
-  // Different steps on each side: both changes, in the order of ours; a new step of theirs goes after its neighbour.
-  const theirs = { ...method({ a: step('a', 'A2.'), n: step('n', 'New.'), b: step('b', 'B.') }), goal: 'A better goal.' };
-  const merged = mergeMethod(base, ours, theirs) as any;
-  expect(merged.clean).toBe(true);
-  expect(Object.keys(merged.workflow.steps)).toEqual(['a', 'n', 'b']);
-  expect(merged.workflow.steps.a.purpose).toBe('A2.'); expect(merged.workflow.steps.b.purpose).toBe('B ours.');
-  expect(merged.workflow.goal).toBe('A better goal.');
-  // A step removed by theirs and unchanged in ours goes.
-  expect((mergeMethod(base, { ...base, name: 'Ours' }, method({ a: step('a', 'A.') })) as any).workflow.steps).toEqual({ a: step('a', 'A.') });
-  // The same step and the same top-level key changed in different ways: conflicts.
-  const conflict = mergeMethod(base, { ...ours, name: 'Ours' }, { ...method({ a: step('a', 'A.'), b: step('b', 'B theirs.') }), name: 'Theirs' });
-  expect(conflict).toEqual({ clean: false, conflicts: [
-    { path: 'name', base: 'Echo', ours: 'Ours', theirs: 'Theirs' },
-    { path: 'steps.b', base: step('b', 'B.'), ours: step('b', 'B ours.'), theirs: step('b', 'B theirs.') },
-  ] });
-});
-
-function accountRoutes(base: any, proposed: any, baseVersion: string, applied: any[]) {
-  return {
-    [`GET /api/methods/${METHOD_ID}/proposals?status=accepted`]: () => ({ proposals: [{ id: 'prop_1', status: 'accepted', created_at: '2026-10-09T00:00:00Z' }] }),
-    'GET /api/proposals/prop_1': () => ({ proposal: { id: 'prop_1', method_id: METHOD_ID, base_version_id: baseVersion, status: 'accepted', cause: 'The summary named no customer.', evidence: { kind: 'change', steps: ['a'] }, created_at: '2026-10-09T00:00:00Z', base_workflow: base, proposed_workflow: proposed } }),
-    'POST /api/proposals/prop_1/applied': (body: any) => { applied.push(body); return { proposal: { id: 'prop_1', status: 'applied' } }; },
-  };
-}
-
-it('auto-applies a change made in the account before a file command: one line, a merge, or the conflict saved for the agent to merge', async () => {
-  const base = method({ a: step('a', 'A.'), b: step('b', 'B.') }), proposed = method({ a: step('a', 'A better.'), b: step('b', 'B.') });
-  // Unchanged file: apply and print one line.
-  let { file } = setup(base);
-  let applied: any[] = [];
-  let client = fakeClient(accountRoutes(base, proposed, (await currentVersion(file))!.version_id, applied));
-  let err = stderr();
-  await autoApply(['run', file], () => client);
-  expect(err.mock.calls.map(call => String(call[0])).join('')).toContain('prop_1');
-  expect(methodContent(readDocument(file))).toEqual(proposed);
-  expect(applied).toHaveLength(1);
-  vi.restoreAllMocks();
-  // Changed in another step: the merge keeps both changes.
-  ({ file } = setup(method({ a: step('a', 'A.'), b: step('b', 'B ours.') })));
-  applied = []; client = fakeClient(accountRoutes(base, proposed, 'v_' + '0'.repeat(32), applied));
-  err = stderr();
-  await autoApply(['test', file], () => client);
-  expect(methodContent(readDocument(file))).toEqual(method({ a: step('a', 'A better.'), b: step('b', 'B ours.') }));
-  expect(err).toHaveBeenCalled();
-  vi.restoreAllMocks();
-  // Changed in the same step: the file stays, and the line says what to resolve.
-  const ours = method({ a: step('a', 'A ours.'), b: step('b', 'B.') });
-  ({ file } = setup(ours));
-  applied = []; client = fakeClient(accountRoutes(base, proposed, 'v_' + '0'.repeat(32), applied));
-  err = stderr();
-  await autoApply(['check', file], () => client);
-  expect(methodContent(readDocument(file))).toEqual(ours);
-  const line = String(err.mock.calls[0]![0]);
-  expect(line).toContain('conflicts with your edits of');
-  expect(line).toContain('in steps.a.');
-  expect(line).not.toContain('method apply');
-  // Both versions of each part are saved for the agent to merge, and the change is not merged again.
-  const saved = JSON.parse(readFileSync(join(dirname(file), '.method', 'conflict-prop_1.json'), 'utf8'));
-  expect(saved.conflicts).toEqual([{ path: 'steps.a', base: step('a', 'A.'), ours: step('a', 'A ours.'), theirs: step('a', 'A better.') }]);
-  expect(statSync(join(dirname(file), '.method', 'conflict-prop_1.json')).mode & 0o777).toBe(0o600);
-  expect(applied).toHaveLength(1);
-});
-
-it('skips auto-apply silently when signed out, offline, or without an id: line', async () => {
-  const base = method({ a: step('a', 'A.'), b: step('b', 'B.') });
-  const { file } = setup(base);
-  const err = stderr();
-  const signedOut = fakeClient({}, null as any);
-  await autoApply(['run', file], () => signedOut);
-  expect(signedOut.request).not.toHaveBeenCalled();
-  const offline = fakeClient({}); offline.request.mockRejectedValue(new TypeError('fetch failed'));
-  await autoApply(['run', file], () => offline);
-  await autoApply(['run', file], () => { throw Error('No client'); });
-  const { file: plain } = setup(base, null);
-  const noId = fakeClient({});
-  await autoApply(['run', plain], () => noId);
-  expect(noId.request).not.toHaveBeenCalled();
-  expect(err).not.toHaveBeenCalled();
-  expect(methodContent(readDocument(file))).toEqual(base);
-});
 
 it('sets the placement after a publish with --cloud or --workers', async () => {
   expect(placementFlags(['--reason', 'x'])).toBeUndefined();

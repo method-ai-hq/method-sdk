@@ -16,6 +16,35 @@ import { readDocument } from './authoring.js';
 import { withInputsFrom } from './inputs-from.js';
 import { setupFailure } from './failure.js';
 
+/** How often a run that waits for the shared state checks again. Tests make it short. */
+export const stateWait={pollMs:10_000};
+const clock=(at?:string|null)=>{const date=at?new Date(at):undefined;return date&&!isNaN(+date)?`${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`:undefined;};
+/**
+ * Take the shared state. While another run that still runs (or lost its connection) holds it, say so once and check
+ * again until it is free: there is no time limit, and method cancel stops the wait. A run that stopped while it held
+ * the state stops this one: a person must check that run's actions before releasing it.
+ */
+async function acquireState(client:MethodClient,statePath:string,runId:string,methodId:string){
+  let told=false;
+  for(;;){
+    try{return await client.request<any>(statePath,'POST',{action:'acquire',run_id:runId});}
+    catch(error:any){
+      const owner=error?.body?.owner;
+      if(error?.code!=='state_owned')throw error;
+      if(owner&&(owner.status==='finished'||owner.status==='failed')){
+        const name=owner.started_by??'Another person';
+        throw Object.assign(Error(`${name}'s run stopped while it held the shared state. ${name} must check its actions, then run \`method state ${methodId} --release ${owner.run_id}\`.`),{code:'state_held',owner:'setup'});
+      }
+      if(!told){
+        const started=clock(owner?.started_at);
+        process.stderr.write(`Waiting for ${owner?.started_by?`${owner.started_by}'s run`:'another run'}${started?` (started ${started})`:''} to finish with the shared state${owner?.link?`: ${owner.link}`:'.'}\n`);
+        told=true;
+      }
+      await new Promise(resolve=>setTimeout(resolve,stateWait.pollMs));
+    }
+  }
+}
+
 // Older versions are listed only after their saved-package tests pass.
 const supportedPackageRuntimes = new Set([runtimeVersion, '0.14.0', '0.12.0', '0.11.1', '0.11.0', '0.10.0', '0.9.5', '0.9.4', '0.9.3', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3']);
 
@@ -82,7 +111,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     const shared=await client.request<any>(statePath);
     if(shared.enabled){
       if(flags.state)throw Error('This Method uses account state. Do not replace it with --state.');
-      const state=await client.request<any>(statePath,'POST',{action:'acquire',run_id:request.run_id});acquired=true;revision=state.revision;
+      const state=await acquireState(client,statePath,request.run_id,saved.workflow_id);acquired=true;revision=state.revision;
       const pendingFile=join(directory,'state-pending.json');
       if(flags.resume&&existsSync(pendingFile)){const pending=JSON.parse(readFileSync(pendingFile,'utf8'));const result=await client.request<any>(statePath,'POST',pending);revision=result.revision;}
       stateFile=join(directory,'initial-state.json');if(!resuming)writePrivateJson(stateFile,state.value);
@@ -95,7 +124,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
         writePrivateJson(join(directory,'state-pending.json'),commit);
         const result=await client.request<any>(statePath,'POST',commit);revision=result.revision;
       }
-    },client,config);
+    },client,config,{},saved.saved_by??null);
     // Every step finished (an unconfirmed run too), so the run no longer owns the shared state.
     if(acquired&&finishedRun(result.status)){await client.request(statePath,'POST',{action:'release',run_id:request.run_id});acquired=false;}
     return {run_id:request.run_id,directory,...result};

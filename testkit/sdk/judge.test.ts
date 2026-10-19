@@ -23,15 +23,24 @@ function setup() {
 const METHOD_ID = 'wf_' + '1'.repeat(32);
 const judgment = (body: any) => ({ judgment: { id: 'jdg_' + 'a'.repeat(32), run_id: 'run_1', method_id: METHOD_ID, verdict: body.verdict, step_id: body.step_id ?? null, created_at: '2026-10-13T10:00:00Z' }, fixing: false });
 /** A fake account: records judgments, lists the Method's judgments with pending ones, takes them, and saves versions. */
-function fakeClient({ token = 'method_x' as string | null, judgments = [] as any[], runs = {} as Record<string, unknown>, unique = false } = {}) {
+function fakeClient({ token = 'method_x' as string | null, judgments = [] as any[], runs = {} as Record<string, unknown>, versions = {} as Record<string, unknown>, held = false, outcomes = true, unique = false } = {}) {
   let version = 6, count = 0;
   const client = {
-    server: 'https://example.test', token: () => token, calls: [] as { path: string; verb: string; body: any }[], judgments,
+    server: 'https://example.test', token: () => token, calls: [] as { path: string; verb: string; body: any }[], judgments, outcomes: [] as any[],
     async request(path: string, verb = 'GET', body?: any) {
       this.calls.push({ path, verb, body });
+      if (verb === 'GET' && versions[path]) return versions[path];
+      if (verb === 'POST' && outcomes && path === `/api/cli/methods/${METHOD_ID}/judgments/outcomes`) { this.outcomes.push(...body.outcomes); return { changed: body.outcomes.map((o: any) => o.id) }; }
+      if (verb === 'POST' && /^\/api\/judgments\/[^/]+\/settle$/.test(path)) {
+        const kept = judgments.find(j => j.id === path.split('/')[3]);
+        for (const j of judgments) if (j.held_with === kept.id) j.outcome = 'set_aside';
+        Object.assign(kept, { outcome: null, held_with: null, pending: kept.verdict === 'wrong' });
+        return { judgment: { ...kept, method_id: METHOD_ID } };
+      }
       if (verb === 'POST' && /^\/api\/cli\/runs\/[^/]+\/judgments$/.test(path)) {
         const made = judgment(body);
         if (unique) made.judgment.id = 'jdg_' + (++count).toString(16).padStart(32, '0');
+        if (held) { judgments.push({ ...made.judgment, note: body.note ?? null, noted_by: 'Ryan', outcome: 'held', held_with: 'jdg_' + 'g'.repeat(32), pending: false }); return { ...made, held: true }; }
         if (body.verdict === 'wrong') judgments.push({ ...made.judgment, note: body.note ?? null, corrected: body.corrected ?? null, source: 'agent', pending: true });
         return made;
       }
@@ -125,7 +134,7 @@ let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{
  * A fake improve.method: one script step that keeps the judgments it gets next to the Method file and returns the
  * outcome that FAKE_OUTCOME names: a change of the write step, or none.
  */
-function fakeImprove(root: string, outcome: 'change' | 'none') {
+function fakeImprove(root: string, outcome: 'change' | 'none' | 'breaks') {
   const folder = join(root, 'improve'); mkdirSync(folder);
   const text = (description: string) => ({ type: 'text', description, default: '' });
   writeFileSync(join(folder, 'improve.method'), JSON.stringify({ format: 'method/3.4', name: 'Improve', goal: 'Return a fixed outcome.',
@@ -139,8 +148,8 @@ const input=JSON.parse(readFileSync(0,'utf8'));const judgments=JSON.parse(readFi
 writeFileSync(join(dirname(input.method_file),'received.json'),JSON.stringify(judgments));
 const {id,...workflow}=JSON.parse(readFileSync(input.method_file,'utf8'));workflow.steps.write.purpose='Writes the reply and escalates each restriction that the playbook does not cover.';
 const fresh=judgments.filter(j=>j.new).map(j=>j.case_id).filter(Boolean);
-const evidence=${JSON.stringify(outcome)}==='change'
-  ?{kind:'change',steps:['write'],candidate:'rule: Escalates restrictions.',cases:[...fresh.map(id=>({id,before:'fail',after:'pass',target:true})),{id:'old-rule',before:'pass',after:'pass',target:false},{id:'older-rule',before:'pass',after:'pass',target:false}],before_after:[],replay:{runs:3,wins:2,losses:0,ties:1},cost:null,prompt_growth_pct:12,budget:{model_calls:23,usd:null,minutes:2.4},judgments:null}
+const evidence=${JSON.stringify(outcome)}!=='none'
+  ?{kind:'change',steps:['write'],candidate:'rule: Escalates restrictions.',cases:[...fresh.map(id=>({id,before:'fail',after:'pass',target:true})),{id:'old-rule',before:'pass',after:${JSON.stringify(outcome === 'breaks' ? 'fail' : 'pass')},target:false},{id:'older-rule',before:'pass',after:'pass',target:false}],before_after:[],replay:{runs:3,wins:2,losses:0,ties:1},cost:null,prompt_growth_pct:12,budget:{model_calls:23,usd:null,minutes:2.4},judgments:null}
   :{kind:'none',steps:['write'],candidate:null,cases:[],before_after:[],replay:null,cost:null,prompt_growth_pct:null,budget:{model_calls:9,usd:null,minutes:1.1},judgments:null};
 const proposal=evidence.kind==='change'?{cause:'The reply step did not escalate restrictions that the playbook does not cover.',workflow,evidence}:{cause:'No safe change was found. rule: It fixed 0 of 1 replays of the corrected run and made 1 worse; it needs more fixed than worse.',evidence};
 console.log(JSON.stringify({proposal:JSON.stringify(proposal),kind:evidence.kind,proposal_id:'',capped:'rule: 2 replays and 0 earlier runs left out'}));`);
@@ -240,7 +249,7 @@ it('fixes corrections from the dashboard first on the next method run, with one 
   const s = setup();
   fakeClaude(s.root); fakeImprove(s.root, 'change');
   const { folder, file } = await project(s.root);
-  const pending = (n: number, run: string) => ({ id: `jdg_${String(n).repeat(32)}`, run_id: run, method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: `Correction ${n}.`, corrected: null, source: 'dashboard', created_at: `2026-10-1${n}T10:00:00Z`, pending: true });
+  const pending = (n: number, run: string) => ({ id: `jdg_${String(n).repeat(32)}`, run_id: run, method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: `Correction ${n}.`, corrected: null, source: 'dashboard', created_at: `2026-10-1${n}T10:00:00Z`, pending: true, noted_by: 'Gráinne' });
   const cloud = { id: 'run_cloud', status: 'succeeded', created_at: '2026-10-14T09:00:00Z', workflow_version_id: 'v_1', inspection: { invocations: {} } };
   const client = fakeClient({ judgments: [pending(2, 'run_1'), pending(3, 'run_cloud'), pending(4, 'run_1')], runs: { run_cloud: cloud } });
   await methodMain(['run', file], () => client);
@@ -255,6 +264,9 @@ it('fixes corrections from the dashboard first on the next method run, with one 
   expect(received[1]).toMatchObject({ run: { id: 'run_cloud', inspection: { invocations: {} } } });
   expect(received[1].case_id).toBeUndefined();
   expect(fix.cases.filter((c: any) => c.target).map((c: any) => c.id)).toEqual([correctionCaseId(pending(2, '').id), correctionCaseId(pending(4, '').id)]);
+  // A case made from a correction names the person who made the correction; each correction is reported fixed.
+  expect(JSON.parse(readFileSync(join(folder, 'cases', correctionCaseId(pending(2, '').id), 'case.json'), 'utf8')).author).toBe('Gráinne');
+  expect(client.outcomes).toEqual([2, 3, 4].map(n => ({ id: pending(n, '').id, outcome: 'fixed' })));
   // Nothing waits now: the next run fixes nothing and asks nothing more.
   expect(await fixCorrections(client, file)).toBeUndefined();
 });
@@ -336,3 +348,55 @@ it('a fix whose process stopped does not hold the Method: its lock is taken over
   await methodMain(['judge', 'run_1', 'wrong', '--note', 'Wrong.'], () => fakeClient());
   expect(s.printed()).toMatch(/^Recorded: wrong\. No safe change found/);
 }, 60_000);
+
+// ---------- Several people: a step changed since the run, a fix that breaks another person's case, held pairs ----------
+
+it('does not fix a correction of a step that someone changed after the run, and says who', async () => {
+  const s = setup();
+  fakeClaude(s.root); fakeImprove(s.root, 'change');
+  const { file } = await project(s.root);
+  const now = readDocument(file) as any, before = readFileSync(file, 'utf8');
+  const old = { ...methodContent(now), steps: { write: { ...now.steps.write, purpose: 'Writes a short reply.' } } };
+  const client = fakeClient({
+    judgments: [{ id: 'jdg_' + '5'.repeat(32), run_id: 'run_old', method_id: METHOD_ID, step_id: 'write', verdict: 'wrong', note: 'Too short.', corrected: null, source: 'dashboard', created_at: '2026-10-12T10:00:00Z', pending: true, noted_by: 'Ryan' }],
+    runs: { run_old: { id: 'run_old', status: 'succeeded', workflow_version_id: 'v_old', inspection: { invocations: {} } } },
+    versions: { [`/api/cli/methods/${METHOD_ID}?version=v_old`]: { workflow: old }, [`/api/cli/methods/${METHOD_ID}`]: { workflow: methodContent(now), saved_by: 'Gráinne' } } });
+  const fix = await fixCorrections(client, file);
+  expect(fix).toMatchObject({ kind: 'none', line: 'Not fixed: Gráinne changed step write after this run.' });
+  expect(client.outcomes).toEqual([{ id: 'jdg_' + '5'.repeat(32), outcome: 'already_changed', detail: 'Gráinne changed step write after this run.' }]);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(existsSync(join(s.root, 'project', 'received.json'))).toBe(false);
+  // An older server has no outcomes route: the loop goes on as before.
+  const older = fakeClient({ judgments: [{ ...client.judgments[0], pending: true }], runs: { run_old: { workflow_version_id: 'v_old' } }, versions: { [`/api/cli/methods/${METHOD_ID}?version=v_old`]: { workflow: old } }, outcomes: false });
+  expect(await fixCorrections(older, file)).toMatchObject({ line: 'Not fixed: Step write changed after this run.' });
+});
+
+it('holds a fix that passes only by breaking another person\'s case, and applies nothing', async () => {
+  const s = setup();
+  fakeClaude(s.root); fakeImprove(s.root, 'breaks');
+  const { folder, file } = await project(s.root);
+  mkdirSync(join(folder, 'cases', 'old-rule'), { recursive: true });
+  writeFileSync(join(folder, 'cases', 'old-rule', 'case.json'), JSON.stringify({ format: 'method-case/1', id: 'old-rule', status: 'active', method_file: 'other.method', note: 'The reply must stay under 100 words.', author: 'Gráinne' }));
+  const before = readFileSync(file, 'utf8');
+  const client = fakeClient({ judgments: [{ id: 'jdg_' + '7'.repeat(32), run_id: 'run_1', method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: 'Escalate the non-compete.', corrected: null, source: 'dashboard', created_at: '2026-10-12T10:00:00Z', pending: true, noted_by: 'Ryan' }] });
+  const fix = await fixCorrections(client, file);
+  const detail = "A fix for Ryan's correction breaks Gráinne's case old-rule: The reply must stay under 100 words.";
+  expect(fix).toMatchObject({ kind: 'none', line: `Held, nothing changed: ${detail} Decide which result is right with them.` });
+  expect(client.outcomes).toEqual([{ id: 'jdg_' + '7'.repeat(32), outcome: 'held', detail }]);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(client.calls.filter((c: any) => c.verb === 'PUT')).toEqual([]);
+});
+
+it('shows a held pair with both people and both choices, and method judge RUN keep ID keeps one', async () => {
+  const s = setup();
+  const other = { id: 'jdg_' + 'g'.repeat(32), run_id: 'run_1', method_id: METHOD_ID, step_id: 'write', verdict: 'right', note: 'This is fine.', noted_by: 'Gráinne', outcome: 'held', held_with: 'jdg_' + 'a'.repeat(32), pending: false };
+  const client = fakeClient({ judgments: [other], held: true });
+  await methodMain(['judge', 'run_1', 'wrong', '--step', 'write', '--note', 'Too short.'], () => client);
+  expect(s.printed()).toBe(`Recorded: wrong on step write.\nHeld: step write of run run_1. Ryan says it is wrong ("Too short."); Gráinne says it is right ("This is fine."). Nothing is fixed until one is kept: method judge run_1 keep jdg_${'a'.repeat(32)} (Ryan's) or method judge run_1 keep ${other.id} (Gráinne's).\n`);
+  // Keeping Gráinne's right judgment sets Ryan's aside; nothing to fix.
+  s.stdout.mockClear();
+  await methodMain(['judge', 'run_1', 'keep', other.id], () => client);
+  expect(client.calls.at(-1)).toEqual({ path: `/api/judgments/${other.id}/settle`, verb: 'POST', body: { keep: true } });
+  expect(s.printed()).toBe("Kept Gráinne's judgment (right); the other one is set aside.\n");
+  expect(client.judgments.find((j: any) => j.id === 'jdg_' + 'a'.repeat(32)).outcome).toBe('set_aside');
+});

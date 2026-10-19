@@ -157,6 +157,11 @@
       "import": "./dist/packages/sdk/src/versions.js",
       "default": "./dist/packages/sdk/src/versions.js"
     },
+    "./merge": {
+      "types": "./dist/packages/sdk/src/merge.d.ts",
+      "import": "./dist/packages/sdk/src/merge.js",
+      "default": "./dist/packages/sdk/src/merge.js"
+    },
     "./outbox": {
       "types": "./dist/packages/sdk/src/outbox.d.ts",
       "import": "./dist/packages/sdk/src/outbox.js",

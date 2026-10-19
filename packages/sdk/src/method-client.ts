@@ -104,7 +104,7 @@ export class MethodClient {
     if (!ok)
       throw Object.assign(Error(
         `${status}: ${String(result.message ?? result.error ?? "Method request failed").slice(0, 1000)}`,
-      ), {status, code: typeof result.code === 'string' ? result.code.slice(0,100) : 'method_request_failed'});
+      ), {status, code: typeof result.code === 'string' ? result.code.slice(0,100) : 'method_request_failed', body: result});
     return result as T;
   }
   /** Upload (data) or download bytes. Retries a lost connection or a server error twice; stops only when no bytes move. */

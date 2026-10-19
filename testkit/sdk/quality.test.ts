@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
-import { effectCommand, observeCommand, caseCommand, testCommand, observerLibrary, casesPrivacyWarning } from '../../packages/sdk/src/quality.js';
+import { effectCommand, observeCommand, caseCommand, testCommand, observerLibrary, casesPrivacyWarning, caseGate, casesNotice } from '../../packages/sdk/src/quality.js';
 import { runMethod } from '@withmethod/runtime';
 
 const roots: string[] = [];
@@ -128,6 +128,31 @@ it('method case and method test replay a run, and method observe reports runs wi
   vi.restoreAllMocks(); read = captured();
   await observeCommand(['--pending', join(root, 'runs')]);
   expect(read().runs).toEqual([]);
+});
+
+it('a new case names the signed-in person; the save gate and the run notice name whose case breaks; an old case keeps today\'s text', async () => {
+  const root = temp();
+  vi.stubEnv('METHOD_CONFIG_DIR', join(root, 'config')); vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache')); vi.stubEnv('METHOD_API_KEY', 'mk_test');
+  vi.stubGlobal('fetch', vi.fn(async (url: any) => new URL(String(url)).pathname === '/api/me' ? Response.json({ user: { id: 'u_2', name: 'Gráinne' } }) : Response.json({ message: 'Not found.' }, { status: 404 })));
+  vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const file = join(root, 'report.method');
+  writeFileSync(file, stringify({ format: 'method/3.3', name: 'Report', goal: 'Report a total.', steps: { report: { name: 'Report', purpose: 'Write the total.', do: { kind: 'run', runtime: 'node', entrypoint: 'report.mjs' }, out: { report: { type: 'text', description: 'Report.' } }, changes: [] } }, result: 'report' }));
+  writeFileSync(join(root, 'report.mjs'), 'console.log(JSON.stringify({report:"Paid 10"}))');
+  const config = { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } } };
+  expect((await runMethod(file, config, { runDir: join(root, 'runs/one'), inputs: {} })).status).toBe('completed');
+  writeFileSync(join(root, 'expect.json'), JSON.stringify([{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10 EUR', text: 'The report names the currency.' }]));
+  const read = captured();
+  await caseCommand(['new', file, '--run', join(root, 'runs/one'), '--id', 'currency', '--note', 'Name the currency.', '--expect', join(root, 'expect.json')]);
+  expect(read().id).toBe('currency');
+  const recorded = join(root, 'cases', 'currency', 'case.json');
+  expect(JSON.parse(readFileSync(recorded, 'utf8')).author).toBe('Gráinne');
+  expect(await casesNotice(file)).toBe(`1 case not checked since this Method changed (Gráinne's case currency: Name the currency): method test ${file}`);
+  await expect(caseGate(file)).rejects.toThrow(/^This version breaks 1 approved case: Gráinne's case currency: Name the currency \(fail\)\. Fix the Method/);
+  // A case with no author: the same text as before.
+  writeFileSync(recorded, JSON.stringify({ ...JSON.parse(readFileSync(recorded, 'utf8')), author: null }));
+  expect(await casesNotice(file)).toBe(`1 case not checked since this Method changed: method test ${file}`);
+  await expect(caseGate(file)).rejects.toThrow(/^This version breaks 1 approved case: currency \(fail: Name the currency\.\)\. Fix the Method/);
+  vi.unstubAllGlobals();
 });
 
 it('warns that cases hold run data when they would be committed to Git, and not when they are ignored', () => {

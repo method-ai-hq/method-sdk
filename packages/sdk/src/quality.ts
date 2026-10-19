@@ -91,14 +91,31 @@ function recordChecked(file: string, report: any) {
   mkdirSync(dirname(checkedFile(file)), { recursive: true, mode: 0o700 });
   writePrivateJson(checkedFile(file), { file, fingerprint: methodFingerprint(file), passed: report.passed, cases: report.cases.length, at: new Date().toISOString() });
 }
-/** One line for method run when the Method changed since its cases last passed. */
+/** A case as a person reads it: "Gráinne's case dates-conflict: the note" when the case names who made it. */
+export const caseName = (c: { id: string; author?: string | null; note?: unknown }) => `${c.author}'s case ${c.id}: ${String(c.note ?? "").slice(0, 200).replace(/[.\s]+$/, "")}`;
+/** One line for method run when the Method changed since its cases last passed. Cases with an author are named. */
 export async function casesNotice(file: string) {
   const cases = (await listCases(file)).filter((c: any) => c.status === "active");
   if (!cases.length) return undefined;
   let checked: any;
   try { checked = JSON.parse(readFileSync(checkedFile(file), "utf8")); } catch { /* never checked */ }
   if (checked?.passed && checked.fingerprint === methodFingerprint(file)) return undefined;
-  return `${cases.length} case${cases.length === 1 ? "" : "s"} not checked since this Method changed: method test ${file}`;
+  const named = cases.filter((c: any) => c.author);
+  return `${cases.length} case${cases.length === 1 ? "" : "s"} not checked since this Method changed${named.length ? ` (${named.map(caseName).join("; ")})` : ""}: method test ${file}`;
+}
+
+const signedIn = new Map<string, Promise<string | null>>();
+/** The name of the signed-in person, for the author of a new case; null when signed out or offline. Asked once per sign-in in a process. */
+export function signedInName(client: Pick<MethodClient, "server" | "request" | "token"> = new MethodClient()): Promise<string | null> {
+  let token: string | null | undefined;
+  try { token = client.token(); } catch { return Promise.resolve(null); }
+  if (!token) return Promise.resolve(null);
+  const key = `${client.server}\n${token}`;
+  if (!signedIn.has(key)) signedIn.set(key, (async () => {
+    try { const me = await client.request<{ user?: { name?: unknown } }>("/api/me", "GET", undefined, true, { signal: AbortSignal.timeout(3000), stallMs: 3000 }); return typeof me?.user?.name === "string" && me.user.name.trim() ? me.user.name.trim() : null; }
+    catch { return null; }
+  })());
+  return signedIn.get(key)!;
 }
 
 /** The Method's declared secrets from this computer or the environment, as method run gives them. */
@@ -140,7 +157,9 @@ export async function caseGate(file: string, accept: string[] = [], reason?: str
   process.stderr.write(`Cases checked in ${Math.round(t.duration_ms / 1000)} s: ${t.live_model_steps} live model step${t.live_model_steps === 1 ? "" : "s"}, ${t.judge_calls} judge call${t.judge_calls === 1 ? "" : "s"}.\n`);
   const failing = report.cases.filter((c: any) => !["pass", "fixed"].includes(c.verdict));
   const unaccepted = failing.filter((c: any) => !accept.includes(c.id));
-  if (unaccepted.length) throw Object.assign(Error(`This version breaks ${unaccepted.length} approved case${unaccepted.length === 1 ? "" : "s"}: ${unaccepted.map((c: any) => `${c.id} (${c.verdict}: ${c.note})`).join("; ")}. Fix the Method and run method test, or retire a case whose rule no longer applies with method case retire. To publish anyway, add --accept-failing-case ${unaccepted.map((c: any) => c.id).join(",")} with --reason.`), { code: "cases_failed" });
+  const authors = new Map(cases.map((c: any) => [c.id, c.author]));
+  const shown = (c: any) => authors.get(c.id) ? `${caseName({ ...c, author: authors.get(c.id) })} (${c.verdict})` : `${c.id} (${c.verdict}: ${c.note})`;
+  if (unaccepted.length) throw Object.assign(Error(`This version breaks ${unaccepted.length} approved case${unaccepted.length === 1 ? "" : "s"}: ${unaccepted.map(shown).join("; ")}. Fix the Method and run method test, or retire a case whose rule no longer applies with method case retire. To publish anyway, add --accept-failing-case ${unaccepted.map((c: any) => c.id).join(",")} with --reason.`), { code: "cases_failed" });
   if (failing.length && !reason) throw Error("Give --reason for accepting a failing case.");
   return { report, line: failing.length ? `Cases: ${report.cases.length - failing.length} of ${report.cases.length} passed; accepted failing ${failing.map((c: any) => c.id).join(", ")}.` : `Cases: ${report.cases.length} of ${report.cases.length} passed.` };
 }
@@ -163,7 +182,7 @@ export async function caseCommand(args: string[]) {
   const privacy = casesPrivacyWarning(methodFile, casesDir);
   if (privacy) process.stderr.write(privacy + "\n");
   print(await createCase({ methodFile, runDir: values.run ? authoringPath(values.run) : undefined, passingRun: values["passing-run"] ? authoringPath(values["passing-run"]) : undefined,
-    id: values.id, note: values.note, author: values.author ?? null, rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
+    id: values.id, note: values.note, author: values.author ?? await signedInName(), rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
     retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, acceptConflict: values["accept-conflict"], config: prepared.config,
     options: { runOptions: { processPath: prepared.processPath, secrets: await declaredSecrets(methodFile), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } } }));

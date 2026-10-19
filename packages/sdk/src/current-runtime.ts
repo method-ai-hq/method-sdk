@@ -2,7 +2,10 @@ import { managedClassification } from './classification-client.js';
 import { MethodClient } from './method-client.js';
 import {openBrowser} from './browser.js';
 import { readFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { lastSaved } from './outbox.js';
+import { loadWorkflow } from '../../workflow-language/src/validate.js';
 import { hostedModelsFor, managedModels } from './hosted-models.js';
 import { localAgent } from '@withmethod/runtime/agents.js';
 import { resolveSecrets } from './secrets.js';
@@ -36,6 +39,28 @@ export function recentRuns(exclude: string, limit = 20) {
   }
   return [...found].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([dir]) => dir);
 }
+/** Who saved the version that a file holds, when this computer got or saved that version last. */
+function savedByOf(server: string, method: any) {
+  try {
+    if (typeof method?.id !== 'string') return null;
+    const { id: _id, ...content } = method, record = lastSaved(server, method.id);
+    return record?.saved_by && isDeepStrictEqual(loadWorkflow(content), record.workflow) ? record.saved_by : null;
+  } catch { return null; }
+}
+/**
+ * A step that stopped because a file is not there (ENOENT, or FileNotFoundError in Python) needs that file on this
+ * computer: the failure names the file and who saved this version, with owner setup.
+ */
+export function missingFileFailure(failure: any, file: string, savedBy: string | null) {
+  const text = [failure.details, failure.diagnostics, ...(failure.evidence ?? [])].filter(Boolean).join('\n');
+  const found = /ENOENT: no such file or directory, \w+ '([^']+)'/.exec(text)?.[1] ?? /FileNotFoundError: \[Errno 2\] No such file or directory: '([^']+)'/.exec(text)?.[1];
+  if (!found) return failure;
+  const folder = dirname(resolve(file)), inside = relative(folder, resolve(folder, found));
+  const shown = !inside.startsWith('..') && !isAbsolute(inside) ? inside : found;
+  return { ...failure, owner: 'setup', headline: `This Method reads ${shown}. It is not on this computer and is not saved in the Method.${savedBy ? ` Ask ${savedBy} (who saved this version) for it.` : ''}`,
+    next: { action: 'fix_setup', text: `Put ${shown} on this computer, then run again. Steps that finished are reused.` } };
+}
+
 /** Answers for ask steps: a key without an iteration ("confirm") answers its first iteration ("confirm:0"). */
 export function answers(human: any) {
   if (!human?.steps) return human;
@@ -47,7 +72,7 @@ export function answers(human: any) {
  * runSecrets are values that the SDK gives this run only (such as the signed-in key for improve.method); they come
  * before the shell and the secret store, and are never saved.
  */
-export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, runSecrets: Record<string, string> = {}) {
+export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, runSecrets: Record<string, string> = {}, savedBy?: string | null) {
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
   const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
@@ -67,6 +92,9 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     let inputs = {};
     try { inputs = json(flags.inputs) ?? {}; } catch { /* the run's setup failure */ }
     await sync?.start(method, inputs, {}, false);
+    // Every key that this computer lacks, in one list, before any setup or step.
+    const missingKeys = Object.keys(method.secrets ?? {}).filter(key => !runSecrets[key] && !resolveSecrets([key])[key]);
+    if (missingKeys.length) throw Object.assign(Error(`This Method needs ${missingKeys.length === 1 ? 'a key that is' : 'keys that are'} not on this computer: ${missingKeys.join(', ')}. Run ${missingKeys.map(key => `\`method secret set ${key}\``).join(', then ')}`), { code: 'missing_secret', owner: 'setup', missing: missingKeys });
     const setup = await localSetup(file, flags, baseConfig);
     let config = setup.config;
     const sourceRoot = setup.sourceRoot;
@@ -122,6 +150,12 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       onEvent: async (event: any) => { await onEvent?.(event); sync?.snapshot(); if (flags.verbose) process.stderr.write(JSON.stringify(event) + "\n"); },
     });
     runFailed = !['completed','unconfirmed'].includes(result.status);
+    if (result.status === 'failed' && result.failure) {
+      const named = missingFileFailure(result.failure, file, savedBy !== undefined ? savedBy : savedByOf(client.server, method));
+      // The run's record says it too, so the dashboard and method wait show the same failure.
+      const summary = join(authoringPath(flags['run-dir']!), 'summary.json');
+      if (named !== result.failure) { result.failure = named; try { writePrivateJson(summary, { ...JSON.parse(readFileSync(summary, 'utf8')), failure: named }); } catch { /* no record to change */ } }
+    }
     const synced = await sync?.finish();
     let display:any=synced?{...result,dashboard:sync!.dashboard,dashboard_sync:synced}:result;
     // A run that waits for a person shows the question itself, so the agent can ask the user and pass on the answer.
