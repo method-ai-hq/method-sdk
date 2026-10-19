@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULT_SERVER, type MethodClient } from './method-client.js';
 import { deviceRun, findRunFolder, methodFileOfRun, saveLocalJudgment } from './local-judgments.js';
-import { fixCorrections, waitingLine, type RunFile } from './improve.js';
+import { fixCorrection, waitingLine, type RunFile } from './improve.js';
 import { readHome } from './home.js';
 
 export const maxNoteLength = 4000;
@@ -30,10 +30,13 @@ export function judgmentLine(judgment: Pick<Judgment, 'verdict' | 'step_id'>) {
  * content stays on this computer (run_data: device), the account gets the verdict and step only, and the judgment with
  * its note and corrected result goes in .method/judgments.jsonl next to the Method file. A wrong judgment then fixes the
  * Method here, in the foreground: method judge makes a regression case from the note, finds a change with the user's
- * own Claude Code or Codex, and applies it only when it fixes the run and breaks no earlier correction. It prints one
- * line: what changed, or why nothing did.
+ * own Claude Code or Codex, and applies it only when it fixes the run and breaks no earlier correction. When a fix of
+ * the same Method already runs on this computer, the correction joins it: that fix takes it in one more pass, and this
+ * command waits for it. It prints one line: what changed, or why nothing did.
  */
 export async function judgeCommand(args: string[], clientFactory: (server: string) => MethodClient, options: { run?: RunFile } = {}) {
+  // The output stream at the start: a fix that runs in this process sends its run's own output to a log meanwhile.
+  const print = process.stdout.write.bind(process.stdout);
   const usage = 'Use method judge RUN_ID right|wrong [--step STEP_ID] [--note TEXT] [--corrected FILE].';
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     step: { type: 'string' }, note: { type: 'string' }, corrected: { type: 'string' }, json: { type: 'boolean' }, server: { type: 'string' } } });
@@ -60,17 +63,17 @@ export async function judgeCommand(args: string[], clientFactory: (server: strin
     file: basename(runFile), step_id: step ?? null, verdict, note: note ?? null, ...(corrected !== undefined ? { corrected } : {}), created_at: response.judgment.created_at,
   });
   const recorded = judgmentLine(response.judgment);
-  if (verdict === 'right') { process.stdout.write(values.json ? JSON.stringify({ judgment: response.judgment }, null, 2) + '\n' : recorded + '\n'); return; }
+  if (verdict === 'right') { print(values.json ? JSON.stringify({ judgment: response.judgment }, null, 2) + '\n' : recorded + '\n'); return; }
   // The Method file: the one that ran the run, else the Method's home file on this computer.
   const home = response.judgment.method_id ? readHome(client.server, response.judgment.method_id)?.path : undefined;
   const file = runFile ?? (home && existsSync(home) ? home : undefined);
   if (!file) {
     const line = `${recorded} The Method file is not on this computer, so the next method run of it on a computer fixes it.`;
-    process.stdout.write(values.json ? JSON.stringify({ judgment: response.judgment, fix: null }, null, 2) + '\n' : line + '\n');
+    print(values.json ? JSON.stringify({ judgment: response.judgment, fix: null }, null, 2) + '\n' : line + '\n');
     return;
   }
-  const fix = await fixCorrections(client, file, options);
-  if (values.json) { process.stdout.write(JSON.stringify({ judgment: response.judgment, fix: fix ?? null }, null, 2) + '\n'); return; }
+  const fix = await fixCorrection(client, file, response.judgment.id, options);
+  if (values.json) { print(JSON.stringify({ judgment: response.judgment, fix: fix ?? null }, null, 2) + '\n'); return; }
   const line = !fix ? `${recorded} Another loop is fixing it.` : fix.corrections > 1 ? `${recorded} ${waitingLine(fix)}` : `${recorded} ${fix.line}`;
-  process.stdout.write(line + '\n');
+  print(line + '\n');
 }

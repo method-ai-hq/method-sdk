@@ -23,14 +23,15 @@ function setup() {
 const METHOD_ID = 'wf_' + '1'.repeat(32);
 const judgment = (body: any) => ({ judgment: { id: 'jdg_' + 'a'.repeat(32), run_id: 'run_1', method_id: METHOD_ID, verdict: body.verdict, step_id: body.step_id ?? null, created_at: '2026-10-13T10:00:00Z' }, fixing: false });
 /** A fake account: records judgments, lists the Method's judgments with pending ones, takes them, and saves versions. */
-function fakeClient({ token = 'method_x' as string | null, judgments = [] as any[], runs = {} as Record<string, unknown> } = {}) {
-  let version = 6;
+function fakeClient({ token = 'method_x' as string | null, judgments = [] as any[], runs = {} as Record<string, unknown>, unique = false } = {}) {
+  let version = 6, count = 0;
   const client = {
     server: 'https://example.test', token: () => token, calls: [] as { path: string; verb: string; body: any }[], judgments,
     async request(path: string, verb = 'GET', body?: any) {
       this.calls.push({ path, verb, body });
       if (verb === 'POST' && /^\/api\/cli\/runs\/[^/]+\/judgments$/.test(path)) {
         const made = judgment(body);
+        if (unique) made.judgment.id = 'jdg_' + (++count).toString(16).padStart(32, '0');
         if (body.verdict === 'wrong') judgments.push({ ...made.judgment, note: body.note ?? null, corrected: body.corrected ?? null, source: 'agent', pending: true });
         return made;
       }
@@ -281,3 +282,57 @@ it('makes a failing case from a vague note on the user\'s agent, and tries once 
   // A second call for the same correction keeps the case.
   expect(await caseFromCorrection(file, { id: 'jdg_' + 'b'.repeat(32), note: 'x' }, run)).toEqual({ id: made.id, made: false });
 });
+
+it('corrections that arrive during a fix join it: ten judges of one Method end in two passes, and each prints its own outcome', async () => {
+  const s = setup();
+  fakeClaude(s.root); fakeImprove(s.root, 'change');
+  const { folder } = await project(s.root);
+  const client = fakeClient({ unique: true });
+  const judge = (n: number) => methodMain(['judge', 'run_1', 'wrong', '--note', `Correction ${n}.`, ...(n % 2 ? ['--json'] : [])], () => client);
+  const first = judge(0);
+  // The first fix has started; nine more corrections arrive during it.
+  while (!s.stderr.mock.calls.some(c => String(c[0]).startsWith('Fixing reply.method from 1 correction'))) await new Promise(done => setTimeout(done, 20));
+  await Promise.all([first, ...Array.from({ length: 9 }, (_, i) => judge(i + 1))]);
+  // Two passes: the first correction, then the nine that waited.
+  expect(readdirSync(join(folder, '.method', 'proposals'))).toHaveLength(2);
+  expect(s.stderr.mock.calls.map(c => String(c[0])).filter(line => line.startsWith('Fixing'))).toEqual([
+    'Fixing reply.method from 1 correction on this computer. This takes a few minutes.\n', 'Fixing reply.method from 9 corrections on this computer. This takes a few minutes.\n']);
+  expect(s.stderr.mock.calls.filter(c => String(c[0]).includes('this correction joins that fix'))).toHaveLength(9);
+  // Each judge printed one outcome, of the fix that took its own correction.
+  const printed = s.stdout.mock.calls.map(c => String(c[0]));
+  expect(printed).toHaveLength(10);
+  const lines = printed.filter(p => p.startsWith('Recorded:')), json = printed.filter(p => p.startsWith('{')).map(p => JSON.parse(p));
+  expect(lines[0]).toMatch(/^Recorded: wrong\. Changed step write of reply\.method: .* It fixes the corrected run/);
+  expect(lines.slice(1)).toHaveLength(4);
+  for (const line of lines.slice(1)) expect(line).toMatch(/^Recorded: wrong\. 9 corrections: fixed, passes \d+ earlier corrections\. Changed /);
+  expect(json).toHaveLength(5);
+  for (const out of json) expect(out.fix.judgments).toContain(out.judgment.id);
+  expect(new Set(json.map(out => out.judgment.id)).size).toBe(5);
+  expect(client.judgments.every((j: any) => !j.pending)).toBe(true);
+  // Every outcome was read by its judge; only nothing is left but the folder.
+  expect(readdirSync(join(s.root, 'cache', 'fixes', METHOD_ID))).toEqual([]);
+}, 120_000);
+
+it('a fix that stops leaves every correction it took waiting, and each judge that joined it prints the error', async () => {
+  const s = setup();
+  fakeClaude(s.root);
+  vi.stubEnv('METHOD_IMPROVE_METHOD', join(s.root, 'missing.method'));
+  await project(s.root);
+  const client = fakeClient({ unique: true });
+  const results = await Promise.allSettled([1, 2, 3].map(n => methodMain(['judge', 'run_1', 'wrong', '--note', `Correction ${n}.`], () => client)));
+  for (const result of results) expect(result).toMatchObject({ status: 'rejected', reason: { message: expect.stringContaining('METHOD_IMPROVE_METHOD names') } });
+  expect(client.judgments.map((j: any) => j.pending)).toEqual([true, true, true]);
+  // One pass took them all; the lock is gone, so the next run or judge fixes them.
+  expect(s.stderr.mock.calls.filter(c => String(c[0]).startsWith('Fixing'))).toHaveLength(1);
+  expect(existsSync(join(s.root, 'cache', 'fixes', METHOD_ID, 'lock'))).toBe(false);
+}, 60_000);
+
+it('a fix whose process stopped does not hold the Method: its lock is taken over', async () => {
+  const s = setup();
+  fakeClaude(s.root); fakeImprove(s.root, 'none');
+  await project(s.root);
+  mkdirSync(join(s.root, 'cache', 'fixes', METHOD_ID), { recursive: true });
+  writeFileSync(join(s.root, 'cache', 'fixes', METHOD_ID, 'lock'), JSON.stringify({ pid: 2 ** 22 + 12345 }));
+  await methodMain(['judge', 'run_1', 'wrong', '--note', 'Wrong.'], () => fakeClient());
+  expect(s.printed()).toMatch(/^Recorded: wrong\. No safe change found/);
+}, 60_000);

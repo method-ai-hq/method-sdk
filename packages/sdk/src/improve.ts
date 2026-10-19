@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -31,7 +31,7 @@ export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory
 /** The SubmitProposal that improve.method returns, read from its result. */
 export type ImproveProposal = { cause: string; workflow: unknown | null; files: { path: string; sha256: string; content_base64: string }[]; evidence: { kind: 'change' | 'none'; steps?: string[]; [key: string]: unknown } };
 export type FixOutcome = {
-  file: string; corrections: number; from_dashboard: number; kind: 'change' | 'none'; line: string; cause: string; steps: string[];
+  file: string; judgments: string[]; corrections: number; from_dashboard: number; kind: 'change' | 'none'; line: string; cause: string; steps: string[];
   cases: { made: string[]; not_made: { id: string; reason: string }[] }; earlier_passed: number; version?: { version_id: string; url: string; undo: string } | undefined;
   usage: { model_calls: number; usd: number | null; minutes: number } | null; capped: string; log: string; changed?: string;
 };
@@ -218,7 +218,7 @@ export async function fixCorrections(client: MethodClient, file: string, options
     const earlier = (evidence.cases ?? []).filter((c: any) => !c.target && c.after === 'pass').length;
     const usage = evidence.budget ?? null;
     const used = usage ? ` (${plural(usage.model_calls, 'model call')}, ${usage.minutes < 1 ? 'under a minute' : `${Math.round(usage.minutes)} min`}${typeof usage.usd === 'number' ? `, $${usage.usd.toFixed(2)}` : ''})` : '';
-    const outcome = { file, corrections: fresh.length, from_dashboard: fromDashboard, cause: improved.cause, cases, earlier_passed: earlier, usage, capped: improved.capped, log: improved.log };
+    const outcome = { file, judgments: [...freshIds], corrections: fresh.length, from_dashboard: fromDashboard, cause: improved.cause, cases, earlier_passed: earlier, usage, capped: improved.capped, log: improved.log };
     const record = (kind: 'applied' | 'none', extra: Record<string, unknown> = {}) => saveLocalProposal(file, { id: `lp_${randomBytes(8).toString('hex')}`, method_id: methodId, base_version_id: baseVersion?.version_id ?? null,
       status: kind, cause: improved.cause, evidence, created_at: new Date().toISOString(), base_workflow: base, proposed_workflow: improved.workflow, judgments: [...freshIds], ...extra });
     if (evidence.kind !== 'change') {
@@ -244,7 +244,95 @@ export async function fixCorrections(client: MethodClient, file: string, options
   } catch (error) {
     // Stopped before it decided: the corrections wait for the next loop.
     if (!decided) await handled([...taken], false).catch(() => undefined);
-    throw error;
+    throw Object.assign(error instanceof Error ? error : Error(String(error)), { judgments: [...taken] });
+  }
+}
+
+// One fix at a time per Method on this computer. A correction that arrives while a fix runs joins it: the running fix
+// takes every waiting correction in one more pass before it finishes, and writes the outcome of each correction to a
+// file that the method judge command of that correction waits for.
+
+const fixFolder = (methodId: string) => join(methodCache(), 'fixes', methodId);
+const fileMethodId = (file: string) => { const id = (readDocument(file) as any).id; return typeof id === 'string' && methodIdPattern.test(id) ? id : undefined; };
+type SavedOutcome = { fix: FixOutcome } | { error: string; log?: string };
+
+/** Take the Method's lock: a file with this process ID. A lock whose process has stopped is taken over. */
+function takeLock(path: string) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { writeFileSync(path, JSON.stringify({ pid: process.pid }), { flag: 'wx', mode: 0o600 }); return true; }
+    catch (error: any) { if (error.code !== 'EEXIST') throw error; }
+    let pid: number | undefined;
+    try { pid = JSON.parse(readFileSync(path, 'utf8')).pid; } catch { /* written now, or gone */ }
+    if (pid === undefined) { try { if (Date.now() - statSync(path).mtimeMs < 10_000) return false; } catch { continue; } }
+    else { try { process.kill(pid, 0); return false; } catch (error: any) { if (error.code !== 'ESRCH') return false; } }
+    rmSync(path, { force: true });
+  }
+  return false;
+}
+
+function saveOutcome(folder: string, id: string, outcome: SavedOutcome) { writePrivateJson(join(folder, `${id}.json`), outcome); }
+
+/** The saved outcome of a correction, removed once read: a function that returns the fix or throws its error. */
+function takeOutcome(folder: string, id: string) {
+  const path = join(folder, `${id}.json`);
+  let saved: SavedOutcome;
+  try { saved = JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; }
+  rmSync(path, { force: true });
+  return () => { if ('fix' in saved) return saved.fix; throw Object.assign(Error(saved.error), saved.log ? { log: saved.log } : {}); };
+}
+
+/**
+ * Fix the waiting corrections of a Method file while holding its lock, pass after pass until none waits, so the
+ * corrections that arrive during a pass join the next. Returns undefined when another fix of the Method holds the lock.
+ */
+export async function fixWaiting(client: MethodClient, file: string, options: { run?: RunFile; waitMs?: number } = {}): Promise<FixOutcome[] | undefined> {
+  const methodId = fileMethodId(file);
+  if (!methodId || !client.token()) return [];
+  const folder = fixFolder(methodId), lock = join(folder, 'lock');
+  if (!takeLock(lock)) return undefined;
+  const fixes: FixOutcome[] = [];
+  try {
+    for (const name of readdirSync(folder)) {
+      const path = join(folder, name);
+      if (name !== 'lock') try { if (Date.now() - statSync(path).mtimeMs > 86_400_000) rmSync(path, { force: true }); } catch { /* gone */ }
+    }
+    for (;;) {
+      let fix: FixOutcome | undefined;
+      try { fix = await fixCorrections(client, file, options); }
+      catch (error: any) {
+        for (const id of error.judgments ?? []) saveOutcome(folder, id, { error: error.message, ...(error.log ? { log: error.log } : {}) });
+        throw error;
+      }
+      if (!fix) return fixes;
+      for (const id of fix.judgments) saveOutcome(folder, id, { fix });
+      fixes.push(fix);
+    }
+  } finally { rmSync(lock, { force: true }); }
+}
+
+/**
+ * Fix the Method for one correction: run the fix, or, when a fix of the Method already runs on this computer, wait for
+ * the fix that takes this correction. Returns the outcome of the fix that took it, or undefined when no fix here took it.
+ */
+export async function fixCorrection(client: MethodClient, file: string, judgmentId: string, options: { run?: RunFile; pollMs?: number } = {}): Promise<FixOutcome | undefined> {
+  const methodId = fileMethodId(file);
+  if (!methodId || !client.token()) return undefined;
+  const folder = fixFolder(methodId);
+  let joined = false;
+  for (;;) {
+    const saved = takeOutcome(folder, judgmentId);
+    if (saved) return saved();
+    let ran: FixOutcome[] | undefined, failure: unknown;
+    try { ran = await fixWaiting(client, file, options); } catch (error) { failure = error; ran = []; }
+    if (ran) {
+      const done = takeOutcome(folder, judgmentId);
+      if (done) return done();
+      if (failure) throw failure;
+      return undefined;
+    }
+    if (!joined) { process.stderr.write(`Method is fixing ${basename(file)} on this computer; this correction joins that fix.\n`); joined = true; }
+    await new Promise(done => setTimeout(done, options.pollMs ?? 500));
   }
 }
 

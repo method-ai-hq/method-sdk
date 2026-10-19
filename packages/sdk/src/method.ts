@@ -53,7 +53,8 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
 }
 /**
  * Before method run FILE: corrections that wait for this Method (from the dashboard, or a loop that stopped) are fixed
- * first, with one line about them. A failure of the loop is one line too; the run goes on. Signed out, offline, a
+ * first, with one line about them. When a fix of the Method already runs on this computer, the run does not wait: that
+ * fix takes the waiting corrections. A failure of the loop is one line too; the run goes on. Signed out, offline, a
  * resumed run, or the run worker: nothing.
  */
 async function fixWaitingCorrections(args: string[], clientFactory: (server: string) => MethodClient) {
@@ -61,8 +62,8 @@ async function fixWaitingCorrections(args: string[], clientFactory: (server: str
   const server = parseArgs({ args: args.slice(2), strict: false, options: { server: { type: 'string' } } }).values.server;
   let client: MethodClient;
   try { client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER); if (!client.token()) return; } catch { return; }
-  const { fixCorrections, waitingLine } = await import('./improve.js');
-  try { const fix = await fixCorrections(client, authoringPath(args[1]!), { waitMs: 3000 }); if (fix) process.stderr.write(waitingLine(fix) + '\n'); }
+  const { fixWaiting, waitingLine } = await import('./improve.js');
+  try { for (const fix of await fixWaiting(client, authoringPath(args[1]!), { waitMs: 3000 }) ?? []) process.stderr.write(waitingLine(fix) + '\n'); }
   catch (error) { if (!/^(fetch failed|401:|404:)|abort|timed? ?out/i.test((error as Error).message)) process.stderr.write(`The waiting corrections are not fixed yet: ${(error as Error).message}\n`); }
 }
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
