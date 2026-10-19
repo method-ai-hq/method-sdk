@@ -28,10 +28,12 @@ it('merges per step and per top-level key, or lists the conflicts', () => {
   expect((mergeMethod(base, { ...base, name: 'Ours' }, method({ a: step('a', 'A.') })) as any).workflow.steps).toEqual({ a: step('a', 'A.') });
   // The same step and the same top-level key changed in different ways: conflicts.
   const conflict = mergeMethod(base, { ...ours, name: 'Ours' }, { ...method({ a: step('a', 'A.'), b: step('b', 'B theirs.') }), name: 'Theirs' });
-  expect(conflict).toEqual({ clean: false, conflicts: [
+  expect(conflict).toMatchObject({ clean: false, conflicts: [
     { path: 'name', base: 'Echo', ours: 'Ours', theirs: 'Theirs' },
     { path: 'steps.b', base: step('b', 'B.'), ours: step('b', 'B ours.'), theirs: step('b', 'B theirs.') },
   ] });
+  // The workflow keeps ours at each conflict, for a person who combined the texts after a stop.
+  expect((conflict as any).workflow).toMatchObject({ name: 'Ours', steps: { b: step('b', 'B ours.') } });
   // With an empty base, steps on one side only are kept, and one step with two texts is a conflict.
   const fromNothing = mergeMethod({}, method({ a: step('a', 'A.'), o: step('o', 'Ours only.') }), method({ a: step('a', 'A.'), t: step('t', 'Theirs only.') })) as any;
   expect(Object.keys(fromNothing.workflow.steps).sort()).toEqual(['a', 'o', 't']);

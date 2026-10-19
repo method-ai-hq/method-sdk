@@ -116,17 +116,33 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   // Files that come from theirs. A file here that no save wrote and that differs is the person's own: a conflict too.
   const incoming = files.files.filter(f => ourHashes.get(f.path) !== f.sha256);
   const local = (name: string) => { try { return fileHash(readFileSync(join(root, name))); } catch { return undefined; } };
+  const { isDeepStrictEqual } = await import('node:util');
+  // After a combine stopped, a part whose text changed on this computer since then is combined by the person: theirs is used.
+  const stop = record?.conflict?.theirs === theirs.version_id ? record.conflict : undefined;
+  const combinedStep = (at: string, now: unknown) => !!stop && at in stop.parts && !isDeepStrictEqual(now, stop.parts[at]);
+  const combinedFile = (at: string) => !!stop && at in stop.files && (local(at) ?? null) !== stop.files[at];
   const fileConflicts = [...files.conflicts.map(c => c.path), ...incoming.filter(f => !ourHashes.has(f.path) && local(f.path) !== undefined && local(f.path) !== f.sha256).map(f => f.path)];
+  const stepConflicts = steps.clean ? [] : steps.conflicts;
+  const openSteps = stepConflicts.filter(c => !combinedStep(c.path, c.ours)), openFiles = fileConflicts.filter(at => !combinedFile(at));
+  const keepLocal = new Set(fileConflicts.filter(combinedFile));
+  const take = incoming.filter(f => !keepLocal.has(f.path));
   const download = async (f: { path: string; sha256: string }) => {
     const bytes = await client.transfer(`${methodPath}/files/${f.sha256}?version=${encodeURIComponent(theirs.version_id)}`);
     if (fileHash(bytes) !== f.sha256) throw Error(`The newer version's file ${f.path} does not match its checksum.`);
     return bytes;
   };
   const who = savedBy ?? 'A teammate', name = relative(root, path);
-  if (!steps.clean || fileConflicts.length) {
+  if (openSteps.length || openFiles.length) {
+    // Remember this computer's text of each part, so that the next run sees which parts the person combined.
+    const { recordCombineStop } = await import('./outbox.js');
+    recordCombineStop(client.server, id, {
+      theirs: theirs.version_id,
+      parts: Object.fromEntries(stepConflicts.map(c => [c.path, combinedStep(c.path, c.ours) ? stop!.parts[c.path] : c.ours])),
+      files: Object.fromEntries(fileConflicts.map(at => [at, combinedFile(at) ? stop!.files[at]! : local(at) ?? null])),
+    });
     const conflicts: CombineConflict[] = [];
-    for (const c of steps.clean ? [] : steps.conflicts) conflicts.push({ part: c.path.replace(/^steps\./, 'step '), file: name, yours: c.ours, theirs: c.theirs });
-    for (const at of fileConflicts) {
+    for (const c of openSteps) conflicts.push({ part: c.path.replace(/^steps\./, 'step '), file: name, yours: c.ours, theirs: c.theirs });
+    for (const at of openFiles) {
       const theirFile = theirFiles.find(f => f.path === at);
       const text = async () => { try { return clip(Buffer.from(await download(theirFile!)).toString('utf8')); } catch (error) { return `(not read: ${(error as Error).message})`; } };
       conflicts.push({ part: `file ${at}`, file: at, yours: (() => { try { return clip(readFileSync(join(root, at), 'utf8')); } catch { return null; } })(), theirs: theirFile ? await text() : null });
@@ -142,7 +158,7 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   }
   // Every file is read before any file changes, so a failed download changes nothing.
   let written: Array<{ path: string; bytes: Uint8Array }>;
-  try { written = await Promise.all(incoming.map(async f => ({ path: f.path, bytes: await download(f) }))); }
+  try { written = await Promise.all(take.map(async f => ({ path: f.path, bytes: await download(f) }))); }
   catch (error) { return unreachable(error) ? { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` } : { status: 'skipped' }; }
   const { mkdirSync, renameSync, writeFileSync } = await import('node:fs');
   const { packagePath } = await import('../../contracts/src/method-package.js');
@@ -151,7 +167,6 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
     mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
     writeFileSync(`${target}.download`, f.bytes, { mode: 0o600 }); renameSync(`${target}.download`, target);
   }
-  const { isDeepStrictEqual } = await import('node:util');
   if (!isDeepStrictEqual(steps.workflow, ours.workflow)) (await import('./proposals.js')).writeMethodFile(path, id, steps.workflow);
   (await import('./legacy.js')).convertLegacy(path);
   const fileChanges = (from: Array<{ path: string; sha256: string }>, to: Array<{ path: string; sha256: string }>) => [...new Set([...from, ...to].map(f => f.path))].filter(at => from.find(f => f.path === at)?.sha256 !== to.find(f => f.path === at)?.sha256);

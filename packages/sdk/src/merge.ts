@@ -5,7 +5,8 @@ import { isDeepStrictEqual } from 'node:util';
 // change; a part that both sides changed in different ways is a conflict.
 
 export type MergeConflict = { path: string; base: unknown; ours: unknown; theirs: unknown };
-export type MergeResult = { clean: true; workflow: any } | { clean: false; conflicts: MergeConflict[] };
+/** Not clean: workflow keeps ours at each conflict. */
+export type MergeResult = { clean: true; workflow: any } | { clean: false; conflicts: MergeConflict[]; workflow: any };
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 /** Keys of ours in their order; a key that only theirs has goes after the key before it in theirs. */
@@ -43,7 +44,7 @@ export function mergeMethod(base: any, ours: any, theirs: any): MergeResult {
     return result;
   };
   const workflow = merge('', isObject(base) ? base : {}, ours, theirs, key => key === 'steps');
-  return conflicts.length ? { clean: false, conflicts } : { clean: true, workflow };
+  return conflicts.length ? { clean: false, conflicts, workflow } : { clean: true, workflow };
 }
 
 export type PackageFile = { path: string; sha256: string };

@@ -24,9 +24,12 @@ type Saved = { method_id: string; version_number: number; beside?: string | null
 /**
  * The version that this computer last saved or got of a Method: the base of the next combine and the parent of the next
  * save. side_version_id: a later save of this computer that was kept beside a newer version. merged_version_id: the
- * side version that the file now combines, sent with the next save. saved_by: who saved version_id.
+ * side version that the file now combines, sent with the next save. saved_by: who saved version_id. conflict: a combine
+ * with the newer version theirs stopped, and this computer's text of each part that both sides changed (a step's
+ * definition, or a file's sha256): a part whose text changed since then is combined by the person.
  */
-export type LastSaved = { version_id?: string; version_number?: number; workflow?: any; side_version_id?: string; merged_version_id?: string; saved_by?: string | null };
+export type CombineStop = { theirs: string; parts: Record<string, unknown>; files: Record<string, string | null> };
+export type LastSaved = { version_id?: string; version_number?: number; workflow?: any; side_version_id?: string; merged_version_id?: string; saved_by?: string | null; conflict?: CombineStop };
 
 export const outboxDir = () => join(methodCache(), 'outbox');
 const blobPath = (hash: string) => join(outboxDir(), 'blobs', hash);
@@ -49,6 +52,10 @@ export function recordKnownVersion(server: string, methodId: string, versionId: 
 export function recordCheckout(server: string, methodId: string, versionId: string, versionNumber: number, workflow: unknown, extra: Pick<LastSaved, 'merged_version_id' | 'saved_by'> = {}) {
   recordKnownVersion(server, methodId, versionId, versionNumber);
   writePrivateJson(methodFile(server, methodId), { version_id: versionId, version_number: versionNumber, workflow, ...extra });
+}
+/** A combine that stopped: the parts that both sides changed, as they were on this computer. */
+export function recordCombineStop(server: string, methodId: string, conflict: CombineStop) {
+  writePrivateJson(methodFile(server, methodId), { ...lastSaved(server, methodId), conflict });
 }
 /** A save that the server kept beside a newer version stays off the base: the next run combines it with the newer one. */
 function recordSaved(item: VersionItem, saved: { version_number: number; newest?: boolean; newer?: { saved_by?: string | null } }) {

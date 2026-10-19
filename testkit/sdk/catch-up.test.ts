@@ -156,6 +156,42 @@ it('the same step changed on both sides: no run, no file change, both texts in t
   expect(s.text()).toContain('Failed: Gráinne also changed step first.');
 }, 60_000);
 
+it('after a stop, the person combines the texts and the next run goes on with every other change of the teammate', async () => {
+  const s = await shared();
+  s.grainne.edit(doc => { doc.steps.first.purpose = 'Gráinne: returns the first text.'; doc.goal = 'Gráinne changed the goal.'; });
+  await s.grainne.run();
+  s.ryan.use();
+  s.ryan.edit(doc => { doc.steps.first.purpose = 'Ryan: returns the first text.'; });
+  await s.ryan.run();
+  expect(process.exitCode).toBe(2);
+  // Running again without combining stops again.
+  process.exitCode = undefined;
+  await s.ryan.run();
+  expect(process.exitCode).toBe(2);
+  process.exitCode = undefined;
+  s.ryan.edit(doc => { doc.steps.first.purpose = 'Ryan and Gráinne: returns the first text.'; });
+  const { summary } = await s.ryan.run();
+  expect(process.exitCode).toBeUndefined();
+  expect(summary).toBeDefined();
+  const doc = readDocument(s.ryan.file);
+  expect(doc.steps.first.purpose).toBe('Ryan and Gráinne: returns the first text.');
+  expect(doc.goal).toBe('Gráinne changed the goal.');
+}, 60_000);
+
+it("after a stop on a script file, the person's combined file is kept", async () => {
+  const s = await shared();
+  s.grainne.script('first.mjs', 'a', 'A from Gráinne');
+  await s.grainne.run();
+  s.ryan.use(); s.ryan.script('first.mjs', 'a', 'A from Ryan');
+  await s.ryan.run();
+  expect(process.exitCode).toBe(2);
+  process.exitCode = undefined;
+  s.ryan.script('first.mjs', 'a', 'A from both');
+  await s.ryan.run();
+  expect(process.exitCode).toBeUndefined();
+  expect(readFileSync(join(s.ryan.folder, 'first.mjs'), 'utf8')).toContain('A from both');
+}, 60_000);
+
 it('the same script file changed on both sides is a conflict that shows both texts', async () => {
   const s = await shared();
   s.grainne.script('first.mjs', 'a', 'A from Gráinne');

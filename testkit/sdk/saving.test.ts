@@ -147,6 +147,9 @@ it('prints no run link for a Method file that does not load', async () => {
   const started = (process.stdout.write as any).mock.calls.map((call: any[]) => String(call[0])).find((line: string) => line.includes('"started"'));
   expect(JSON.parse(started)).toMatchObject({ status: 'started' });
   expect(JSON.parse(started)).not.toHaveProperty('dashboard');
+  // The background worker still writes its result: wait for it, so the test folder can be removed.
+  const worker = join(s.root, 'one', 'worker.json');
+  await vi.waitFor(() => expect(JSON.parse(readFileSync(worker, 'utf8')).status).toBe('finished'), { timeout: 20_000, interval: 100 });
 }, 30_000);
 
 it('an unreadable old run record from another process does not stop a version from saving', async () => {
