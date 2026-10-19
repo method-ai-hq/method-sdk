@@ -60,7 +60,7 @@ export function claimHome(server: string, methodId: string, file: string) {
 }
 
 
-type Saved = { workflow_id: string; version_id: string; version_number: number; workflow: any; package?: { files: Array<{ path: string; sha256: string; size: number }> } | null; saved_by?: string | null; saved_at?: string | null };
+type Saved = { workflow_id: string; version_id: string; version_number: number; workflow: any; package?: { files: Array<{ path: string; sha256: string; size: number }> } | null; saved_by?: string | null; saved_at?: string | null; merge_base?: string | null };
 type Client = Pick<import('./method-client.js').MethodClient, 'server' | 'token' | 'request' | 'transfer'>;
 /** Both texts of one part that this computer and a teammate changed in different ways. */
 export type CombineConflict = { part: string; file: string; yours: unknown; theirs: unknown };
@@ -88,25 +88,31 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   catch { return { status: 'skipped' }; }
   const id: string = document.id, options = { signal: AbortSignal.timeout(5000), stallMs: 5000 };
   const methodPath = `/api/cli/methods/${encodeURIComponent(id)}`;
+  const { lastSaved, recordCheckout } = await import('./outbox.js');
+  const record = lastSaved(client.server, id);
+  // merge_base: the newest version that the server has as an ancestor of both this computer's version and the newest one.
   let theirs: Saved;
-  try { theirs = await client.request<Saved>(methodPath, 'GET', undefined, true, options); }
+  try { theirs = await client.request<Saved>(record?.version_id ? `${methodPath}?base=${encodeURIComponent(record.version_id)}` : methodPath, 'GET', undefined, true, options); }
   catch (error) { return unreachable(error) ? { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` } : { status: 'skipped' }; }
   const { loadWorkflow } = await import('../../workflow-language/src/validate.js');
   const { buildPackage } = await import('./method-files.js');
-  const { lastSaved, recordCheckout } = await import('./outbox.js');
   // A file that does not load fails its run with its own error.
   let ours: { workflow: any; files: Array<{ path: string; sha256: string }>; version_id: string };
   try { const workflow = loadWorkflow(methodContent(document)), { pack } = await buildPackage(path, workflow); ours = { workflow, files: pack.files, version_id: versionIdFor(id, pack.digest) }; }
   catch { return { status: 'skipped' }; }
-  const record = lastSaved(client.server, id), savedBy = theirs.saved_by ?? null;
+  const savedBy = theirs.saved_by ?? null;
   if (ours.version_id === theirs.version_id) {
     if (record?.version_id !== theirs.version_id) recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy });
     return { status: 'current' };
   }
   if (record?.version_id === theirs.version_id) return { status: 'current' };
   let base: { workflow: any; files: Array<{ path: string; sha256: string }> } = { workflow: {}, files: [] };
-  if (record?.version_id) {
-    try { const saved = await client.request<Saved>(`${methodPath}?version=${encodeURIComponent(record.version_id)}`, 'GET', undefined, true, options); base = { workflow: saved.workflow, files: saved.package?.files ?? [] }; }
+  // An older server sends no merge_base: then the version this computer last saved or got is the base.
+  const baseId = theirs.merge_base !== undefined ? theirs.merge_base : record?.version_id;
+  // This computer's version was kept beside the newest one (an earlier CLI recorded it as its last save): it is combined now.
+  const beside = record?.version_id && baseId !== record.version_id ? record.version_id : undefined;
+  if (record?.version_id && baseId) {
+    try { const saved = await client.request<Saved>(`${methodPath}?version=${encodeURIComponent(baseId)}`, 'GET', undefined, true, options); base = { workflow: saved.workflow, files: saved.package?.files ?? [] }; }
     catch (error) { if (unreachable(error)) return { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` }; base = { workflow: record.workflow ?? {}, files: [] }; }
   }
   const { mergeMethod, mergeFiles, changedSteps } = await import('./merge.js');
@@ -173,7 +179,7 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   const yours = parts(changedSteps(base.workflow, ours.workflow), fileChanges(base.files, ours.files));
   const kept = !isDeepStrictEqual(ours.workflow, base.workflow) || fileChanges(base.files, ours.files).length > 0;
   // theirs is the parent of the next save; a side version of this computer that the file now combines goes with it.
-  recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy, ...(kept && record?.side_version_id ? { merged_version_id: record.side_version_id } : {}) });
+  recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy, ...(kept && (record?.side_version_id ?? beside) ? { merged_version_id: (record?.side_version_id ?? beside)! } : {}) });
   const changed = parts(changedSteps(base.workflow, theirs.workflow), fileChanges(base.files, theirFiles));
   return { status: 'updated', line: `Updated to ${savedBy ? `${savedBy}'s` : 'the newest'} version${clock(theirs.saved_at)}${changed ? ` (changed ${changed})` : ''}.${kept ? ` Your changes${yours ? ` to ${yours}` : ''} are kept.` : ''}` };
 }
