@@ -55,10 +55,17 @@ steps:
 
 - Version ID = `v_` + first 32 hex of sha256(`${method_id}:${package_digest}`). The client knows it before any
   request. The same content is always the same version; going back in git finds the existing version.
-- `PUT /api/cli/methods/:method_id/versions/:version_id` with `{workflow, package, parent_version_id?, reason}` is
-  idempotent: the same body again returns the same version. A new Method is created by the first PUT for an ID that
-  the client generated (`wf_` + 32 hex, random) — no request IDs, no pending state. Concurrent saves from two
-  computers both succeed; each records its parent.
+- `PUT /api/cli/methods/:method_id/versions/:version_id` with `{workflow, package, parent_version_id?,
+  merged_version_id?, reason}` is idempotent: the same body again returns the same version. A new Method is created by
+  the first PUT for an ID that the client generated (`wf_` + 32 hex, random) — no request IDs, no pending state.
+  Concurrent saves from two computers both succeed; each records its parent. Only a save on top of the newest version
+  becomes newest; another one is kept beside it (`newest: false`), and the CLI says "Saved beside …'s newer version".
+- Before a run, a fix or a publish of a file, the CLI catches up (`catchUp`, `home.ts`): base = the version this
+  computer last saved or got, ours = the file, theirs = the newest version. An unchanged file takes theirs; a changed
+  one combines step by step (`mergeMethod`) and package file by package file (`mergeFiles`, by sha256), both exported
+  as `@method-ai-hq/sdk/merge`. theirs becomes the parent of the next save, which names a combined side version in
+  `merged_version_id`. A step or file that both sides changed stops the command with both texts (status `needs_you`,
+  exit 2) and changes nothing.
 - The run starts at once. An outbox on the computer (`~/.cache/method/outbox/`) holds file uploads, version saves and
   run updates; it sends them in parallel (6 at a time), in any order the server accepts (the server accepts a run
   record before its version arrives and links them when it does), retries with backoff, and stops only when no bytes

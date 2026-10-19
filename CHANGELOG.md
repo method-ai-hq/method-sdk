@@ -1,3 +1,19 @@
+# 0.19.0
+
+Several people can change, run and correct the same Method at the same time. Nobody loses work, and only a true contradiction stops the work.
+
+- **`method run FILE` always runs the newest version.** Before a run, a fix (`method judge`) or a publish, the file catches up with the newest version of its Method. An unchanged file takes it. A changed file combines it step by step and script file by script file, and one line says whose version it took and which of your changes are kept, for example `Updated to Gráinne's version from 10:42 (changed step judge). Your changes to step claims are kept.` This works for any file with the Method's `id:` line, not only the folder it was saved from. Offline, the file runs as it is, with one line.
+- **A true conflict stops before the run.** When you and a teammate changed the same step or the same script file, nothing runs and no file changes. The result has status `needs_you`, both texts of each part, and the line `Gráinne also changed step judge. Combine the two texts in the file, then run again.` The exit code is 2.
+- **A save that a teammate's save overtook is kept beside it.** The line says `Saved beside Gráinne's newer version; your next run combines them.`, and the next run combines the two and saves the result on top of the newest version.
+- **The automatic merge of account changes and the `.method/conflict-*.json` files are removed.** A change Method makes in the account is a new version, so the next run takes it like any other version.
+- **`method run NAME`** runs the Method of your workspace with that name (not case-sensitive), as `method run ID` does. When several Methods have the name, nothing runs and the result lists their names and IDs.
+- **A second run waits for the shared state.** While another person's run holds a Method's shared state, `method run ID` says `Waiting for Ryan's run (started 10:02) to finish with the shared state: <link>` once and starts when the state is free. When that run stopped while it held the state, the run stops and names the person who must check it and release it.
+- **The same run says when it is already going.** When someone in the workspace is running the same version with the same inputs, one line says who and links to it; the run starts too. Each run record now carries a sha256 of its inputs, except a run whose content stays on devices.
+- **Corrections from several people.** A correction of a step that someone changed after the run is not fixed, and the line names who changed it. A fix that passes only by breaking another person's case is held, not applied, and the line names both people. `method judge` shows two opposite judgments of one step as a held pair, and `method judge RUN_ID keep JUDGMENT_ID` keeps one. What the loop did with each correction (fixed, no change, already changed, held) is recorded in the account.
+- **Cases name the person who made them.** A new case's author is the signed-in person, and a case made from a correction names the person who made the correction. The save gate and the run's case notice say `Gráinne's case dates-conflict: …`. Cases with no author read as before.
+- **Missing keys and files are named.** A run lists every declared key that is not on this computer, each with `method secret set NAME`, before the first step. A step that stops because a file is not on this computer says `This Method reads capture/pages.json. It is not on this computer and is not saved in the Method. Ask Ryan (who saved this version) for it.`
+- `mergeMethod` and the new `mergeFiles` are exported as `@method-ai-hq/sdk/merge`, so the server combines versions in the same way.
+
 # 0.18.2
 
 Every run that prints a dashboard link sends a record to it.

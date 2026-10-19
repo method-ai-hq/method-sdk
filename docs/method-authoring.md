@@ -404,7 +404,7 @@ To fix a failed or wrong step, change it and run the Method again. The new run r
 For ask, supply --human FILE containing {steps: {"STEP": {outputs: {NAME: VALUE}}}} (STEP:ITERATION, counted from 0, for a step with each or repeat). Use the user's actual answer. Checks still run.
 A save never blocks a run: a run that cannot save says "Will save when online", and any later method command sends the outbox.
 State commits after checks. A local checkpoint cannot roll back an external write. Inspect external state before an explicit retry.
-Two computers can save different content of one Method; each becomes a version with its parent. Going back to earlier content finds its existing version. The id: line keeps a renamed or moved file on its Method; method new-id FILE makes a copy a new Method. On one computer a Method is saved from one file (every checkout of one Git repository counts as one): a copy in another folder or a temporary folder does not run while that file exists, and the error names the file to change. When that file is unchanged since its last save and the account has a newer version, a run takes that version first.
+Two computers can save different content of one Method; each becomes a version with its parent. Going back to earlier content finds its existing version. The id: line keeps a renamed or moved file on its Method; method new-id FILE makes a copy a new Method. On one computer a Method is saved from one file (every checkout of one Git repository counts as one): a copy in another folder or a temporary folder does not run while that file exists, and the error names the file to change. Before a run, a fix or a publish, the file takes the newest version of its Method: an unchanged file takes it, a changed file combines it step by step and file by file, and a step or a script file that you and a teammate changed in different ways stops the command with both texts, until you combine them in the file. A save that a teammate's newer save overtook is kept beside it, and the next run combines the two.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
 After a failed action with effects, failure.next.text lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
 
@@ -1206,10 +1206,11 @@ Usage:
 
 ```sh
 method judge RUN_ID right|wrong [--step STEP_ID] [--note TEXT] [--corrected FILE] [--json] [--server URL]
+method judge RUN_ID keep JUDGMENT_ID
 ```
 
 Arguments and defaults:
-RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result; it is recorded only. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters), even when they are vague. --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment then fixes the Method in the foreground, with your own Claude Code or Codex (hosted models only when neither is signed in): it records the correction as a case in cases/ next to the Method file, finds the step that causes it, tests up to three small changes against this run, every earlier corrected or approved run, and every case, and changes the file only when a change fixes this run and breaks no earlier correction. The change is saved as a new version; restoring the version before it on the Method page undoes it. It takes a few minutes. Corrections that wait (from the dashboard, or a fix that stopped) are fixed in the same loop. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file. Run it in the folder of the Method file when the run came from an older CLI. Do not ask the person to confirm a judgment, and do not edit the Method yourself for the same correction.
+RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result; it is recorded only. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters), even when they are vague. --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment then fixes the Method in the foreground, with your own Claude Code or Codex (hosted models only when neither is signed in): it records the correction as a case in cases/ next to the Method file, finds the step that causes it, tests up to three small changes against this run, every earlier corrected or approved run, and every case, and changes the file only when a change fixes this run and breaks no earlier correction. The change is saved as a new version; restoring the version before it on the Method page undoes it. It takes a few minutes. Corrections that wait (from the dashboard, or a fix that stopped) are fixed in the same loop. The fix starts from the newest version of the Method, as method run does. A correction of a step that someone changed after the run is not fixed, and the line names who changed it. A change that fixes one person's correction only by breaking another person's case is held, not applied, and the line names both. Two people who judge the same step of a run in opposite ways are held too: the output shows both, and method judge RUN_ID keep JUDGMENT_ID keeps one and sets the other aside. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file. Run it in the folder of the Method file when the run came from an older CLI. Do not ask the person to confirm a judgment, and do not edit the Method yourself for the same correction.
 
 Result and changes:
 One line: what changed and how many earlier corrections it passes, with how to undo it; or No safe change found and the reason. A subscription limit or another failure of the model service is an error, and the correction waits for the next method judge or method run. --json prints the judgment and the fix (kind change or none, cause, steps, cases made, version, usage with null dollars on a subscription, what the replay caps left out, and the log file).
@@ -1234,7 +1235,7 @@ method changes FILE [--json] [--server URL]
 ```
 
 Arguments and defaults:
-Lists, newest first, the changes that method judge applied on this computer and the changes that Method made in the account. Commands that take a signed-in FILE merge a change made in the account into the file first and print one line.
+Lists, newest first, the changes that method judge applied on this computer and the changes that Method made in the account. A change made in the account is a new version: the next method run of the file takes it.
 
 Result and changes:
 One line per change: its date, its version, and its cause. --json prints {file, method_id, changes: [{id, source, cause, date, version_id, steps}]}. No changes.
@@ -1647,13 +1648,14 @@ method sync .method-runs/wf_example/saved-run
 
 ## run
 
-Run a local .method file, or a saved Method by ID. When this computer is signed in, a run of a local file starts at once and saves in the background: the version of the file's content and the run's records go to the dashboard through the outbox (~/.cache/method/outbox), and the last line says Saved as version N, or Will save when online; without sign-in the records stay in .method-runs. Steps whose definition and inputs match an earlier accepted run on this computer are reused.
+Run a local .method file, or a saved Method by ID or by its name in your workspace. When this computer is signed in, a run of a local file starts at once and saves in the background: the version of the file's content and the run's records go to the dashboard through the outbox (~/.cache/method/outbox), and the last line says Saved as version N, or Will save when online; without sign-in the records stay in .method-runs. Steps whose definition and inputs match an earlier accepted run on this computer are reused.
 
 Usage:
 
 ```sh
 method run FILE.method [OPTIONS]
 method run WORKFLOW_ID [--version VERSION_ID] [--server URL] [OPTIONS]
+method run NAME [OPTIONS]
 ```
 
 Arguments and defaults:
@@ -1667,7 +1669,12 @@ Models come from the Method's models: (or the account default). --workspace sele
 --fresh: run every step; reuse nothing.
 --human FILE: answers for ask steps, as {steps: {"STEP": {outputs: {...}}}} (STEP:ITERATION, counted from 0, for a step with each or repeat).
 --verbose: print runtime events.
-Before a signed-in run of a FILE, corrections of the Method that wait (from the dashboard, or a fix that stopped) are fixed first, as method judge fixes them, with one line on stderr.
+NAME: the name of a Method in your workspace (not case-sensitive), run as method run ID runs it: the newest version. When several Methods have the name, the run does not start; the result lists their names and IDs (exit 2).
+Before a signed-in run of a FILE, the file takes the newest version of its Method. When a teammate saved a newer version, an unchanged file takes it, and a changed file combines it step by step and file by file; one line on stderr says whose version it took and which of your changes are kept. When you and a teammate changed the same step or the same script file, nothing runs and no file changes: the result has status needs_you and both texts of each part (exit 2). Combine them in the file, then run again. Offline, the file runs as it is, with one line. --resume does not change the file.
+Then corrections of the Method that wait (from the dashboard, or a fix that stopped) are fixed first, as method judge fixes them, with one line on stderr.
+When the same run (the same version and the same inputs) is already going in your workspace, one line says who started it and links to it; this run starts too. To find it, each run record has a sha256 of its inputs; a run whose content stays on devices (run_data: device) sends none, because a hash of short inputs can show them.
+A Method that uses shared state (method state) waits while another person's run holds the state, with one line, and starts when it is free. A run that stopped while it held the state stops this run, and the line names the person who must check it.
+A Method whose declared secrets are not on this computer stops before the first step with the list of missing keys, each with its method secret set command. A step that stops because a file is not on this computer names the file and who saved this version.
 Use method doctor to check the installed Node and configured tools.
 
 Result and changes:
@@ -1771,7 +1778,7 @@ Arguments and defaults:
 --run is the run that went wrong; the case must fail on it. --passing-run is the run the person accepted after the fix; the case must pass on it. With only --passing-run, the case pins behaviour that is already right. --rubric is a plain sentence that must be true of the output (repeatable); a model judges it with quotes. --ref selects the output to judge; the default is the Method's result. --context REF gives the judge other values to check against, such as the sources or the person's words (outputs.NAME or inputs.NAME); they are read, not judged. --expect FILE gives exact checks instead: {kind: equals, ref: outputs.NAME, value}, {kind: status, in: [STATUS]}, {kind: effect, effect: STEP/ITERATION/NAME, verdict: [VERDICT]}, or {kind: predicate, runtime: node, entrypoint: check.mjs}. --redact FILE maps recorded text to replacements. --accept-conflict TEXT keeps a case that conflicts with an instruction of the Method, with the person's answer.
 
 Result and changes:
-The saved case, with its result on each run. A case that the bad run already meets is refused: it does not capture the problem, or the note does not match the run. A case that can pass only by breaking an instruction of the Method's model steps is refused (case_conflicts): the error names the rule and the instruction.
+The saved case, with its result on each run. Its author is the signed-in person, so a refusal and the run notice name whose case it is. A case that the bad run already meets is refused: it does not capture the problem, or the note does not match the run. A case that can pass only by breaking an instruction of the Method's model steps is refused (case_conflicts): the error names the rule and the instruction.
 
 Errors:
 A case that does not fail on the bad run, or does not pass on the passing run; a case that conflicts with an instruction; an existing ID; an unreadable run.
