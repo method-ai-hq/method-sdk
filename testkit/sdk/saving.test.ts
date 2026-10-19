@@ -124,6 +124,13 @@ it('completes a run offline and the outbox sends the version and the run later',
   expect([...s.server.runs.values()][0].inspection.status).toBe('succeeded');
 }, 30_000);
 
+it('a run whose inputs cannot be read sends its failed record and leaves nothing in the outbox', async () => {
+  const s = setup(); writeMethod(s.file, 'inputs');
+  await methodMain(['run', s.file, '--inputs', join(s.root, 'missing.json'), '--run-dir', join(s.root, 'one')]).catch(() => {});
+  expect([...s.server.runs.values()].at(-1)?.inspection).toMatchObject({ status: 'failed', failure: { owner: 'setup', code: 'ENOENT' } });
+  expect(new Outbox(s.client).pending()).toBe(0);
+}, 30_000);
+
 it('an unreadable old run record from another process does not stop a version from saving', async () => {
   const s = setup(); writeMethod(s.file, 'blocked');
   const earlier = new Outbox(s.client, { write: () => {} });

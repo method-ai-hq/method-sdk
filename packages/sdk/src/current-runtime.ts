@@ -65,8 +65,11 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   let browser: Awaited<ReturnType<typeof openBrowser>>;
   try {
     try { sync = syncFactory?.(); } catch (error) { process.stderr.write(`Run records stay on this computer: ${(error as Error).message}\n`); }
-    // Records the start; sends nothing. The outbox starts when the run starts.
-    await sync?.start(method, json(flags.inputs) ?? {}, {}, false);
+    // Records the start; sends nothing. The outbox starts when the run starts. An inputs file that cannot be read fails
+    // the run below, with this record and no inputs.
+    let inputs = {};
+    try { inputs = json(flags.inputs) ?? {}; } catch { /* the run's setup failure */ }
+    await sync?.start(method, inputs, {}, false);
     // A run with its own OpenRouter key (config.classification.api_key_env) needs no Method sign-in for classification.
     const needs = accountNeeds(method, config);
     const classification = needs.classification ? managedClassification(client) : undefined;
