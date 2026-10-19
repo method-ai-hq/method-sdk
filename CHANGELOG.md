@@ -1,3 +1,10 @@
+# 0.18.1
+
+Run links work again when a run must first save a new version of its Method.
+
+- **The outbox no longer stops on an error from this computer.** A run folder that the CLI cannot read failed with a local error, and the outbox counted it as a lost connection. After three, it stopped before it sent the new version of a changed Method, so that run sent no records and its dashboard link stayed empty. Now only a lost connection, a stalled transfer, or a server error is retried. Any other failed item goes to the failed list, the CLI says why once, and the other items continue.
+- **A run whose inputs file cannot be read sends its failed record.** The run read `--inputs` before it recorded its start, so it had no record to send and its outbox item could never be sent. The run now records its start first and fails with a setup failure record.
+
 # 0.18.0
 
 Uses runtime 0.15.0. Model steps run on your own Claude Code or Codex subscription, and a correction fixes the Method on your computer in one step.
