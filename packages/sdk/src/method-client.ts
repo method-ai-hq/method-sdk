@@ -89,7 +89,7 @@ export class MethodClient {
       } catch (error: any) {
         const lost = error?.name === "TypeError" && !options.signal?.aborted;
         if (lost && method === "GET" && attempt < 3) { await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); continue; }
-        if (lost) throw Object.assign(Error(`Method cannot be reached at ${this.server} (${method} ${path}): ${error.cause?.code ?? error.message}. Check the connection and run again.`), { code: "network" });
+        if (lost) throw this.unreachable(method, path, error);
         throw error;
       }
     }
@@ -118,10 +118,14 @@ export class MethodClient {
         if (!response.ok) throw Object.assign(new Error(`${response.status}: ${Buffer.from(response.bytes).toString('utf8').slice(0, 1000)}`), { status: response.status, retryable: response.status >= 500 || response.status === 429 });
         return response.bytes;
       } catch (error: any) {
-        if (attempt >= (options.attempts ?? 3) || error.retryable === false) throw error;
+        if (attempt >= (options.attempts ?? 3) || error.retryable === false) throw error?.name === 'TypeError' ? this.unreachable(data ? 'PUT' : 'GET', path, error) : error;
         await new Promise(resolve => setTimeout(resolve, 500 * 2 ** (attempt - 1)));
       }
     }
+  }
+  /** A lost connection: code network, and the message says which server. */
+  private unreachable(method: string, path: string, error: any) {
+    return Object.assign(Error(`Method cannot be reached at ${this.server} (${method} ${path}): ${error.cause?.code ?? error.message}. Check the connection and run again.`), { code: "network" });
   }
   /** Send bytes in chunks and read the answer in chunks; a watchdog aborts when no bytes moved for stallMs. */
   private async send(path: string, method: string, options: {body?: Uint8Array | string; type?: string; token: string | null; signal?: AbortSignal; stallMs?: number; maxResponseBytes?: number; onProgress?: (sent: number) => void}) {

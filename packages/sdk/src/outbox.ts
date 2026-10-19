@@ -48,12 +48,13 @@ function recordSaved(item: VersionItem, versionNumber: number) {
   writePrivateJson(methodFile(item.server, item.method_id), { version_id: item.version_id, version_number: versionNumber, workflow: item.body.workflow });
 }
 
-/** Errors that a retry can fix: no response, a stalled transfer, a server error, or too many requests. */
+/** Errors that a retry can fix: no connection, a stalled transfer, a server error, or too many requests. */
 export function retryable(error: any) {
   const status = error?.status ?? Number(/^(\d{3}):/.exec(String(error?.message))?.[1]);
-  return !status || status >= 500 || status === 429 || status === 408;
+  return status ? status >= 500 || status === 429 || status === 408 : unreachable(error) || error?.code === 'stalled';
 }
-const networkError = (error: any) => !(error?.status ?? /^\d{3}:/.test(String(error?.message))) && error?.code !== 'stalled';
+/** The server cannot be reached. An error on this computer (an unreadable run folder) is not one. */
+const unreachable = (error: any) => error?.code === 'network';
 
 export class Outbox {
   private running: Promise<void> | undefined;
@@ -188,7 +189,7 @@ export class Outbox {
           }
           // No response, a server error, or too many requests: after 3 in a row, stop and keep the items for a later
           // command. A finished run never waits for a server that keeps failing.
-          if (networkError(error) || status >= 500 || status === 429) this.networkFailures++;
+          if (unreachable(error) || status >= 500 || status === 429) this.networkFailures++;
           const attempt = (this.retryAt.get(key)?.attempt ?? 0) + 1;
           this.retryAt.set(key, { at: Date.now() + Math.min(30_000, 500 * 2 ** (attempt - 1)), attempt });
         }).finally(() => { active.delete(key); this.settleWaiters(); this.wake?.(); }));
@@ -217,7 +218,7 @@ export class Outbox {
       this.lastProgress = Date.now();
     } catch (error: any) {
       const status = error?.status ?? Number(/^(\d{3}):/.exec(String(error?.message))?.[1]);
-      if (networkError(error) || status >= 500 || status === 429) this.networkFailures++;
+      if (unreachable(error) || status >= 500 || status === 429) this.networkFailures++;
     }
   }
   private async send(item: Item) {

@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { methodMain } from '../../packages/sdk/src/method.js';
 import { MethodClient } from '../../packages/sdk/src/method-client.js';
 import { writePrivateJson } from '../../packages/sdk/src/files.js';
@@ -121,6 +122,26 @@ it('completes a run offline and the outbox sends the version and the run later',
   await vi.waitFor(() => { expect(s.server.versions.size).toBe(1); expect(s.server.runs.size).toBe(1); }, { timeout: 5000 });
   await vi.waitFor(() => expect(new Outbox(s.client).pending()).toBe(0), { timeout: 5000 });
   expect([...s.server.runs.values()][0].inspection.status).toBe('succeeded');
+}, 30_000);
+
+it('an unreadable old run record from another process does not stop a version from saving', async () => {
+  const s = setup(); writeMethod(s.file, 'blocked');
+  const earlier = new Outbox(s.client, { write: () => {} });
+  const version = await prepareVersion(s.client, earlier, s.file);
+  // Old run folders with a link to the account but no run record, sent before the version: errors on this computer.
+  const dir = join(s.root, 'cache', 'outbox'), kinds = () => readdirSync(dir).filter(name => name.endsWith('.json')).sort().map(name => JSON.parse(readFileSync(join(dir, name), 'utf8')).kind);
+  for (let n = 0; kinds().filter(kind => kind !== 'file').indexOf('version') < 3; n++) {
+    const runDir = join(s.root, `old-${n}`); mkdirSync(runDir);
+    writePrivateJson(join(runDir, 'method-sync.json'), { schema: 'method-sync/1', server: s.client.server, id: randomUUID(), workflow_id: version.method_id, version_id: 'v_' + '0'.repeat(32), sequence: 0 });
+    earlier.add({ kind: 'run', server: s.client.server, run_dir: runDir, version_id: 'v_' + '0'.repeat(32), pid: 2 ** 22 + n });
+  }
+  // The package files are on the server already. A later command sends one item at a time, in the outbox's order.
+  for (const item of earlier.items()) if (item.kind === 'file') s.server.files.add(item.sha256);
+  const outbox = new Outbox(s.client, { concurrency: 1, write: () => {} });
+  await outbox.drain();
+  expect(await outbox.whenSaved(version.version_id)).toBe(true);
+  expect(s.server.versions.has(version.version_id)).toBe(true);
+  expect(outbox.pending()).toBe(0);
 }, 30_000);
 
 it('keeps the Method of a renamed file through its id line', async () => {
