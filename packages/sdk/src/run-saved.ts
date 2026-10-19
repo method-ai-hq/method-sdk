@@ -42,10 +42,14 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
       await client.request(statePath,'POST',{action:'release',run_id:request.run_id});
     }
     await MethodSync.retry(directory,client);process.stdout.write(JSON.stringify({...completed,sync:'saved'})+'\n');return completed;}}
-  flags=await withInputsFrom(flags,directory,undefined,client);
   const inputFile=join(directory,'requested-inputs.json');
-  const inputs=flags.inputs?JSON.parse(readFileSync(resolve(flags.inputs),'utf8')):existsSync(inputFile)?JSON.parse(readFileSync(inputFile,'utf8')):{};
-  writePrivateJson(inputFile,inputs);
+  // The start line already linked to this run: inputs that cannot be read fail it below, after its start is recorded.
+  let inputs:any={}, unreadable:unknown;
+  try {
+    flags=await withInputsFrom(flags,directory,undefined,client);
+    inputs=flags.inputs?JSON.parse(readFileSync(resolve(flags.inputs),'utf8')):existsSync(inputFile)?JSON.parse(readFileSync(inputFile,'utf8')):{};
+    writePrivateJson(inputFile,inputs);
+  } catch(error) { unreadable=error; }
   const setupFile=join(directory,'setup.json');
   const setupEvents=existsSync(setupFile)?JSON.parse(readFileSync(setupFile,'utf8')):[];
   setupEvents.push({at:new Date().toISOString(),type:'setup_started'});writePrivateJson(setupFile,setupEvents);
@@ -54,6 +58,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
   let acquired=false, started=false, revision=0;
   const statePath=`/api/cli/methods/${encodeURIComponent(saved.workflow_id)}/state`;
   try {
+    if(unreadable)throw unreadable;
     const resuming = !!flags.resume && existsSync(join(directory,'checkpoint.json'));
     if (resuming) assertCheckpointExecutor(JSON.parse(readFileSync(join(directory,'checkpoint.json'),'utf8')));
     else if(saved.package&&!supportedPackageRuntimes.has(saved.package.runtime))throw Object.assign(new Error(`This package records runtime ${saved.package.runtime}; installed executor: ${runtimeVersion}. Use an SDK release that supports this package runtime.`),{code:'needs_update'});

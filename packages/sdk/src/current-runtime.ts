@@ -52,9 +52,6 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
   const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
   if (flags.resume) assertCheckpointExecutor(json(join(flags['run-dir']!, 'checkpoint.json')));
-  const setup = await localSetup(file, flags, baseConfig);
-  let config = setup.config;
-  const sourceRoot = setup.sourceRoot;
   const method = (await import('./authoring.js')).readDocument(file);
   const controller = new AbortController();
   const stop = () => controller.abort(Object.assign(new Error("Interrupted by operator"), { code: "interrupted" }));
@@ -70,6 +67,9 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     let inputs = {};
     try { inputs = json(flags.inputs) ?? {}; } catch { /* the run's setup failure */ }
     await sync?.start(method, inputs, {}, false);
+    const setup = await localSetup(file, flags, baseConfig);
+    let config = setup.config;
+    const sourceRoot = setup.sourceRoot;
     // A run with its own OpenRouter key (config.classification.api_key_env) needs no Method sign-in for classification.
     const needs = accountNeeds(method, config);
     const classification = needs.classification ? managedClassification(client) : undefined;

@@ -131,6 +131,24 @@ it('a run whose inputs cannot be read sends its failed record and leaves nothing
   expect(new Outbox(s.client).pending()).toBe(0);
 }, 30_000);
 
+it('a run whose setup fails sends its failed record', async () => {
+  const s = setup(); writeMethod(s.file, 'setup');
+  // This computer's settings file is damaged.
+  mkdirSync(join(s.root, 'config'), { recursive: true }); writeFileSync(join(s.root, 'config', 'computer.json'), '{');
+  await methodMain(['run', s.file, '--run-dir', join(s.root, 'one')]).catch(() => {});
+  expect([...s.server.runs.values()].at(-1)?.inspection).toMatchObject({ status: 'failed', failure: { owner: 'setup' } });
+  expect(new Outbox(s.client).pending()).toBe(0);
+}, 30_000);
+
+it('prints no run link for a Method file that does not load', async () => {
+  const s = setup(); writeFileSync(s.file, JSON.stringify({ format: 'method/3.4', name: 'Broken' }));
+  const argv = [...process.execArgv]; process.execArgv = ['--import', 'tsx'];
+  try { await methodMain(['run', s.file, '--background', '--run-dir', join(s.root, 'one')]); } finally { process.execArgv = argv; }
+  const started = (process.stdout.write as any).mock.calls.map((call: any[]) => String(call[0])).find((line: string) => line.includes('"started"'));
+  expect(JSON.parse(started)).toMatchObject({ status: 'started' });
+  expect(JSON.parse(started)).not.toHaveProperty('dashboard');
+}, 30_000);
+
 it('an unreadable old run record from another process does not stop a version from saving', async () => {
   const s = setup(); writeMethod(s.file, 'blocked');
   const earlier = new Outbox(s.client, { write: () => {} });

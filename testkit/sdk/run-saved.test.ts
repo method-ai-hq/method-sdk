@@ -105,3 +105,10 @@ it('sends its records with the run ID that the start line linked to',async()=>{
  expect(await runSaved(f.saved,f.flags,f.client)).toMatchObject({status:'completed'});
  expect(f.client.request.mock.calls.some(([path]:any[])=>path==='/api/cli/runs/5d1f7c3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f')).toBe(true);
 });
+// The start line already linked to the run: a run whose inputs file cannot be read sends a failed record to that link.
+it('sends a failed record when its inputs file cannot be read',async()=>{
+ const f=fixture();
+ await expect(runSaved(f.saved,{...f.flags,inputs:join(f.root,'missing.json')},f.client)).rejects.toMatchObject({code:'ENOENT'});
+ const sent=f.client.request.mock.calls.filter(([path,verb]:any[])=>path.startsWith('/api/cli/runs/')&&verb==='PUT').map(([,,body]:any[])=>body.inspection);
+ expect(sent.at(-1)).toMatchObject({status:'failed',failure:{owner:'setup',code:'ENOENT'}});
+});

@@ -4,7 +4,7 @@ import runtimeInfo from '@withmethod/runtime/package.json' with { type: 'json' }
 import { startRunWorker, waitForRun, cancelRun, workerAlive } from './run-worker.js';
 import { methodCache } from './prepare.js';
 import { restorePackage } from './method-files.js';
-import { publish } from './versions.js';
+import { publish, methodContent } from './versions.js';
 import { runSaved } from './run-saved.js';
 import { bindInput, bindConnection } from './bindings.js';
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -26,6 +26,11 @@ import { methodHelp, overviewHelp as help } from "./method-help.js";
 function safePath(path: string) {
   return authoringPath(path);
 }
+/** A run target that can save a version: a saved Method (ID or link), or a Method file that loads. */
+function loads(target?: string) {
+  if (!target || !existsSync(target)) return true;
+  try { loadWorkflow(methodContent(readDocument(target))); return true; } catch { return false; }
+}
 async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>['values'], extra: string[] = [], savedClient?: MethodClient) {
   if (process.env.METHOD_RUN_WORKER === '1' || (!/[/\\]method\.(?:js|ts)$/.test(process.argv[1] ?? '') && !flags.background)) return false;
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
@@ -40,8 +45,9 @@ async function dispatchRunWorker(args: string[], flags: ReturnType<typeof parse>
     const resolved = await withInputsFrom(flags, directory, /\.method$/i.test(args[1] ?? '') ? args[1] : undefined, client);
     workerArgs = [...withoutOptions(workerArgs, ['inputs-from', 'inputs']), '--inputs', resolved.inputs!];
   }
-  // A new run of a signed-in computer is synced; a resumed run keeps the link that it has.
-  const server = !flags.resume && client?.token() ? client.server : undefined;
+  // A new run of a signed-in computer is synced; a resumed run keeps the link that it has. A Method file that does not
+  // load saves no version, so its run sends no record and gets no link.
+  const server = !flags.resume && client?.token() && loads(args[1]) ? client.server : undefined;
   await startRunWorker(workerArgs, directory, flags.background, server);
   return true;
 }

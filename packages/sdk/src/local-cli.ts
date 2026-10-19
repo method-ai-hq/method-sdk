@@ -76,10 +76,10 @@ async function accountSync(path: string, flags: ReturnType<typeof parse>["values
       return { client, outbox, version, sync: () => new Sync(client, runDir, state.workflow_id, state.version_id, state.id, readDocument(path).run_data === "device", outbox) };
     }
     const method = readDocument(path);
-    const setup = await localSetup(path, flags);
-    const needs = accountNeeds(method, setup.config);
-    if (needs.classification && !client.token()) await client.login();
-    if (!client.token()) { process.stderr.write(`Sign in to keep versions and runs in your account${needs.models ? " and to use hosted models" : ""}: method login\n`); return undefined; }
+    // A setup that fails here fails the run too, and the run sends its failed record.
+    const needs = await localSetup(path, flags).then(setup => accountNeeds(method, setup.config), () => undefined);
+    if (needs?.classification && !client.token()) await client.login();
+    if (!client.token()) { process.stderr.write(`Sign in to keep versions and runs in your account${needs?.models ? " and to use hosted models" : ""}: method login\n`); return undefined; }
     const version = await prepareVersion(client, outbox, path);
     // A run started by the run worker keeps the ID that its start line linked to.
     return { client, outbox, version, sync: () => new Sync(client, runDir, version.method_id, version.version_id, workerRunId(runDir), method.run_data === "device", outbox) };
