@@ -1,3 +1,11 @@
+# 0.18.2
+
+Every run that prints a dashboard link sends a record to it.
+
+- **A run whose setup fails sends its failed record.** The run records its start before its setup, so a setup error (for example a damaged `computer.json`) shows on the run's page with its reason. Before, the run kept no account link and the page stayed empty.
+- **`method run wf_ID` with an inputs file that cannot be read sends its failed record.** It reads the inputs after it records its start.
+- **The start line has no link when the Method file does not load.** Such a run saves no version and can send no record; the error shows in the terminal.
+
 # 0.18.1
 
 Run links work again when a run must first save a new version of its Method.
