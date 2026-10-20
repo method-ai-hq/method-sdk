@@ -1,3 +1,24 @@
+# 0.20.0
+
+Uses runtime 0.16.1. A correction gets a real, safe test, the answer comes back in plain words, and what the agent learned stays visible and can be undone.
+
+- **`method judge RUN_ID wrong` returns at once.** It records the correction, starts the fix in its own process (one fix per Method on a computer, as before), and prints `Working on it. I'll test a fix on this run.` A shell time limit no longer loses a fix.
+- **`method wait`** (or `method wait JUDGMENT_ID`) prints what the fix did, in plain words: `Fixed: replies now include the redline. Tested 3 times on this NDA and on 2 earlier ones. Undo: method undo.`, `No fix found yet: …`, `Could not test a fix safely: this agent can send email. I added your note as a rule and will check it on the next runs.`, and others. After a fix it prints what the fixed agent gives now, from the test, so the agent never runs a Method that sends things again to show it. It waits up to 100 seconds (`--timeout`); run it again when it says it is still working. The next `method run` of the Method prints the outcomes not yet shown first.
+- **Questions.** When the fix needs one answer, `method wait` prints the question. `method answer JUDGMENT_ID "THEIR WORDS"` sends the person's words and starts the fix again with them. The plugin and the authoring guide tell the agent to show the question word for word and never to answer it. The 0.17.2 instruction to ask in chat before recording a correction is removed.
+- **A correction is judged on what the person saw.** The case is made from the whole result (a result with several values works now), the files the run wrote, and the messages and calls it made, each with its ref (`result`, `file:PATH`, `effect:NAME`, `outputs.NAME`). A note about form or a missing action also gets a small check script. A sentence is kept only when it fails on the corrected run and passes on every approved run of the same step.
+- **Two judges.** When both Claude Code and Codex are signed in, the case's sentences are judged on both (runtime option `judges`), in `method test`, in the fix loop's tests and when a correction's case is made; a sentence the two disagree on fails as unsure.
+- **`method learned FILE`** lists the rules the agent learned from corrections, with who taught each one and how often it applied; `--remove NUMBER` retires one. `learned.json` is saved with each version.
+- **`method undo [FILE]`** restores the Method, and the files the change wrote, as they were before Method's last fix, pruning change, or removed rule, and saves that as a new version.
+- **Fixes are watched.** After a run, its output is judged in the background against the corrections that fixes and rules of the last 30 days answered, with no rerun, and the account gets `{held}` for each. When a problem comes back on 2 runs, the account opens the correction again and the next run says so, with `method undo`.
+- **A later check after each fix.** After a fix is applied, the Method's other saved corrections run in the background. When one fails, the fix is undone and its correction waits for a new fix (the next run says so); when the failing one belongs to a rule that a cleanup removed, that rule comes back.
+- **Pruning.** After every 5 corrections that a fix answered, or when the agent that runs the fixes changes, the fix runs a pruning pass that removes learned rules and prompt text that no longer change any result. The next run shows what it removed, with undo, and which instructions nothing checks.
+- The fix reads improve.method's result as it is: `outcomes` (JSON text, one per correction), `background_cases` and `summary`. A correction marked `again` (another fix changed the same part) is fixed again in the next pass, on the changed file. `METHOD_IMPROVE_METHOD=PATH` runs a local improve.method for development.
+- **`method test`** takes `--runs N`, `--min-pass N`, `--live STEP`, `--no-judge-cache` and `--keep-dir DIR`, for the fix loop's real tests.
+- **Copies of what a run read stay on this computer.** A case's `snapshot/` folder is never uploaded with a version.
+- **Plain lines.** The lines for people no longer name cases, steps, criteria, judges, versions, IDs, paths or run counts: `Gráinne's case dates-conflict` is now `Gráinne's correction ("…")`, and two opposite judgments read `Two people disagree about this result: …`.
+- Run records keep the `considered` and `applied` rule IDs of `learned.applied` events, also in the device form.
+- The outcomes sent to the account are `fixed`, `no_fix_found` (was `no_change`), `could_not_test` with its reason, `question` with the question, `held`, `not_reproduced`, `not_fixable_here` and `already_changed`.
+
 # 0.19.0
 
 Several people can change, run and correct the same Method at the same time. Nobody loses work, and only a true contradiction stops the work.

@@ -3,8 +3,11 @@ import { basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULT_SERVER, type MethodClient } from './method-client.js';
 import { deviceRun, findRunFolder, methodFileOfRun, saveLocalJudgment } from './local-judgments.js';
-import { fixCorrection, waitingLine, type RunFile } from './improve.js';
 import { catchUp, readHome } from './home.js';
+import { readDocument } from './authoring.js';
+import { localJudgments } from './local-judgments.js';
+import { fixStarter, markWorking, saveError, storedOutcomes } from './fix-outcomes.js';
+import { approvedLine, heldPairLine, notHereLine, workingAnswerLine, workingLine } from './fix-lines.js';
 
 export const maxNoteLength = 4000;
 export const maxCorrectedBytes = 1024 * 1024;
@@ -19,29 +22,20 @@ export function correctedValue(path: string): unknown {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-/** The line that says what was recorded. */
-export function judgmentLine(judgment: Pick<Judgment, 'verdict' | 'step_id'>) {
-  return `Recorded: ${judgment.verdict}${judgment.step_id ? ` on step ${judgment.step_id}` : ''}.`;
-}
-
 /**
  * `method judge RUN_ID right|wrong [--step ID] [--note TEXT] [--corrected FILE] [--json]`: record the person's reaction
  * to a run's result. RUN_ID is the dashboard run ID or this computer's run ID; the server resolves both. When the run's
  * content stays on this computer (run_data: device), the account gets the verdict and step only, and the judgment with
- * its note and corrected result goes in .method/judgments.jsonl next to the Method file. A wrong judgment then fixes the
- * Method here, in the foreground: method judge makes a regression case from the note, finds a change with the user's
- * own Claude Code or Codex, and applies it only when it fixes the run and breaks no earlier correction. When a fix of
- * the same Method already runs on this computer, the correction joins it: that fix takes it in one more pass, and this
- * command waits for it. It prints one line: what changed, or why nothing did.
+ * its note and corrected result goes in .method/judgments.jsonl next to the Method file. A wrong judgment then starts
+ * the fix on this computer in its own process and returns at once with one line; method wait prints what the fix did,
+ * and so does the next method run of the Method.
  */
-export async function judgeCommand(args: string[], clientFactory: (server: string) => MethodClient, options: { run?: RunFile } = {}) {
-  // The output stream at the start: a fix that runs in this process sends its run's own output to a log meanwhile.
-  const print = process.stdout.write.bind(process.stdout);
+export async function judgeCommand(args: string[], clientFactory: (server: string) => MethodClient) {
   const usage = 'Use method judge RUN_ID right|wrong [--step STEP_ID] [--note TEXT] [--corrected FILE], or method judge RUN_ID keep JUDGMENT_ID.';
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     step: { type: 'string' }, note: { type: 'string' }, corrected: { type: 'string' }, json: { type: 'boolean' }, server: { type: 'string' } } });
   const [runId, verdict] = positionals;
-  if (runId && verdict === 'keep' && positionals.length === 3) return keepCommand(runId, positionals[2]!, values, clientFactory, options);
+  if (runId && verdict === 'keep' && positionals.length === 3) return keepCommand(runId, positionals[2]!, values, clientFactory);
   if (!runId || !verdict || positionals.length !== 2) throw Error(usage);
   if (verdict !== 'right' && verdict !== 'wrong') throw Error(`Judge the result right or wrong, not ${verdict}. ${usage}`);
   const note = values.note?.trim();
@@ -63,35 +57,34 @@ export async function judgeCommand(args: string[], clientFactory: (server: strin
     id: response.judgment.id, run_id: runId, account_run_id: response.judgment.run_id ?? null, run_dir: runDir!, method_id: response.judgment.method_id ?? null,
     file: basename(runFile), step_id: step ?? null, verdict, note: note ?? null, ...(corrected !== undefined ? { corrected } : {}), created_at: response.judgment.created_at,
   });
-  const recorded = judgmentLine(response.judgment);
   // A judgment that contradicts another person's judgment of the same step is held: show both, with the two choices.
   const pairs = response.held ? await heldPairs(client, response.judgment.method_id, response.judgment.id) : [];
-  if (verdict === 'right' || response.held) { print(values.json ? JSON.stringify({ judgment: response.judgment, ...(pairs.length ? { held: pairs } : {}) }, null, 2) + '\n' : [recorded, ...pairs.map(heldLine)].join('\n') + '\n'); return; }
-  return fixAfter(client, response.judgment, recorded, runFile, values, options, pairs, print);
-}
-
-/** The run's Method file fixes the correction: the file that ran the run, else the Method's home file on this computer. */
-async function fixAfter(client: MethodClient, judgment: Pick<Judgment, 'id' | 'method_id'>, recorded: string, runFile: string | undefined, values: { json?: boolean }, options: { run?: RunFile }, pairs: HeldPair[],
-  print: (text: string) => boolean = process.stdout.write.bind(process.stdout)) {
-  const home = judgment.method_id ? readHome(client.server, judgment.method_id)?.path : undefined;
-  const file = runFile ?? (home && existsSync(home) ? home : undefined);
-  const held = pairs.map(heldLine), extra = pairs.length ? { held: pairs } : {};
-  if (!file) {
-    const line = `${recorded} The Method file is not on this computer, so the next method run of it on a computer fixes it.`;
-    print(values.json ? JSON.stringify({ judgment, fix: null, ...extra }, null, 2) + '\n' : [line, ...held].join('\n') + '\n');
+  if (verdict === 'right' || response.held) {
+    print(values.json ? { judgment: response.judgment, ...(pairs.length ? { held: pairs } : {}) } : [verdict === 'right' && !response.held ? approvedLine : 'Noted.', ...pairs.flatMap(heldLines)]);
     return;
   }
+  return startFix(client, response.judgment, runFile, values);
+}
+const print = (value: unknown) => process.stdout.write(Array.isArray(value) ? value.join('\n') + '\n' : JSON.stringify(value, null, 2) + '\n');
+
+/** The run's Method file fixes the correction: the file that ran the run, else the Method's home file on this computer. */
+export function fileForJudgment(server: string, judgment: Pick<Judgment, 'method_id'>, runFile: string | undefined) {
+  const home = judgment.method_id ? readHome(server, judgment.method_id)?.path : undefined;
+  return runFile ?? (home && existsSync(home) ? home : undefined);
+}
+
+/** Start the fix of a correction in its own process and return: method wait gives its outcome. */
+async function startFix(client: MethodClient, judgment: Pick<Judgment, 'id' | 'method_id'>, runFile: string | undefined, values: { json?: boolean }, line = workingLine) {
+  const file = fileForJudgment(client.server, judgment, runFile);
+  if (!file || !judgment.method_id) { print(values.json ? { judgment, fix: null } : [notHereLine]); return; }
   // The fix starts from the newest version; a teammate's change of the same step stops it until the person combines them.
   const caught = await catchUp(client, file, 'fixing');
-  if (caught.status === 'conflict') {
-    print(values.json ? JSON.stringify({ judgment, fix: null, stopped: caught.result, ...extra }, null, 2) + '\n' : [`${recorded} ${caught.result.failure.headline}`, ...held].join('\n') + '\n');
-    process.exitCode = 2; return;
-  }
+  if (caught.status === 'conflict') { print(values.json ? { judgment, fix: null, stopped: caught.result } : [caught.result.failure.headline]); process.exitCode = 2; return; }
   if ('line' in caught) process.stderr.write(caught.line + '\n');
-  const fix = await fixCorrection(client, file, judgment.id, options);
-  if (values.json) { print(JSON.stringify({ judgment, fix: fix ?? null, ...extra }, null, 2) + '\n'); return; }
-  const line = !fix ? `${recorded} Another loop is fixing it.` : fix.corrections > 1 ? `${recorded} ${waitingLine(fix)}` : `${recorded} ${fix.line}`;
-  print([line, ...held].join('\n') + '\n');
+  markWorking(judgment.method_id, file, [judgment.id]);
+  try { await fixStarter.start(file, judgment.method_id, [judgment.id], client.server); }
+  catch (error: any) { saveError(judgment.method_id, file, judgment.id, error.message); throw error; }
+  print(values.json ? { judgment, fix: { status: 'working', wait: `method wait ${judgment.id}` } } : [line]);
 }
 
 /** Two judgments of the same run and step by two people with opposite verdicts: neither is fixed until one is kept. */
@@ -111,18 +104,41 @@ async function heldPairs(client: MethodClient, methodId: string | undefined, min
   }
   return pairs;
 }
-const heldLine = (pair: HeldPair) => {
-  const said = (j: HeldPair['judgments'][number]) => `${j.noted_by ?? 'Someone'} says it is ${j.verdict}${j.note ? ` ("${j.note.slice(0, 200)}")` : ''}`;
-  return `Held: ${pair.step_id ? `step ${pair.step_id} of run ${pair.run_id}` : `run ${pair.run_id}`}. ${pair.judgments.map(said).join('; ')}. Nothing is fixed until one is kept: ${pair.judgments.map(j => `method judge ${pair.run_id} keep ${j.id} (${j.noted_by ?? 'this one'}'s)`).join(' or ')}.`;
-};
+/** The person's line of a held pair, then the agent's line with the two commands. */
+const heldLines = (pair: HeldPair) => [heldPairLine(pair.judgments),
+  `Ask the person which one is right, then keep it: ${pair.judgments.map(j => `method judge ${pair.run_id} keep ${j.id} (${j.noted_by ?? 'this one'}'s)`).join(' or ')}.`];
 
 /** `method judge RUN keep JUDGMENT_ID`: keep this judgment of a held pair; the other one is set aside. A kept wrong judgment is fixed. */
-async function keepCommand(runId: string, judgmentId: string, values: { json?: boolean; server?: string }, clientFactory: (server: string) => MethodClient, options: { run?: RunFile }) {
+async function keepCommand(runId: string, judgmentId: string, values: { json?: boolean; server?: string }, clientFactory: (server: string) => MethodClient) {
   const client = clientFactory(values.server ?? DEFAULT_SERVER);
   const response = await client.request<{ judgment?: Judgment & { noted_by?: string | null } }>(`/api/judgments/${encodeURIComponent(judgmentId)}/settle`, 'POST', { keep: true });
   const kept = response.judgment;
-  const recorded = `Kept ${kept?.noted_by ? `${kept.noted_by}'s judgment` : 'this judgment'}${kept?.verdict ? ` (${kept.verdict})` : ''}; the other one is set aside.`;
-  if (kept?.verdict !== 'wrong' || !kept.method_id) { process.stdout.write(values.json ? JSON.stringify({ judgment: kept ?? { id: judgmentId } }, null, 2) + '\n' : recorded + '\n'); return; }
+  const recorded = `Kept ${kept?.noted_by ? `${kept.noted_by}'s view` : 'this view'}: the result is ${kept?.verdict ?? 'as judged'}.`;
+  if (kept?.verdict !== 'wrong' || !kept.method_id) { print(values.json ? { judgment: kept ?? { id: judgmentId } } : [recorded]); return; }
   const runDir = findRunFolder(runId);
-  return fixAfter(client, kept, recorded, runDir ? methodFileOfRun(runDir) : undefined, values, options, []);
+  return startFix(client, kept, runDir ? methodFileOfRun(runDir) : undefined, values, `${recorded} ${workingLine}`);
+}
+
+/**
+ * `method answer JUDGMENT_ID "THEIR WORDS"`: send the person's answer to the question that a fix asked, and start the
+ * fix again with it. For a Method whose run content stays on this computer, the account keeps no answer, so the words
+ * also stay next to the Method file.
+ */
+export async function answerJudgmentCommand(args: string[], clientFactory: (server: string) => MethodClient) {
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { json: { type: 'boolean' }, server: { type: 'string' } } });
+  const [id, ...words] = positionals, answer = words.join(' ').trim();
+  if (!id || !answer) throw Error('Use method answer JUDGMENT_ID "THE PERSON\'S WORDS".');
+  if (answer.length > maxNoteLength) throw Error(`The answer has ${answer.length} characters; the most is ${maxNoteLength}.`);
+  const stored = storedOutcomes().find(r => r.judgment === id);
+  const file = stored && existsSync(stored.file) ? stored.file : undefined;
+  const device = !!file && readDocument(file).run_data === 'device';
+  const client = clientFactory(values.server ?? DEFAULT_SERVER);
+  // The account keeps no answer for a device Method; the words stay next to the Method file.
+  const response = await client.request<{ judgment: Judgment }>(`/api/cli/judgments/${encodeURIComponent(id)}/answer`, 'POST', { answer });
+  const judgment = response.judgment ?? { id, method_id: stored?.method_id };
+  if (device && file) {
+    const before = localJudgments(file).filter(j => j.id === id).at(-1);
+    if (before) saveLocalJudgment(file, { ...before, answer });
+  }
+  return startFix(client, { id, method_id: judgment.method_id ?? stored?.method_id ?? '' }, file, values, workingAnswerLine);
 }

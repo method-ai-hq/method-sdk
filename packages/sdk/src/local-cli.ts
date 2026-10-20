@@ -45,7 +45,8 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
     flags = await withInputsFrom(flags, flags["run-dir"]!, path, client);
   }
   const account = syncFactory ? undefined : await accountSync(path, flags);
-  try { await runCurrentFile(path, flags, syncFactory ?? account?.sync); }
+  let result: { status: string } | undefined;
+  try { result = await runCurrentFile(path, flags, syncFactory ?? account?.sync); }
   finally {
     if (account) {
       // The run's records were sent when it finished; this sends what is left and says where the version is.
@@ -53,6 +54,11 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
       process.stderr.write(savedLine(account.client, account.outbox, account.version) + "\n");
       // Script cards are made after the run, so that this run's inputs can be replayed. They never delay or fail it.
       if (savedVersions(account.client.server)[account.version.version_id]) (await import("./explain.js")).startBackgroundExplain(path, account.version.workflow, account.version.version_id, account.client.server);
+      // The output of this run is judged against the corrections that recent fixes answered, in the background.
+      if (result?.status === "completed" && !flags.resume) {
+        const { watchedCorrections } = await import("./watch.js");
+        if (watchedCorrections(path).length) (await import("./fix-outcomes.js")).fixStarter.watch(path, flags["run-dir"]!, account.client.server);
+      }
     }
   }
 }

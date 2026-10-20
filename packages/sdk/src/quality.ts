@@ -1,16 +1,17 @@
 /** Effect observation, recorded cases, the save gate, and library observers. */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { parseArgs } from "node:util";
 import { observeRun, pendingRuns } from "@withmethod/runtime/observe.js";
-import { createCase, retireCase, listCases, testSuite, defaultCasesDir } from "@withmethod/runtime/cases.js";
+import { createCase, retireCase, listCases, testSuite, defaultCasesDir, evaluate } from "@withmethod/runtime/cases.js";
 import { authoringPath, editDocument, readDocument } from "./authoring.js";
 import { localSetup } from "./local-setup.js";
 import { resolveAgentProfiles, checkAgents, accountNeeds } from "./capabilities.js";
-import { localAgent, resolveModels } from "@withmethod/runtime/agents.js";
+import { agentSignedIn, localAgent, resolveModels } from "@withmethod/runtime/agents.js";
+import { executable } from "@withmethod/runtime/io.js";
 import { hostedModelsFor, managedModels } from "./hosted-models.js";
 import { managedClassification } from "./classification-client.js";
 import { MethodClient } from "./method-client.js";
@@ -45,6 +46,8 @@ export async function preparedConfig(file: string, flags: { workspace?: string }
   if (classification) config.classification = await classification.resolve(new AbortController().signal);
   await checkAgents(config.models);
   const prepared = await prepareRuntime(setup.sourceRoot, config, method);
+  // A case's check script runs on Node, which the CLI itself runs on.
+  prepared.config.runtimes = { node: { command: process.execPath, version: process.version }, ...prepared.config.runtimes };
   const hostedModels = Object.values(prepared.config.models ?? {}).some((profile: any) => profile.backend === 'method') ? await hostedModelsFor(client) : undefined;
   return { config: prepared.config, sourceRoot: setup.sourceRoot, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, ...(hostedModels ? { hostedModels } : {}), ...(classification ? { classification } : {}) };
 }
@@ -78,7 +81,7 @@ export async function observeCommand(args: string[]) {
 export function methodFingerprint(file: string) {
   const folder = dirname(file), method = readDocument(file);
   const parts: string[] = [readFileSync(file, "utf8")];
-  const paths = new Set<string>(method.files ?? []);
+  const paths = new Set<string>([...(method.files ?? []), ...(existsSync(join(folder, "learned.json")) ? ["learned.json"] : [])]);
   for (const step of Object.values(method.steps ?? {}) as any[]) {
     for (const exec of [step.do, step.check]) if (exec?.kind === "run") paths.add(exec.entrypoint);
     for (const effect of Object.values(step.effects ?? {}) as any[]) for (const exec of [effect.observe, effect.judge]) if (exec?.kind === "run") paths.add(exec.entrypoint);
@@ -91,17 +94,36 @@ function recordChecked(file: string, report: any) {
   mkdirSync(dirname(checkedFile(file)), { recursive: true, mode: 0o700 });
   writePrivateJson(checkedFile(file), { file, fingerprint: methodFingerprint(file), passed: report.passed, cases: report.cases.length, at: new Date().toISOString() });
 }
-/** A case as a person reads it: "Gráinne's case dates-conflict: the note" when the case names who made it. */
-export const caseName = (c: { id: string; author?: string | null; note?: unknown }) => `${c.author}'s case ${c.id}: ${String(c.note ?? "").slice(0, 200).replace(/[.\s]+$/, "")}`;
-/** One line for method run when the Method changed since its cases last passed. Cases with an author are named. */
+/** One line for method run when the Method changed since its earlier corrections last passed. Their authors are named. */
 export async function casesNotice(file: string) {
   const cases = (await listCases(file)).filter((c: any) => c.status === "active");
   if (!cases.length) return undefined;
   let checked: any;
   try { checked = JSON.parse(readFileSync(checkedFile(file), "utf8")); } catch { /* never checked */ }
   if (checked?.passed && checked.fingerprint === methodFingerprint(file)) return undefined;
-  const named = cases.filter((c: any) => c.author);
-  return `${cases.length} case${cases.length === 1 ? "" : "s"} not checked since this Method changed${named.length ? ` (${named.map(caseName).join("; ")})` : ""}: method test ${file}`;
+  const { uncheckedLine, correctionName } = await import("./fix-lines.js");
+  return uncheckedLine(cases.length, cases.filter((c: any) => c.author).map(correctionName), `method test ${basename(file)}`);
+}
+
+/**
+ * The judge profiles for a rubric: the configured judge, and when it is the user's own Claude Code or Codex and the
+ * other one is installed and signed in too, that one as well. A judge that the Method names is the only judge.
+ */
+export async function judgeProfiles(config: any): Promise<any[]> {
+  const first = config?.models?.judge;
+  if (!first) return [];
+  if (!["claude", "codex"].includes(first.backend) || first.command || first.model) return [first];
+  const other = first.backend === "claude" ? "codex" : "claude";
+  try { await executable(other); } catch { return [first]; }
+  return await agentSignedIn(other) ? [first, { backend: other }] : [first];
+}
+
+/**
+ * Evaluate a case's expectations with every judge profile (the runtime's judges option). A criterion passes only when
+ * every judge passes it; when the judges disagree it fails as unsure.
+ */
+export async function evaluateWithJudges(expect: any[], outcome: any, context: { caseDir: string; config: any; options?: any }, profiles: any[]) {
+  return evaluate(expect, outcome, profiles.length < 2 ? context : { ...context, options: { ...context.options, judges: profiles } });
 }
 
 const signedIn = new Map<string, Promise<string | null>>();
@@ -125,20 +147,29 @@ async function declaredSecrets(file: string) {
 }
 
 /** Run the cases of a Method with the same preparation as method run. */
-export async function runCases(file: string, flags: { workspace?: string }, options: { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[]; once?: boolean } = {}) {
+export type CaseRunOptions = { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[]; once?: boolean;
+  runs?: number | undefined; minPass?: number | undefined; live?: string[] | undefined; judgeCache?: boolean | undefined; keepDir?: string | undefined };
+export async function runCases(file: string, flags: { workspace?: string }, options: CaseRunOptions = {}) {
   const prepared = await preparedConfig(file, flags, { judge: true });
-  const report = await testSuite(file, prepared.config, { ...options,
+  // Claude Code and Codex both judge when both are signed in; a disagreement fails the criterion as unsure.
+  const judges = await judgeProfiles(prepared.config);
+  const report = await testSuite(file, prepared.config, { ...options, ...(judges.length > 1 ? { judges } : {}),
     runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, secrets: await declaredSecrets(file), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } });
-  if (!options.ids && !options.casesDir && !options.once) recordChecked(file, report);
+  if (!options.ids && !options.casesDir && !options.once && !options.runs && !options.live?.length) recordChecked(file, report);
   return report;
 }
 
 export async function testCommand(args: string[]) {
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" }, once: { type: "boolean" } } });
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" }, once: { type: "boolean" },
+    runs: { type: "string" }, "min-pass": { type: "string" }, live: { type: "string", multiple: true }, "no-judge-cache": { type: "boolean" }, "keep-dir": { type: "string" } } });
   const file = positionals[0];
-  if (!file || positionals.length !== 1) throw Error("Use method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--once]");
+  const usage = "Use method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--once | --runs N [--min-pass N]] [--live STEP]... [--no-judge-cache] [--keep-dir DIR]";
+  if (!file || positionals.length !== 1) throw Error(usage);
+  const count = (value: string | undefined, name: string) => { if (value === undefined) return undefined; const n = Number(value); if (!Number.isSafeInteger(n) || n < 1 || n > 20) throw Error(`${name} must be a number from 1 to 20. ${usage}`); return n; };
   const report = await runCases(authoringPath(file), values, { casesDir: values.cases ? authoringPath(values.cases) : undefined, ids: values.case,
-    baseline: values.baseline ? authoringPath(values.baseline) : undefined, newIds: values.new ?? [], once: !!values.once });
+    baseline: values.baseline ? authoringPath(values.baseline) : undefined, newIds: values.new ?? [], once: !!values.once,
+    runs: count(values.runs, "--runs"), minPass: count(values["min-pass"], "--min-pass"), live: values.live?.flatMap(step => step.split(",")).map(step => step.trim()).filter(Boolean),
+    ...(values["no-judge-cache"] ? { judgeCache: false } : {}), keepDir: values["keep-dir"] ? authoringPath(values["keep-dir"]) : undefined });
   print(report);
   process.exitCode = report.passed ? 0 : 1;
 }
@@ -151,15 +182,15 @@ export async function caseGate(file: string, accept: string[] = [], reason?: str
   const cases = (await listCases(file)).filter((c: any) => c.status === "active");
   if (!cases.length) return { line: undefined, report: undefined };
   // A save checks every case; say so first, because live model steps and judges take time and cost money.
-  process.stderr.write(`Checking ${cases.length} case${cases.length === 1 ? "" : "s"} before saving. Cases whose model steps changed run them live, up to three times each.\n`);
+  process.stderr.write(`Checking ${cases.length} earlier correction${cases.length === 1 ? "" : "s"} before saving. Parts of the agent that changed run again, which can take a few minutes.\n`);
   const report = await runCases(file, {});
-  const t = report.totals;
-  process.stderr.write(`Cases checked in ${Math.round(t.duration_ms / 1000)} s: ${t.live_model_steps} live model step${t.live_model_steps === 1 ? "" : "s"}, ${t.judge_calls} judge call${t.judge_calls === 1 ? "" : "s"}.\n`);
+  process.stderr.write(`Checked in ${Math.round(report.totals.duration_ms / 1000)} s.\n`);
   const failing = report.cases.filter((c: any) => !["pass", "fixed"].includes(c.verdict));
   const unaccepted = failing.filter((c: any) => !accept.includes(c.id));
-  const authors = new Map(cases.map((c: any) => [c.id, c.author]));
-  const shown = (c: any) => authors.get(c.id) ? `${caseName({ ...c, author: authors.get(c.id) })} (${c.verdict})` : `${c.id} (${c.verdict}: ${c.note})`;
-  if (unaccepted.length) throw Object.assign(Error(`This version breaks ${unaccepted.length} approved case${unaccepted.length === 1 ? "" : "s"}: ${unaccepted.map(shown).join("; ")}. Fix the Method and run method test, or retire a case whose rule no longer applies with method case retire. To publish anyway, add --accept-failing-case ${unaccepted.map((c: any) => c.id).join(",")} with --reason.`), { code: "cases_failed" });
+  const byId = new Map(cases.map((c: any) => [c.id, c]));
+  const { correctionName } = await import("./fix-lines.js");
+  const shown = (c: any) => correctionName(byId.get(c.id) ?? c);
+  if (unaccepted.length) throw Object.assign(Error(`This change breaks ${unaccepted.length} earlier correction${unaccepted.length === 1 ? "" : "s"}: ${unaccepted.map(shown).join("; ")}. Fix the Method and run method test, or retire a correction whose rule no longer applies with method case retire. To publish anyway, add --accept-failing-case ${unaccepted.map((c: any) => c.id).join(",")} with --reason.`), { code: "cases_failed" });
   if (failing.length && !reason) throw Error("Give --reason for accepting a failing case.");
   return { report, line: failing.length ? `Cases: ${report.cases.length - failing.length} of ${report.cases.length} passed; accepted failing ${failing.map((c: any) => c.id).join(", ")}.` : `Cases: ${report.cases.length} of ${report.cases.length} passed.` };
 }

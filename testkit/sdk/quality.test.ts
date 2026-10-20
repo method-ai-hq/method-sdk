@@ -125,12 +125,20 @@ it('method case and method test replay a run, and method observe reports runs wi
   await testCommand([file]);
   expect(read()).toMatchObject({ passed: false, cases: [{ id: 'currency', verdict: 'fail' }] });
   expect(process.exitCode).toBe(1);
+  // The flags of the fix loop's real tests (apps/improve lib/method-test.mjs): runs, min-pass, live steps, no judge cache.
+  vi.restoreAllMocks(); read = captured();
+  await testCommand([file, '--case', 'currency', '--runs', '3', '--min-pass', '2', '--live', 'report', '--no-judge-cache']);
+  const forced = read().cases[0].candidate;
+  expect(forced).toMatchObject({ status: 'fail', runs: 2, min_pass: 2, target_live: true });
+  expect(forced.attempts.every((a: any) => a.live_steps.includes('report') && a.target_live === true)).toBe(true);
+  await expect(testCommand([file, '--live', 'nope'])).rejects.toThrow('No step nope');
+  await expect(testCommand([file, '--runs', '0'])).rejects.toThrow('--runs must be a number from 1 to 20');
   vi.restoreAllMocks(); read = captured();
   await observeCommand(['--pending', join(root, 'runs')]);
   expect(read().runs).toEqual([]);
 });
 
-it('a new case names the signed-in person; the save gate and the run notice name whose case breaks; an old case keeps today\'s text', async () => {
+it('a new case names the signed-in person; the save gate and the run notice name whose correction breaks, in plain words', async () => {
   const root = temp();
   vi.stubEnv('METHOD_CONFIG_DIR', join(root, 'config')); vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache')); vi.stubEnv('METHOD_API_KEY', 'mk_test');
   vi.stubGlobal('fetch', vi.fn(async (url: any) => new URL(String(url)).pathname === '/api/me' ? Response.json({ user: { id: 'u_2', name: 'Gráinne' } }) : Response.json({ message: 'Not found.' }, { status: 404 })));
@@ -146,12 +154,12 @@ it('a new case names the signed-in person; the save gate and the run notice name
   expect(read().id).toBe('currency');
   const recorded = join(root, 'cases', 'currency', 'case.json');
   expect(JSON.parse(readFileSync(recorded, 'utf8')).author).toBe('Gráinne');
-  expect(await casesNotice(file)).toBe(`1 case not checked since this Method changed (Gráinne's case currency: Name the currency): method test ${file}`);
-  await expect(caseGate(file)).rejects.toThrow(/^This version breaks 1 approved case: Gráinne's case currency: Name the currency \(fail\)\. Fix the Method/);
+  expect(await casesNotice(file)).toBe(`1 earlier correction was not checked since this agent changed (Gráinne's correction ("Name the currency")). Check it: method test report.method`);
+  await expect(caseGate(file)).rejects.toThrow(/^This change breaks 1 earlier correction: Gráinne's correction \("Name the currency"\)\. Fix the Method/);
   // A case with no author: the same text as before.
   writeFileSync(recorded, JSON.stringify({ ...JSON.parse(readFileSync(recorded, 'utf8')), author: null }));
-  expect(await casesNotice(file)).toBe(`1 case not checked since this Method changed: method test ${file}`);
-  await expect(caseGate(file)).rejects.toThrow(/^This version breaks 1 approved case: currency \(fail: Name the currency\.\)\. Fix the Method/);
+  expect(await casesNotice(file)).toBe(`1 earlier correction was not checked since this agent changed. Check it: method test report.method`);
+  await expect(caseGate(file)).rejects.toThrow(/^This change breaks 1 earlier correction: A correction \("Name the currency"\)\. Fix the Method/);
   vi.unstubAllGlobals();
 });
 

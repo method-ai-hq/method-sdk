@@ -11,6 +11,8 @@ import { methodCache } from './prepare.js';
 export type LocalJudgment = {
   id: string; run_id: string; account_run_id: string | null; run_dir: string; method_id: string | null; file: string;
   step_id: string | null; verdict: 'right' | 'wrong'; note: string | null; corrected?: unknown; created_at: string;
+  /** The person's answer to the fix's question; a later line of the same judgment adds it. */
+  answer?: string;
 };
 
 /** The file that a run folder records: the Method file that method run ran. */

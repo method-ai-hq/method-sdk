@@ -76,8 +76,8 @@ async function sameRunLine(client: MethodClient | undefined, methodId: string, v
   if (line) process.stderr.write(line + '\n');
 }
 /**
- * Before method run FILE in the parent process: the file takes the newest version of its Method, corrections that wait
- * are fixed, and the same-run line is printed. Returns false when the run must not start.
+ * Before method run FILE in the parent process: the outcomes of fixes not yet shown are printed, the file takes the
+ * newest version of its Method, corrections that wait start a fix, and the same-run line is printed. Returns false when the run must not start.
  */
 async function beforeFileRun(args: string[], clientFactory: (server: string) => MethodClient) {
   if (process.env.METHOD_RUN_WORKER === '1' || args.includes('--resume') || !existsSync(args[1]!)) return true;
@@ -85,6 +85,9 @@ async function beforeFileRun(args: string[], clientFactory: (server: string) => 
   let client: MethodClient | undefined;
   try { client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER); if (!client.token()) client = undefined; } catch { client = undefined; }
   const file = authoringPath(args[1]!);
+  // The outcomes of fixes that nobody has seen yet come first.
+  const id = (() => { try { return readDocument(file).id; } catch { return undefined; } })();
+  if (typeof id === 'string' && methodIdPattern.test(id)) for (const line of (await import('./fix-outcomes.js')).unshownLines(id)) process.stderr.write(line + '\n');
   const caught = await catchUpFile(client, file);
   if (caught === 'conflict') return false;
   await fixWaitingCorrections(args, clientFactory);
@@ -93,19 +96,28 @@ async function beforeFileRun(args: string[], clientFactory: (server: string) => 
   return true;
 }
 /**
- * Before method run FILE: corrections that wait for this Method (from the dashboard, or a loop that stopped) are fixed
- * first, with one line about them. When a fix of the Method already runs on this computer, the run does not wait: that
- * fix takes the waiting corrections. A failure of the loop is one line too; the run goes on. Signed out, offline, a
- * resumed run, or the run worker: nothing.
+ * Before method run FILE: corrections that wait for this Method (from the dashboard, an answer on the dashboard, or a
+ * fix that stopped) start a fix in its own process, with one line; the run does not wait for it. Signed out, offline,
+ * a resumed run, or the run worker: nothing.
  */
 async function fixWaitingCorrections(args: string[], clientFactory: (server: string) => MethodClient) {
   if (process.env.METHOD_RUN_WORKER === '1' || args.includes('--resume') || !existsSync(args[1]!)) return;
+  const file = authoringPath(args[1]!), id = (() => { try { return readDocument(file).id; } catch { return undefined; } })();
+  if (typeof id !== 'string' || !methodIdPattern.test(id)) return;
+  const outcomes = await import('./fix-outcomes.js');
   const server = parseArgs({ args: args.slice(2), strict: false, options: { server: { type: 'string' } } }).values.server;
   let client: MethodClient;
   try { client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER); if (!client.token()) return; } catch { return; }
-  const { fixWaiting, waitingLine } = await import('./improve.js');
-  try { for (const fix of await fixWaiting(client, authoringPath(args[1]!), { waitMs: 3000 }) ?? []) process.stderr.write(waitingLine(fix) + '\n'); }
-  catch (error) { if (!/^(fetch failed|401:|404:)|abort|timed? ?out/i.test((error as Error).message)) process.stderr.write(`The waiting corrections are not fixed yet: ${(error as Error).message}\n`); }
+  const { fixRunning, waitingCorrections } = await import('./improve.js');
+  // A fix that runs now takes the waiting corrections in its next pass.
+  if (fixRunning(id)) return;
+  try {
+    const waiting = (await waitingCorrections(client, file, id, 3000)).map(j => j.id);
+    if (!waiting.length) return;
+    outcomes.markWorking(id, file, waiting);
+    await outcomes.fixStarter.start(file, id, waiting, client.server);
+    process.stderr.write((await import('./fix-lines.js')).waitingLine(waiting.length) + '\n');
+  } catch (error) { if (!/^(fetch failed|401:|404:)|abort|timed? ?out/i.test((error as Error).message)) process.stderr.write(`The waiting corrections are not fixed yet: ${(error as Error).message}\n`); }
 }
 /**
  * The ID of the workspace's Method with this name (case-insensitive, archived Methods left out), or null when none has
@@ -133,6 +145,16 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   void (await import('./update.js')).updateInBackground();
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
   if (args[0] === 'judge') return (await import('./judge.js')).judgeCommand(args.slice(1), clientFactory);
+  if (args[0] === 'answer' && /^jdg_/.test(args[1] ?? '')) return (await import('./judge.js')).answerJudgmentCommand(args.slice(1), clientFactory);
+  if (args[0] === 'wait' && (!args[1] || /^jdg_|^--/.test(args[1]))) return (await import('./fix-outcomes.js')).waitCommand(args.slice(1));
+  if (args[0] === 'learned') return (await import('./learned.js')).learnedCommand(args.slice(1), clientFactory);
+  if (args[0] === 'undo') return (await import('./undo.js')).undoCommand(args.slice(1), clientFactory);
+  if (args[0] === '__fix' || args[0] === '__watch') {
+    const p = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, judgment: { type: 'string', multiple: true }, prune: { type: 'boolean' } } });
+    const client = clientFactory(p.values.server ?? DEFAULT_SERVER), file = authoringPath(p.positionals[0]!);
+    if (args[0] === '__watch') { await (await import('./watch.js')).watchRun(client, file, resolve(p.positionals[1]!)); return; }
+    return (await import('./improve.js')).backgroundFix(client, file, p.values.judgment ?? [], { prune: !!p.values.prune });
+  }
   if (args[0] === 'changes') return (await import('./proposals.js')).changesMain(args.slice(1), clientFactory);
   if (args[0] === 'run' && /\.method$/i.test(args[1] ?? '') && !args.includes('--help') && !await beforeFileRun(args, clientFactory)) return;
   if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);

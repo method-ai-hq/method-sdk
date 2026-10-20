@@ -132,7 +132,7 @@ method run tickets.method --inputs inputs.json   # reuses read, urgency and join
 # After it works
 
 - **Put it in an app:** `method connect APP_FOLDER` publishes it and prints the code to add.
-- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it, and do not edit the Method yourself for the same correction: a wrong judgment fixes the Method on this computer, with the user's own Claude Code or Codex, and prints one line about what changed or why nothing did. `method changes FILE` lists what it changed.
+- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it, and do not edit the Method yourself for the same correction. A wrong judgment returns at once and tests a fix in the background with the user's own Claude Code or Codex. Run `method wait` for the result and tell the user its line. After a fix, show the tested output that `method wait` prints; never run a Method that sends or changes things again just to show it. When it prints a question, show it to the user word for word, never answer it yourself, and send their words with `method answer JUDGMENT_ID "THEIR WORDS"`. `method learned FILE` lists what the agent learned from corrections; `method undo` restores the Method as it was before Method's last change.
 - **Explain the scripts:** `method explain FILE` writes a card for each script step.
 
 # Field reference
@@ -365,12 +365,14 @@ Use reading.output_name to give a returned result a short, honest name. Use read
 ## Corrections become cases
 
 When the user says a result was wrong:
-1. Record it: method judge RUN_ID wrong --note "the user's words" (--corrected FILE when they gave the right result). Use their words even when they are vague. Do not ask them to confirm it, and do not edit the Method for the same correction: method judge records the correction as a case, finds a change with the user's own agent, and applies it only when it fixes the run and breaks no earlier correction. It takes a few minutes.
-2. Tell the user the line it prints in plain words, then run the Method again and show the new result.
-3. When it prints No safe change found, tell the user the reason. If the user's words do not say what the right result is, ask before you change anything. Name the readings that the run and the Method's instructions allow, and what each one would change, in one question. A complaint about a missing part of the output can mean "produce it from what the inputs give", "mark what is missing", or "ask for it"; a complaint about wrong content can mean a wrong source, a wrong rule, or a wrong reading of the input. Do not choose a reading yourself, and never one that breaks the user's instructions. Then record the user's answer with method judge RUN_ID wrong --note "their answer".
-4. For a rule the user states outside a run, record it: method case new FILE --id ID --run BAD_RUN --passing-run GOOD_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names the output to judge (default: the Method's result; a path to a file that the run saved is judged by that file's contents). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
-5. case new refuses a case that can pass only by breaking one of the Method's instructions (case_conflicts), for example a rule that needs a fact that the inputs do not give when an instruction says not to invent facts, or a rule that requires what an instruction forbids. Show the user the rule and the instruction, and ask which one is right. When the user says the case is right, change the instruction first and record the case again. Add --accept-conflict "the user's answer" only when the user wants both.
-6. After any edit by hand, run method test FILE. Every case must pass. method publish refuses a version that breaks a case.
+1. Record it: method judge RUN_ID wrong --note "the user's words" (--corrected FILE when they gave the right result). Use their words even when they are vague. Do not ask them to confirm it, and do not edit the Method for the same correction. method judge returns at once with one line and tests a fix in the background, on a private copy of the run, with every message held back.
+2. Get the result with method wait. It waits up to 100 seconds; when it says it is still working, run it again. Tell the user the line it prints, in their words.
+3. After a fix, show the user what the fixed agent gives now: method wait prints the output from the test. Do not run the Method again to show it, above all when it sends or changes things: that would send it again.
+4. When method wait prints a question, show it to the user word for word and never answer it yourself. Send their own words with the command it prints: method answer JUDGMENT_ID "their words". Then run method wait again.
+5. When the user wants to see or remove what the agent learned from corrections, run method learned FILE, and method learned FILE --remove NUMBER. To go back to how the agent worked before Method's last change, run method undo.
+6. For a rule the user states outside a run, record it: method case new FILE --id ID --run BAD_RUN --passing-run GOOD_RUN --note "the user's words" --rubric "plain sentence that must be true" (repeat --rubric for each rule). --ref names what to judge (default: the Method's result; result, outputs.NAME, file:PATH for a file the run wrote, or effect:NAME for what a tool or effect sent). When a rule compares the output with the sources, add --context with the step output that holds them, for example --context outputs.material. Make each sentence fail on the bad run; case new warns about one that does not. For an exact value, use --expect instead.
+7. case new refuses a case that can pass only by breaking one of the Method's instructions (case_conflicts). Show the user the rule and the instruction, and ask which one is right. When the user says the case is right, change the instruction first and record the case again. Add --accept-conflict "the user's answer" only when the user wants both.
+8. After any edit by hand, run method test FILE. Every case must pass. method publish refuses a version that breaks a case.
 For a one-time preference, edit and run again; a case is not needed.
 
 ## Checked on every run, or on every new version
@@ -622,27 +624,30 @@ method state METHOD_ID --enable --file initial-state.json
 
 ## wait
 
-Reconnect to the same local worker.
+Reconnect to a local run, or get what a fix did with a correction.
 
 Usage:
 
 ```sh
 method wait RUN_DIRECTORY
+method wait [JUDGMENT_ID] [--timeout SECONDS] [--json]
 ```
 
 Arguments and defaults:
-Use the directory returned by run. Closing this output connection leaves the worker active.
+With a run directory: reconnects to the same local worker; closing this output connection leaves the worker active. With a judgment ID (from method judge --json), or with nothing: waits for the fix of that correction, or of every correction that this computer is fixing, for up to --timeout seconds (default 100), and prints what it did. A wait that ends first says so in one line; the fix goes on, and method wait can run again.
 
 Result and changes:
-Live output, then a final line with the run status (succeeded, unconfirmed, waiting_for_you, or failed), the headline of a failure, and the dashboard link of a synced run.
+For a run: live output, then a final line with the run status (succeeded, unconfirmed, waiting_for_you, or failed), the headline of a failure, and the dashboard link of a synced run. For a fix: one plain line per correction for the person (Fixed, No fix found yet, Could not test a fix safely, a question, ...). After a fix it shows what the fixed agent gives now, from the test; nothing was sent. After a question, one more line says how to send the person's answer. --json prints {outcomes: [{judgment, status, outcome, lines, next?}]}.
 
 Errors:
-Stopped process or missing run.
+Stopped process or missing run, or a judgment that this computer is not fixing.
 
 Example:
 
 ```sh
 method wait .runs/example
+method wait
+method wait jdg_6f1c…
 ```
 
 ## run-status
@@ -1200,7 +1205,7 @@ method publish task.method --reason 'Shorter introduction'
 
 ## judge
 
-Record the person's reaction to a run's result. A wrong one fixes the Method on this computer.
+Record the person's reaction to a run's result. A wrong one starts a fix on this computer and returns at once.
 
 Usage:
 
@@ -1210,18 +1215,70 @@ method judge RUN_ID keep JUDGMENT_ID
 ```
 
 Arguments and defaults:
-RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result; it is recorded only. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters), even when they are vague. --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment then fixes the Method in the foreground, with your own Claude Code or Codex (hosted models only when neither is signed in): it records the correction as a case in cases/ next to the Method file, finds the step that causes it, tests up to three small changes against this run, every earlier corrected or approved run, and every case, and changes the file only when a change fixes this run and breaks no earlier correction. The change is saved as a new version; restoring the version before it on the Method page undoes it. It takes a few minutes. Corrections that wait (from the dashboard, or a fix that stopped) are fixed in the same loop. The fix starts from the newest version of the Method, as method run does. A correction of a step that someone changed after the run is not fixed, and the line names who changed it. A change that fixes one person's correction only by breaking another person's case is held, not applied, and the line names both. Two people who judge the same step of a run in opposite ways are held too: the output shows both, and method judge RUN_ID keep JUDGMENT_ID keeps one and sets the other aside. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file. Run it in the folder of the Method file when the run came from an older CLI. Do not ask the person to confirm a judgment, and do not edit the Method yourself for the same correction.
+RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result; it is recorded only. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters), even when they are vague. --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment starts the fix in its own process, with your own Claude Code or Codex (hosted models only when neither is signed in), and prints one line at once. The fix records the correction as a case in cases/ next to the Method file, judged on what the person saw (the result, the files the run wrote, the messages it sent), and tests changes on a private copy of the run, with every message or change held back. It applies a change only when the change fixes this run reliably and breaks no earlier correction, or adds the note as a learned rule when it cannot test one safely. method wait prints what it did, and so does the next method run of the Method. method undo restores the Method as it was before. The fix starts from the newest version of the Method, as method run does. Two people who judge the same step of a run in opposite ways are held: the output shows both, and method judge RUN_ID keep JUDGMENT_ID keeps one and sets the other aside. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file. Do not ask the person to confirm a judgment, and do not edit the Method yourself for the same correction.
 
 Result and changes:
-One line: what changed and how many earlier corrections it passes, with how to undo it; or No safe change found and the reason. A subscription limit or another failure of the model service is an error, and the correction waits for the next method judge or method run. --json prints the judgment and the fix (kind change or none, cause, steps, cases made, version, usage with null dollars on a subscription, what the replay caps left out, and the log file).
+One line: Working on it. --json prints the judgment and {fix: {status: working, wait}}; method wait JUDGMENT_ID gives the outcome.
 
 Errors:
-An unknown run, a run of a Method that is not in your account, no sign-in, or a failure of the model service.
+An unknown run, a run of a Method that is not in your account, or no sign-in.
 
 Example:
 
 ```sh
 method judge 6f1c… wrong --note "it's not even redlined"
+method wait
+```
+
+## learned
+
+List the rules that the agent learned from corrections, or remove one.
+
+Usage:
+
+```sh
+method learned FILE [--remove NUMBER] [--json]
+```
+
+Arguments and defaults:
+The rules are in learned.json beside the Method file; a step uses a rule when its condition holds. Each line says the rule in plain words, who taught it, when, and how often it applied in this computer's runs. --remove NUMBER (from the list, or the rule's id from --json) retires one rule and saves a new version; method undo brings it back.
+
+Result and changes:
+One line per rule, or the rule that was removed. --json prints {rules: [{id, step, when, then, by, created, applied, text}]}.
+
+Errors:
+No such rule, or a learned.json that is not valid.
+
+Example:
+
+```sh
+method learned nda.method
+method learned nda.method --remove 2
+```
+
+## undo
+
+Undo Method's last change to a Method: a fix, a pruning change, or a removed learned rule.
+
+Usage:
+
+```sh
+method undo [FILE] [--json]
+```
+
+Arguments and defaults:
+FILE defaults to the only Method file in this folder, else the Method of the last change on this computer. Restores the Method file and the files the change wrote, and saves that as a new version. A file that changed after Method's change is not overwritten. Run it again to undo the change before.
+
+Result and changes:
+One line: what is undone.
+
+Errors:
+Nothing to undo, or the file changed after the change.
+
+Example:
+
+```sh
+method undo
 ```
 
 ## changes
@@ -1305,27 +1362,29 @@ method connect ../app
 
 ## answer
 
-Show or answer the question of a production run that waits on an ask step.
+Answer the question of a production run that waits on an ask step, or the question that a fix asked about a correction.
 
 Usage:
 
 ```sh
 method answer RUN_ID [--answer JSON]
+method answer JUDGMENT_ID "THE PERSON'S WORDS"
 ```
 
 Arguments and defaults:
-Without --answer it prints the question and its form (the fields of the answer). With --answer it checks the answer against the form and sends it; the run continues. A run that keeps its content on devices has a sealed question: run this where the app's METHOD_API_KEY is (the environment, or the .env of this folder), or on the laptop that started the run with its sign-in. Local runs (method run FILE) take answers with --human FILE as before.
+With a run ID: without --answer it prints the question and its form (the fields of the answer); with --answer it checks the answer against the form and sends it, and the run continues. A run that keeps its content on devices has a sealed question: run this where the app's METHOD_API_KEY is (the environment, or the .env of this folder), or on the laptop that started the run with its sign-in. Local runs (method run FILE) take answers with --human FILE as before. With a judgment ID: send the person's own words, word for word, and the fix starts again with them in its own process; method wait gives what it did. Never answer a fix's question yourself. For a Method whose run content stays on this computer, the answer stays next to the Method file.
 
 Result and changes:
-The question and form, or the run after the answer.
+The question and form, or the run after the answer; for a fix, one line.
 
 Errors:
-The run is not waiting, the answer does not match the form, or the key cannot open a sealed question (wrong_key).
+The run is not waiting, the answer does not match the form, the key cannot open a sealed question (wrong_key), or the correction has no open question.
 
 Example:
 
 ```sh
 method answer 6f1c… --answer '{"approved":true}'
+method answer jdg_6f1c… "Every counterparty NDA must come back redlined."
 ```
 
 ## worker
@@ -1671,7 +1730,7 @@ Models come from the Method's models: (or the account default). --workspace sele
 --verbose: print runtime events.
 NAME: the name of a Method in your workspace (not case-sensitive), run as method run ID runs it: the newest version. When several Methods have the name, the run does not start; the result lists their names and IDs (exit 2).
 Before a signed-in run of a FILE, the file takes the newest version of its Method. When a teammate saved a newer version, an unchanged file takes it, and a changed file combines it step by step and file by file; one line on stderr says whose version it took and which of your changes are kept. When you and a teammate changed the same step or the same script file, nothing runs and no file changes: the result has status needs_you and both texts of each part (exit 2). Combine them in the file, then run again. Offline, the file runs as it is, with one line. --resume does not change the file.
-Then corrections of the Method that wait (from the dashboard, or a fix that stopped) are fixed first, as method judge fixes them, with one line on stderr.
+First, the outcomes of fixes of this Method that nobody has seen yet are printed, one line each. Then corrections of the Method that wait (from the dashboard, an answer, or a fix that stopped) start a fix in the background, as method judge does, with one line on stderr; the run does not wait for it. After a run that completed, its output is checked in the background against the corrections that fixes of the last 30 days answered; nothing runs again, and a problem that comes back twice is reported on the next run.
 When the same run (the same version and the same inputs) is already going in your workspace, one line says who started it and links to it; this run starts too. To find it, each run record has a sha256 of its inputs; a run whose content stays on devices (run_data: device) sends none, because a hash of short inputs can show them.
 A Method that uses shared state (method state) waits while another person's run holds the state, with one line, and starts when it is free. A run that stopped while it held the state stops this run, and the line names the person who must check it.
 A Method whose declared secrets are not on this computer stops before the first step with the list of missing keys, each with its method secret set command. A step that stops because a file is not on this computer names the file and who saved this version.
@@ -1721,17 +1780,17 @@ Replay recorded cases against this version of a Method. Every case must pass.
 Usage:
 
 ```sh
-method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--cases DIR]
+method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--cases DIR] [--once | --runs N [--min-pass N]] [--live STEP]... [--no-judge-cache] [--keep-dir DIR]
 ```
 
 Arguments and defaults:
-Cases are in cases/ beside the Method. Unchanged steps return their recorded outputs; changed steps run; files connections are scratch folders, so a changed step that writes files runs safely. A changed step that asks a person or acts on a service makes the case unverifiable. --baseline also runs each case on the old version, to show what the change fixed or broke.
+Cases are in cases/ beside the Method. Unchanged steps return their recorded outputs; changed steps run; each attempt works on its own copy of the files the recorded run read, so a changed step that writes files runs safely; a Method tool that sends or changes something returns a stand-in instead. --baseline also runs each case on the old version, to show what the change fixed or broke. --once runs each case once; --runs N and --min-pass N replace each case's own counts. --live STEP runs that step live even when it matches the recording. --no-judge-cache judges again instead of reusing earlier judgments. --keep-dir keeps each attempt's run folder there.
 
 Result and changes:
 JSON report with a verdict per case and passed:true when no case blocks the change. Exit 0 or 1.
 
 Errors:
-Unknown case, invalid Method, or setup errors.
+Unknown case or step, invalid Method, or setup errors.
 
 Example:
 

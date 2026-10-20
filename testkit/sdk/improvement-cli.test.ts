@@ -97,19 +97,34 @@ it('saves the cases folder with the version for account run data only', async ()
   expect(device.pack.files.map(f => f.path)).toEqual(['echo.mjs']);
 });
 
-it('reads the result that improve.method records: the proposal as JSON text, its kind, the proposal ID, and what was capped', async () => {
-  const { readImproveResult } = await import('../../packages/sdk/src/improve.js');
-  // The form of improve.method's result on the tiny fixture when no candidate fixes the corrected run, on a subscription.
+it('reads the result that improve.method returns: the proposal as JSON text, its kind, the outcomes as JSON text, the background cases, and the summary', async () => {
+  const { readImproveResult, loopOutcome } = await import('../../packages/sdk/src/improve.js');
+  // The form of apply_change's result (apps/improve/steps/apply-change.mjs) when no candidate fixes the corrected run.
   const recorded = JSON.parse(readFileSync(join(__dirname, '..', 'fixtures', 'improve-result.json'), 'utf8'));
-  expect(Object.keys(recorded).sort()).toEqual(['capped', 'kind', 'proposal', 'proposal_id']);
+  expect(Object.keys(recorded).sort()).toEqual(['background_cases', 'kind', 'outcomes', 'proposal', 'proposal_id', 'summary']);
   const read = readImproveResult(recorded);
-  expect(read).toMatchObject({ workflow: null, files: [], capped: '', evidence: { kind: 'none', steps: ['summarize'] } });
-  expect(read.cause).toMatch(/^No safe change was found\./);
+  expect(read).toMatchObject({ workflow: null, files: [], capped: '', evidence: { kind: 'none' }, background_cases: [], outcomes: [{ id: 'jdg_' + 'a'.repeat(32), outcome: 'no_fix_found' }] });
+  expect(read.cause).toMatch(/^I tried 3 changes/);
   expect(read.evidence.budget).toEqual({ model_calls: 12, usd: null, minutes: 0.03 });
   // A change carries the tested workflow; none has none. Other kinds are refused.
-  const as = (kind: string, extra: object, workflow?: unknown) => ({ kind, proposal_id: '', proposal: JSON.stringify({ cause: 'c', ...(workflow ? { workflow } : {}), evidence: { kind, steps: ['a'], ...extra } }) });
-  expect(readImproveResult(as('change', {}, { steps: {} })).workflow).toEqual({ steps: {} });
+  const as = (kind: string, extra: object, workflow?: unknown, outcomes: unknown = [{ id: 'jdg_1', outcome: 'fixed' }], more: object = {}) => ({ kind, proposal_id: '',
+    proposal: JSON.stringify({ cause: 'c', ...(workflow ? { workflow } : {}), evidence: { kind, steps: ['a'], ...extra } }), ...(outcomes === null ? {} : { outcomes: JSON.stringify(outcomes) }), ...more });
+  expect(readImproveResult(as('change', {}, { steps: {} }, undefined, { background_cases: ['a', 'a', 'b'], summary: ' Fixed it. ' }))).toMatchObject({ workflow: { steps: {} }, outcomes: [{ id: 'jdg_1', outcome: 'fixed' }], background_cases: ['a', 'b'], summary: 'Fixed it.' });
+  // Each correction needs an outcome the account knows; a pruning sweep has none, and its summary says what it did.
+  expect(() => readImproveResult(as('none', {}, undefined, null))).toThrow('no outcome for each correction');
+  expect(() => readImproveResult(as('none', {}, undefined, [{ id: 'jdg_1', outcome: 'no_change' }]))).toThrow('no outcome for each correction');
+  const pruned = readImproveResult(as('change', {}, { steps: {} }, null, { background_cases: [], summary: 'Removed 2 rules that no longer changed any result.' }), { prune: true });
+  expect(pruned).toMatchObject({ outcomes: [], summary: 'Removed 2 rules that no longer changed any result.' });
   expect(() => readImproveResult(as('change', {}))).toThrow();
   expect(() => readImproveResult(as('case', {}))).toThrow();
   expect(() => readImproveResult({ ...as('none', {}), kind: 'change' })).toThrow();
+  // The loop's fields become the words of the lines: a fixed detail says what is different now; tests give how often.
+  expect(loopOutcome({ id: 'jdg_1', outcome: 'fixed', detail: 'replies now include the redline', step_id: 'write', kind: 'rule',
+    tests: { case: 'c', base: { passes: 0, runs: 2 }, candidate: { passes: 3, runs: 3 }, guards: [{ id: 'g1', before: 'pass', after: 'pass' }, { id: 'g2', before: 'pass', after: 'pass' }] }, background_cases: ['x'] }))
+    .toEqual({ id: 'jdg_1', outcome: 'fixed', summary: 'replies now include the redline', tested: { times: 3, earlier: 2 } });
+  expect(loopOutcome({ id: 'jdg_1', outcome: 'could_not_test', reason: 'can_send', detail: 'I added the note as a rule and will check it on the next runs.', learned_rule: 'lr_0123456789ab' }))
+    .toEqual({ id: 'jdg_1', outcome: 'could_not_test', reason: 'can_send', detail: 'I added the note as a rule and will check it on the next runs.', rule_added: true });
+  expect(loopOutcome({ id: 'jdg_1', outcome: 'held', held_with: 'Gráinne', detail: 'A fix for this breaks a result that Gráinne asked for.' })).toEqual({ id: 'jdg_1', outcome: 'held', by: 'Gráinne' });
+  expect(loopOutcome({ id: 'jdg_1', outcome: 'no_fix_found', again: true, detail: 'Another fix changed the same step.' })).toMatchObject({ outcome: 'no_fix_found', again: true });
+  expect(loopOutcome({ id: 'jdg_1', outcome: 'question', question: 'Which one?' })).toEqual({ id: 'jdg_1', outcome: 'question', question: 'Which one?' });
 });

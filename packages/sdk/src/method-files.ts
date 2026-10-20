@@ -15,17 +15,18 @@ export function contained(root: string, name: string) {
   if (isAbsolute(rel) || rel.startsWith('..')) throw Error(`File leaves the Method folder: ${name}`);
   return path;
 }
-/** The files that a saved package holds: declared files, script entrypoints, and dependency lockfiles. */
+/** The files that a saved package holds: declared files, script entrypoints, dependency lockfiles, and learned rules. */
 export function packageFileNames(root: string, workflow: any): string[] {
   const executions = [...Object.values(workflow.steps).flatMap((s: any) => [s.do, s.check, ...Object.values(s.effects ?? {}).flatMap((e: any) => [e.observe, e.judge])]),
     ...Object.values(workflow.tools ?? {}).map((t: any) => t.run)].filter(Boolean) as any[];
   return [...new Set<string>([...(workflow.files ?? []), ...executions.filter(e => e.kind === 'run').map(e => e.entrypoint),
-    ...['package.json', 'package-lock.json', 'pyproject.toml', 'uv.lock'].filter(name => existsSync(resolve(root, name)))])].sort();
+    ...['package.json', 'package-lock.json', 'pyproject.toml', 'uv.lock', 'learned.json'].filter(name => existsSync(resolve(root, name)))])].sort();
 }
 /**
  * The files of the Method's cases/ folder. A Method with account run data saves its cases with each version; a Method
  * with device run data keeps them on this computer. Hidden files and links are not included. A file over the package
- * limit of 20 MB is not included; its name goes to tooLarge, so the save can say so.
+ * limit of 20 MB is not included; its name goes to tooLarge, so the save can say so. A case's snapshot/ folder (copies of
+ * the files its run read) is never included: it stays on this computer.
  */
 export const maxPackageFileBytes = 20_000_000;
 export function caseFileNames(root: string, tooLarge: string[] = []): string[] {
@@ -36,6 +37,8 @@ export function caseFileNames(root: string, tooLarge: string[] = []): string[] {
     for (const entry of readdirSync(folder, { withFileTypes: true })) {
       const name = `${relativeDir}/${entry.name}`;
       if (entry.name.startsWith('.')) continue;
+      // cases/ID/snapshot/ holds copies of what a run read (client documents): it stays on this computer.
+      if (entry.isDirectory() && entry.name === 'snapshot' && /^cases\/[^/]+$/.test(relativeDir)) continue;
       try { packagePath(name); } catch { continue; }
       if (entry.isDirectory()) walk(name);
       else if (entry.isFile()) (statSync(resolve(root, name)).size <= maxPackageFileBytes ? names : tooLarge).push(name);

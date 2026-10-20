@@ -43,6 +43,8 @@ export const RunEventSchema = z.strictObject({
   total: z.number().int().nonnegative().optional(), unit: z.string().max(50).optional(),
   // Notice events: key is the same for each repeat of one problem, so a newer notice replaces an older one.
   key: z.string().max(500).optional(), attempt: z.number().int().positive().optional(), attempts: z.number().int().positive().optional(),
+  // learned_applied: the IDs of the learned rules that the step considered and the ones it added to its prompt.
+  considered: z.array(z.string().max(100)).max(500).optional(), applied: z.array(z.string().max(100)).max(500).optional(),
 });
 export const InspectionSchema = z.strictObject({
   started_at: z.string().optional(), device_name: z.string().optional(),
@@ -116,8 +118,8 @@ export function observedValue(item: InspectItem, inspection: RunInspection, invo
  */
 export function deviceOnly(inspection: RunInspection): RunInspection {
   const failure = inspection.failure ? (({ evidence, details, diagnostics, ...kept }) => ({ failure: kept }))(inspection.failure) : {};
-  const event = ({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code, completed, total, key, attempt, attempts }: any) =>
-    Object.fromEntries(Object.entries({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code, completed, total, key, attempt, attempts }).filter(([, value]) => value !== undefined)) as any;
+  const event = ({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code, completed, total, key, attempt, attempts, considered, applied }: any) =>
+    Object.fromEntries(Object.entries({ at, type, sequence, phase, duration_ms, usage, provider, model, kind, exit_code, completed, total, key, attempt, attempts, considered, applied }).filter(([, value]) => value !== undefined)) as any;
   return {
     schema: inspection.schema, content: 'device', workflow: inspection.workflow, run_id: inspection.run_id, status: inspection.status, ...failure,
     ...(inspection.started_at ? { started_at: inspection.started_at } : {}), ...(inspection.device_name ? { device_name: inspection.device_name } : {}),

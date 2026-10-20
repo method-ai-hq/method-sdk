@@ -32,6 +32,7 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
   const start = events.find(e => e.event === "run.started");
   const invocations: RunInspection["invocations"] = {};
   const setup = existsSync(join(root,'setup.json')) ? read('setup.json') : [];
+  const ids = (value: unknown) => (Array.isArray(value) ? value : []).filter((id): id is string => typeof id === 'string').slice(0, 500).map(id => id.slice(0, 100));
   const runEvents: NonNullable<RunInspection["events"]> = setup;
   for (const event of events) {
     // Keep useful trace fields; do not upload tool arguments, environment values, or process stdout.
@@ -57,6 +58,8 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
       ...(Number.isSafeInteger(event.total) ? { total: event.total, ...(typeof event.unit === "string" ? { unit: event.unit } : {}) } : {}),
       ...(typeof event.key === "string" ? { key: event.key } : {}),
       ...(Number.isSafeInteger(event.attempt) ? { attempt: event.attempt } : {}), ...(Number.isSafeInteger(event.attempts) ? { attempts: event.attempts } : {}),
+      // Rule IDs only: the server counts how often each learned rule applied.
+      ...(event.event === "learned.applied" ? { considered: ids(event.considered), applied: ids(event.applied) } : {}),
       ...(event.entrypoint ? { command: [event.runtime, event.entrypoint, ...(event.args ?? [])].filter(Boolean).join(" ") } : typeof event.command === "string" ? { command: event.command } : {}),
       ...(event.exit_code !== undefined ? { exit_code: event.exit_code } : {}),
       ...(typeof event.diagnostics === "string" && event.diagnostics ? { diagnostics: event.diagnostics.length <= 4000 ? event.diagnostics : event.diagnostics.slice(0, 1000) + "\n[middle omitted]\n" + event.diagnostics.slice(-3000) } : {}),
