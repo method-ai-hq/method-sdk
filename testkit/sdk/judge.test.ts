@@ -497,7 +497,9 @@ it('the later check: a failing case of a retired rule brings the rule back; anot
     return recordChange(file, 'fix', 'Escalates restrictions.', 'the fix for "Escalate restrictions."', before).id;
   };
   const fix = (undoId: string) => ({ background_cases: [ruleCase, otherCase, 'gone-case'], undo_id: undoId, fixed: [{ id: fixedId, note: 'Escalate restrictions.' }], cause: 'Escalates restrictions.' });
-  const verdicts = (failing: string[]) => async (_file: string, _flags: object, options: { ids: string[] }) => {
+  // The changed file fails `failing`; the copy of the version before the change fails `before`.
+  const verdicts = (failing: string[], before: string[] = []) => async (path: string, _flags: object, options: { ids: string[] }) => {
+    if (path !== file) return { cases: options.ids.map(id => ({ id, verdict: before.includes(id) ? 'fail' : 'pass' })) };
     expect(options.ids).toEqual([ruleCase, otherCase]);
     return { cases: options.ids.map(id => ({ id, verdict: failing.includes(id) ? 'fail' : 'pass' })) };
   };
@@ -506,7 +508,11 @@ it('the later check: a failing case of a retired rule brings the rule back; anot
   expect(kept).toMatchObject({ failed: [ruleCase], restored: ['lr_0123456789ab'], undone: false, reopened: [] });
   expect(JSON.parse(readFileSync(join(folder, 'learned.json'), 'utf8')).steps.write[0]).toMatchObject({ status: 'active', retired_at: null, retired_reason: null });
   expect(fixedText()).toBe('Writes the reply and escalates restrictions.');
-  // Another case fails: the fix is undone and its correction is open again.
+  // A case that also failed before the fix (a correction not fixed yet) does not undo it.
+  const stays = await checkBackground(client, file, fix(fixAgain('Writes the reply and escalates restrictions.')), { runCases: verdicts([otherCase], [otherCase]) });
+  expect(stays).toMatchObject({ failed: [otherCase], undone: false, reopened: [] });
+  expect(fixedText()).toBe('Writes the reply and escalates restrictions.');
+  // Another case that passed before fails now: the fix is undone and its correction is open again.
   const undone = await checkBackground(client, file, fix(fixAgain('Writes the reply, escalates restrictions, and says why.')), { runCases: verdicts([otherCase]) });
   expect(undone).toMatchObject({ failed: [otherCase], restored: [], undone: true, reopened: [fixedId] });
   expect(fixedText()).toBe('Writes the reply and escalates restrictions.');

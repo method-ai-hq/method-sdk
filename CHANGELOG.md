@@ -1,3 +1,9 @@
+# 0.20.1
+
+Uses runtime 0.16.2.
+
+- **A fix is undone only when it breaks a result that was right before.** After a fix, the later check runs the Method's other saved corrections. A correction that no fix has answered yet fails before and after the fix, so it no longer undoes the fix; only a correction that passes on the version before the fix and fails after it does.
+
 # 0.20.0
 
 Uses runtime 0.16.1. A correction gets a real, safe test, the answer comes back in plain words, and what the agent learned stays visible and can be undone.

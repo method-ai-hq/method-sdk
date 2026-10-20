@@ -1,5 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { MethodPackageSchema, packageDigest, packagePath } from '../../contracts/src/method-package.js';
@@ -15,7 +16,7 @@ import { changedSteps } from './merge.js';
 import { localJudgments, runFolderIndex, type LocalJudgment } from './local-judgments.js';
 import type { CorrectionOutcome, OutcomeKind } from './fix-lines.js';
 import { fixFolder, readFixState, saveError, saveNotice, saveOutcome, setWorker, storedOutcome, writeFixState } from './fix-outcomes.js';
-import { recordChange, saveVersion, snapshot, undoLast } from './undo.js';
+import { recordChange, saveVersion, snapshot, undoLast, undoRecords } from './undo.js';
 import { fixUndoneLine, ruleBackLine } from './fix-lines.js';
 
 // The improvement loop on this computer. method judge starts it in its own process for a wrong judgment, and method
@@ -482,12 +483,34 @@ export async function fixWaiting(client: MethodClient, file: string, options: { 
 }
 
 /** Runs cases of a Method file (quality.ts runCases); tests replace it. */
-export type RunCases = (file: string, flags: Record<string, never>, options: { ids: string[] }) => Promise<{ cases: { id: string; verdict: string }[] }>;
+export type RunCases = (file: string, flags: Record<string, never>, options: { ids: string[]; casesDir?: string }) => Promise<{ cases: { id: string; verdict: string }[] }>;
+
+/**
+ * The cases among ids that pass on the Method as it was before the change undoId: a copy of the Method's folder with
+ * the file and the changed files from the undo record, tested with the Method's own cases. Without the record, every
+ * case counts as passing before.
+ */
+async function passedBefore(file: string, undoId: string | undefined, ids: string[], run: RunCases) {
+  const record = undoRecords(file).find(r => r.id === undoId);
+  if (!record || !ids.length) return new Set(ids);
+  const folder = dirname(resolve(file)), copy = mkdtempSync(join(tmpdir(), 'method-before-'));
+  try {
+    cpSync(folder, copy, { recursive: true, filter: source => !/^(cases|\.method)(\/|$)/.test(relative(folder, source)) });
+    const before = join(copy, basename(file));
+    writeFileSync(before, record.before.text);
+    for (const [path, content] of Object.entries(record.before.files)) {
+      const full = join(copy, packagePath(path));
+      if (content === null) rmSync(full, { force: true }); else { mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, Buffer.from(content, 'base64')); }
+    }
+    const report = await run(before, {}, { ids, casesDir: join(folder, 'cases') });
+    return new Set(report.cases.filter(c => c.verdict === 'pass').map(c => c.id));
+  } finally { rmSync(copy, { recursive: true, force: true }); }
+}
 
 /**
  * The later check of an applied change: the Method's other cases (improve.method's background_cases) run on the changed
- * file. A failing case that belongs to a retired learned rule (its from.case) brings that rule back. Any other failure
- * undoes the change, saves the restored file as a new version, and opens the corrections it answered again, so the next
+ * file. A failing case that belongs to a retired learned rule (its from.case) brings that rule back. Any other case that
+ * fails now and passed before the change (a correction that no fix answered yet fails on both) undoes the change, saves the restored file as a new version, and opens the corrections it answered again, so the next
  * method run fixes them anew. Each of these says one line on the next method run or method wait.
  */
 export async function checkBackground(client: MethodClient, file: string, fix: Pick<FixOutcome, 'background_cases' | 'undo_id' | 'fixed' | 'cause'>, options: { runCases?: RunCases } = {}) {
@@ -504,7 +527,9 @@ export async function checkBackground(client: MethodClient, file: string, fix: P
   const { readLearned, learnedFile, ruleText } = await import('./learned.js');
   const ruleCases = new Set<string>();
   try { for (const rules of Object.values(readLearned(file).steps)) for (const r of rules) if (r.status === 'retired' && r.from?.case) ruleCases.add(r.from.case); } catch { /* no readable learned rules */ }
-  const broken = done.failed.filter(id => !ruleCases.has(id));
+  const others = done.failed.filter(id => !ruleCases.has(id));
+  const passed = await passedBefore(file, fix.undo_id, others, run);
+  const broken = others.filter(id => passed.has(id));
   if (broken.length && fix.undo_id) {
     try { undoLast(file, fix.undo_id); done.undone = true; }
     catch (error: any) { process.stderr.write(`The fix broke an earlier result, but it could not be undone: ${error.message}\n`); }
