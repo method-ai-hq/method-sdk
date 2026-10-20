@@ -1,3 +1,7 @@
+# 0.20.2
+
+The shared setup prompt checks Apple Command Line Tools on a new Mac, explicitly approves the official agent plugin, and verifies the CLI and plugin separately. It explains permission approval and using the invited Method account.
+
 # 0.20.1
 
 Uses runtime 0.16.2.

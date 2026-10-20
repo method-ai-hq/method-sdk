@@ -1,8 +1,11 @@
-/** The prompt for agents without the Method plugin. The installed guide holds the rules; this prompt only starts them. */
-export const authoringPrompt = `Help me turn repeated work into a Method with the Method CLI. Do the setup first, without asking me:
+/** The setup prompt shared by the dashboard, site, and quickstart guide. */
+export const authoringPrompt = `Help me turn repeated work into a Method with the Method CLI. I approve the setup below, including the official Method installer and the Method agent plugin. Do these steps first:
 
-1. If \`which method\` finds nothing, install Method now with \`curl -fsSL https://app.withmethod.ai/install.sh | sh\`. I approve this installer.
-2. Run \`method login\` and wait while I approve the sign-in in my browser.
-3. Run \`method authoring\` and follow it.
+1. On macOS, check \`xcode-select -p\` and \`git --version\`. If Apple's Command Line Tools are missing, run \`xcode-select --install\`, tell me to finish the Apple installer, and wait. Check both commands again before continuing. The full Xcode app is not needed.
+2. Find \`method\` on PATH or at \`~/.local/bin/method\`. If it is missing, install it with \`curl -fsSL https://app.withmethod.ai/install.sh | sh\`. Use \`~/.local/bin/method\` if the current shell still cannot find it. Verify the CLI with \`method --version\`. The installer supplies its own runtime; do not ask me to install Node or npm first.
+3. Install and verify the official Method plugin for the agent I am using. This is an approved part of setup, even if a quickstart page does not mention it. For Claude Code, run \`claude plugin list\`; if Method is missing, run \`claude plugin marketplace add method-ai-hq/method-sdk\` and \`claude plugin install method@method --scope user\`. Confirm that \`method@method\` is enabled. For Codex, use its plugin controls or \`codex plugin marketplace add method-ai-hq/method-sdk\` and \`codex plugin add method@method\`, and verify the plugin is enabled. If this agent does not support plugins, continue with the CLI and its authoring guide. If a reload is required, tell me what to reload and where to resume. CLI installation alone does not confirm plugin installation.
+4. If an agent permission rule blocks a setup action, show the exact blocked action and ask for its approval through the normal permission controls. Do not silently skip it or disable safeguards.
+5. Run \`method login\` and wait while I approve the sign-in in my browser. Use my intended Method account; a workspace invitation applies to the email that was invited. If a saved sign-in uses the wrong account, run \`method logout\` before signing in again. Keep the same Method profile for later commands.
+6. Run \`method authoring\` and follow it.
 
 Then ask me what work to turn into a Method. Make each prompt its own step, so that I can improve it. Run it on a sample, show me the result and the dashboard link, and ask me what to change.`;
