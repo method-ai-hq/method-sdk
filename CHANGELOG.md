@@ -1,3 +1,7 @@
+# 0.20.3
+
+Restore the short three-step agent setup prompt, with explicit approval for the official Method plugin. Remove the Apple/Xcode step and the expanded setup checklist.
+
 # 0.20.2
 
 The shared setup prompt checks Apple Command Line Tools on a new Mac, explicitly approves the official agent plugin, and verifies the CLI and plugin separately. It explains permission approval and using the invited Method account.
