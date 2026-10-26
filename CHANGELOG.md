@@ -1,3 +1,7 @@
+# 0.20.4
+
+Use runtime 0.16.3: a live Claude Code agent step may use web search and web fetch, as a Codex step can. A case test (`method test`) still gives the agent no shell and no network.
+
 # 0.20.3
 
 Restore the short three-step agent setup prompt, with explicit approval for the official Method plugin. Remove the Apple/Xcode step and the expanded setup checklist.
