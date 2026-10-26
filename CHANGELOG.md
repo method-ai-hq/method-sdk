@@ -1,4 +1,6 @@
-# Unreleased
+# 0.21.0
+
+Use runtime 0.16.4.
 
 - **A correction is judged on what the run made, not on Method's own records.** The prompt, events and transcript that the runtime keeps for each agent attempt are no longer shown to the correction judge as files the run wrote.
 
