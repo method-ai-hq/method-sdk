@@ -84,11 +84,8 @@ export function attachResultFiles(
       const localPath = artifactRoot
         ? resolve(artifactRoot, reference.path)
         : reference.path;
-      if (
-        artifactRoot &&
-        (!localPath.startsWith(artifactRoot + sep) ||
-          reference.path.startsWith("/"))
-      )
+      // Same rule as the runtime: a relative or absolute path that resolves inside artifacts.
+      if (artifactRoot && !localPath.startsWith(resolve(artifactRoot) + sep))
         throw Error("The output is outside the run artifacts folder.");
       const result = checkedFile({ ...reference, path: localPath }, roots);
       if (result.bytes.length > remaining)

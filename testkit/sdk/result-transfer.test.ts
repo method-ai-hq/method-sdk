@@ -25,6 +25,21 @@ it('keeps every declared file above 20 MB and resumes from server receipts',asyn
   expect(puts).toBe(4);expect(stored.every(f=>f.stored)).toBe(true);
  } finally {rmSync(root,{recursive:true,force:true});}
 });
+it('uploads an absolute output path inside artifacts and refuses one outside',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'result-absolute-'));mkdirSync(join(root,'artifacts'));
+ try {
+  writeFileSync(join(root,'artifacts/result.md'),'# Ready');writeFileSync(join(root,'outside.md'),'# Outside');
+  const workflow=loadWorkflow({format:'method/3.1',name:'Result',goal:'Save a report.',steps:{save:{do:{kind:'run',runtime:'python',entrypoint:'save.py'},out:{inside:{type:'file'},outside:{type:'file'}}}},result:'inside'});
+  const invocations={'save:0':{step_id:'save',status:'passed' as const,checks:[],changes:{},events:[],outputs:{inside:{path:join(root,'artifacts/result.md'),sha256:hash('# Ready')},outside:{path:join(root,'outside.md'),sha256:hash('# Outside')}}}};
+  const [inside,outside]=attachResultFiles(workflow,invocations,[join(root,'artifacts')],join(root,'artifacts'),true);
+  expect(inside).toMatchObject({status:'verified',bytes:7});
+  expect(outside).toMatchObject({status:'unavailable',reason:'The output is outside the run artifacts folder.'});
+  const sent:string[]=[];
+  const client={request:async(_p:string,_m:string,b:any)=>({missing:b.files.map((f:any)=>f.sha256)}),transfer:async(p:string,b:Uint8Array)=>{expect(hash(b)).toBe(p.split('/').at(-1));sent.push(p);return new Uint8Array();}} as unknown as MethodClient;
+  const [stored]=await transferResults(client,root,[inside!]);
+  expect(sent).toHaveLength(1);expect(stored).toMatchObject({path:join(root,'artifacts/result.md'),stored:true});
+ } finally {rmSync(root,{recursive:true,force:true});}
+});
 it('retains HTTP status and the server reason when an error is HTML',async()=>{
  const client=new MethodClient('https://example.test',async()=>new Response('<title>Worker exceeded resource limits | Cloudflare</title>',{status:503}) as any);
  await expect(client.request('/health','GET',undefined,false)).rejects.toThrow('503: Worker exceeded resource limits');

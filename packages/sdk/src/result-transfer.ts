@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { checkedFile } from './files.js';
 import type { MethodClient } from './method-client.js';
 import type { AttachedFile } from '../../workflow-language/src/result-files.js';
@@ -17,7 +17,7 @@ export async function transferResults(client: MethodClient, directory: string, f
     result.missing.forEach(hash => missing.add(hash));
   }
   const send = async (file: AttachedFile) => {
-    const bytes = checkedFile({path:join(directory, 'artifacts', file.path),sha256:file.sha256}, [join(directory, 'artifacts')]).bytes;
+    const bytes = checkedFile({path:resolve(directory, 'artifacts', file.path),sha256:file.sha256}, [join(directory, 'artifacts')]).bytes;
     await client.transfer(`/api/cli/result-files/${file.sha256}`, bytes);
   };
   const needed = unique.filter(f => missing.has(f.sha256));
