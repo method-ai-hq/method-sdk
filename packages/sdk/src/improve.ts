@@ -213,7 +213,8 @@ export function seenOfRun(outcome: any): Seen[] {
 /**
  * Make the regression case of a correction, even from vague words such as "it's not even redlined". A model reads what
  * the person saw (the result, the files the run wrote, and the calls and effects it made) and writes 1 to 3 plain
- * sentences, each about one of those things; for a note about form or a missing action, also a small check script. A
+ * sentences, each about one of those things and decidable from it alone, that a right result can meet with the
+ * information the run had; for a note about form or a missing action, also a small check script. A
  * sentence is kept only when it fails on the corrected run and passes on every approved run of the same part, with two
  * judges when both Claude Code and Codex are signed in. Sentences that do not fail get one more try with the reason.
  */
@@ -243,6 +244,8 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
     'The person\'s words may be vague, such as "the Ashby one\'s wrong" or "it\'s not even redlined": use what the person saw to find what they mean.',
     'Each sentence is about one thing the person saw: give its name in brackets as ref (result, outputs.NAME, file:PATH or effect:NAME). Judge a file or a message by the file or the message itself, not by a summary of it.',
     'Each sentence names one checkable thing, without names or numbers that only this run has unless the correction is about them. Do not ask for anything that the correction does not ask for.',
+    'A judge decides each sentence from the thing it is about and nothing else: it does not see the run\'s inputs, sources or materials. So when a sentence checks facts, write the facts in the sentence (from the correction or from what the person saw), not "agrees with the report".',
+    'A right result must be able to meet each sentence and the check script with the information the run had: do not require a detail, such as a telephone number, an address, a name or a date, that neither the correction nor what the person saw gives. Where such a detail is not known, a clear placeholder for it is right.',
     'When the correction is about form or a missing action (a document with no tracked changes, a message with no attachment, a message that was not sent, a missing field), also write check_script: a Node.js ES module that reads JSON from standard input with result, outputs, tool_calls (a list of {tool, arguments, standin}), effect_inputs (a list of {effect, inputs}) and files (an object: each file the run wrote, by the name in brackets after file:, mapped to an absolute path the script can read, for example a .docx to unzip), and prints {"pass": true or false, "reason": "one sentence"}. It must fail on this result, pass on a right one, and fail when the thing it checks is missing. In check_says, say in one plain sentence what it checks. Otherwise leave both empty.',
   ].join(' ');
   let reason = '';

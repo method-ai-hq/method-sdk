@@ -64,6 +64,13 @@ it('judges what the person saw: a result with several values, the files the run 
   for (const ref of ['[result]', '[outputs.deliverable]', '[file:redline.md]', '[effect:send_email]']) expect(user).toContain(ref);
   expect(user).toContain('Clean copy of the NDA with no changes.');
   expect(user).toContain('counsel@acme.test');
+  // The judge sees only the thing a sentence is about, so the writer puts the facts in the sentence; and it never asks for a
+  // detail that the run did not have, because a right result would have to invent it.
+  const system = model.requests[0].system as string;
+  expect(system).toContain('it does not see the run\'s inputs, sources or materials');
+  expect(system).toContain('write the facts in the sentence');
+  expect(system).toContain('do not require a detail');
+  expect(system).toContain('a clear placeholder for it is right');
   // Both judges judged both runs; c2 fails on the approved run and c3 is unsure, so only c1 and the check script stay.
   expect(runtime.evaluated.map(e => `${e.judges.join('+')}:${e.run}`).sort()).toEqual(['claude+codex:bad', 'claude+codex:good']);
   const created = runtime.created[0];
