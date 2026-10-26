@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { isAgentRecord } from '@withmethod/runtime/cases.js';
 import { MethodPackageSchema, packageDigest, packagePath } from '../../contracts/src/method-package.js';
 import { loadWorkflow } from '../../workflow-language/src/validate.js';
 import { readDocument } from './authoring.js';
@@ -194,7 +195,8 @@ export function seenOfRun(outcome: any): Seen[] {
       if (files.length >= 20 || entry.name.startsWith('.')) continue;
       const path = join(dir, entry.name), name = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) walk(path, name);
-      else if (entry.isFile() && statSync(path).size <= 2_000_000) files.push({ ref: `file:${name}`, label: `The file ${name}, which the run wrote`, value: textOf(path) });
+      // The runtime's own records of an agent attempt (prompt, events, transcript) are not what the run wrote.
+      else if (entry.isFile() && !isAgentRecord(name) && statSync(path).size <= 2_000_000) files.push({ ref: `file:${name}`, label: `The file ${name}, which the run wrote`, value: textOf(path) });
     }
   };
   if (typeof outcome.artifacts === 'string') walk(outcome.artifacts, '');

@@ -5,7 +5,7 @@
  * input × run × checkpoint) is one iteration of an each step, so the runtime's step cache reuses every finished cell
  * on a rerun, and a changed measure regrades without running any agent again.
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -15,6 +15,7 @@ import { authoringPath, readDocument } from './authoring.js';
 import { methodContent, methodIdPattern, newMethodId, writeMethodId } from './versions.js';
 import { packageFileNames } from './method-files.js';
 import { writePrivateJson } from './files.js';
+import { configRoot } from './computer-settings.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
@@ -271,20 +272,24 @@ function generatedMethod(doc: Comparison, previousId: string | undefined, counts
 
 /**
  * Check a .compare file and write its generated Method, the stage script and the inputs into the comparison folder.
- * Plain Claude Code or Codex arms and model events need the runtime's session step, which Method does not have yet.
+ * A plain Claude Code or Codex arm runs as the runtime's session step; model events are not built yet.
  */
 export async function compileComparison(file: string) {
   const path = authoringPath(file), root = dirname(path);
   const doc = readComparison(path);
-  const plain = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)).map(([armName]) => armName);
-  if (plain.length) throw Error(`The arm${plain.length === 1 ? '' : 's'} ${plain.join(', ')} ${plain.length === 1 ? 'is' : 'are'} plain Claude Code or Codex. A comparison cannot run a plain agent yet: that needs the session step in Method's runtime, which is not built yet. Only Method arms run today.`);
   if (doc.treatment?.events.some(event => event.model !== undefined)) throw Error('A treatment event that changes the model cannot run yet: that is not built yet. Corrections and new inputs run today.');
   const folder = comparisonFolder(path);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   const arms = [];
   for (const [armName, arm] of Object.entries(doc.arms)) {
-    const copied = await copyArm(resolve(root, arm as string), join(folder, 'arms', armName));
-    arms.push({ name: armName, ...copied, cache_dir: join(folder, 'arms', armName, 'cache') });
+    const cache_dir = join(folder, 'arms', armName, 'cache');
+    if (!armIsMethod(arm)) {
+      const plain = { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8') };
+      arms.push({ name: armName, plain, hash: sha(plain), cache_dir });
+      continue;
+    }
+    const copied = await copyArm(resolve(root, arm), join(folder, 'arms', armName));
+    arms.push({ name: armName, ...copied, cache_dir });
   }
   const resolveInput = (id: string) => { const value = inputValue(root, id); return { id, value, hash: sha(value) }; };
   const measure = (m: Comparison['measure'], main: boolean) => ({ name: m.name, main,
@@ -327,12 +332,16 @@ export async function comparisonRunArgs(args: string[]) {
 // The stages (method __compare STAGE: the bindings as JSON on stdin, the outputs as JSON on stdout)
 
 type Plan = ReturnType<typeof JSON.parse>;
-type Cell = { folder: string; arm: string; dir: string; file: string; hash: string; cache_dir: string; environment: Record<string, string>; input: { id: string; value: unknown; hash: string }; repeat: number; checkpoint: number | null };
+/** A plain arm: Claude Code or Codex with its instructions (and the corrections it was told, after a treatment). */
+type Plain = { agent: 'claude' | 'codex'; instructions: string };
+/** An arm at one point: a Method folder and file, or a plain agent. */
+type Snapshot = { dir: string; file: string; hash: string } | { plain: Plain; hash: string };
+type Cell = { folder: string; arm: string; dir?: string; file?: string; plain?: Plain; hash: string; cache_dir: string; environment?: Record<string, string>; input: { id: string; value: unknown; hash: string }; repeat: number; checkpoint: number | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
 
 /** Treatment of one arm: what it received so far, and the frozen copy of the arm at each checkpoint it reached. */
 type ArmTreatment = { arm: string; planned: number; corrections: { planned: number; received: number }; inputs: { planned: number; received: number };
-  missing: Array<{ index: number; reason: string }>; snapshots: Record<string, { dir: string; file: string; hash: string }> };
+  missing: Array<{ index: number; reason: string }>; snapshots: Record<string, Snapshot> };
 
 /**
  * How an event reaches a Method arm. A correction: the arm runs the event's input (a training run, saved to the
@@ -344,28 +353,50 @@ type ArmTreatment = { arm: string; planned: number; corrections: { planned: numb
 type Delivered = { received: boolean; reason?: string; run_id?: string; judgment_id?: string; outcome?: string };
 export const delivery = {
   async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered): Promise<Delivered> {
-    const env = { ...process.env, METHOD_CACHE_DIR: cacheDir };
-    if (before?.judgment_id && before.run_id) return waitForFix(before.run_id, before.judgment_id, env);
-    const runDir = join(workDir, 'run');
-    rmSync(workDir, { recursive: true, force: true });
-    mkdirSync(workDir, { recursive: true, mode: 0o700 });
-    writePrivateJson(join(workDir, 'inputs.json'), event.input.value);
-    const run = await command(['run', join(learner.dir, learner.file), '--inputs', join(workDir, 'inputs.json'), '--run-dir', runDir], env);
-    let summary: any = {};
-    try { summary = JSON.parse(readFileSync(join(runDir, 'summary.json'), 'utf8')); } catch { /* the run did not start */ }
-    if (summary.status !== 'completed') return { received: false, reason: `the training run on ${event.input.id} ended ${summary.status ?? 'before its first step'}${summary.failure?.headline ? `: ${summary.failure.headline}` : run.stderr ? `: ${run.stderr.trim().split('\n').at(-1)}` : ''}` };
-    if (event.kind !== 'correction') return { received: true };
-    let runId: string | undefined;
-    try { runId = JSON.parse(readFileSync(join(runDir, 'method-sync.json'), 'utf8')).dashboard_id; } catch { /* not saved */ }
-    if (!runId) return { received: false, reason: 'the training run is not in your Method account, so method judge cannot take the correction. Sign in with method login, then run the comparison again' };
-    const judged = await command(['judge', runId, 'wrong', '--note', event.text, '--json'], env);
-    let judgment: any;
-    try { judgment = JSON.parse(judged.stdout); } catch { return { received: false, run_id: runId, reason: `method judge failed: ${judged.stderr.trim() || judged.stdout.trim()}` }; }
-    const id = judgment?.judgment?.id;
-    if (!id || !judgment.fix) return { received: false, run_id: runId, reason: judgment?.stopped?.failure?.headline ?? 'method judge started no fix for this correction' };
-    return waitForFix(runId, id, env);
+    // The training run and its fix run in a clean room, as the arm's cells do: they see none of the user's
+    // instructions, memory or settings, only the sign-ins of the agents they use.
+    const room = await armRoom(join(learner.dir, learner.file), cacheDir, true);
+    try { return await deliverIn(room.env, event, learner, workDir, before); } finally { await room.remove(); }
   },
 };
+async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: string; file: string }, workDir: string, before?: Delivered): Promise<Delivered> {
+  if (before?.judgment_id && before.run_id) return waitForFix(before.run_id, before.judgment_id, env);
+  const runDir = join(workDir, 'run');
+  rmSync(workDir, { recursive: true, force: true });
+  mkdirSync(workDir, { recursive: true, mode: 0o700 });
+  writePrivateJson(join(workDir, 'inputs.json'), event.input.value);
+  const run = await command(['run', join(learner.dir, learner.file), '--inputs', join(workDir, 'inputs.json'), '--run-dir', runDir], env);
+  let summary: any = {};
+  try { summary = JSON.parse(readFileSync(join(runDir, 'summary.json'), 'utf8')); } catch { /* the run did not start */ }
+  if (summary.status !== 'completed') return { received: false, reason: `the training run on ${event.input.id} ended ${summary.status ?? 'before its first step'}${summary.failure?.headline ? `: ${summary.failure.headline}` : run.stderr ? `: ${run.stderr.trim().split('\n').at(-1)}` : ''}` };
+  if (event.kind !== 'correction') return { received: true };
+  let runId: string | undefined;
+  try { runId = JSON.parse(readFileSync(join(runDir, 'method-sync.json'), 'utf8')).dashboard_id; } catch { /* not saved */ }
+  if (!runId) return { received: false, reason: 'the training run is not in your Method account, so method judge cannot take the correction. Sign in with method login, then run the comparison again' };
+  const judged = await command(['judge', runId, 'wrong', '--note', event.text, '--json'], env);
+  let judgment: any;
+  try { judgment = JSON.parse(judged.stdout); } catch { return { received: false, run_id: runId, reason: `method judge failed: ${judged.stderr.trim() || judged.stdout.trim()}` }; }
+  const id = judgment?.judgment?.id;
+  if (!id || !judgment.fix) return { received: false, run_id: runId, reason: judgment?.stopped?.failure?.headline ?? 'method judge started no fix for this correction' };
+  return waitForFix(runId, id, env);
+}
+
+/**
+ * The clean room of a Method arm (cleanRoomEnv): a fresh HOME with only the sign-ins of the agents that its model
+ * steps run on (and, for a fix, the user's own agent, which runs the fix), a short TMPDIR, and a copy of each bound
+ * folder. Method's own sign-in, cache and server stay: the arm's runs and judgments belong to the user's account.
+ */
+async function armRoom(file: string, cacheDir: string, fix: boolean, folders: Record<string, string> = {}) {
+  const { cleanRoomEnv } = await import('@withmethod/runtime/clean-room.js');
+  const { localAgent, methodProfiles } = await import('@withmethod/runtime/agents.js');
+  const method = readDocument(file);
+  const models = Object.values(method.steps ?? {}).flatMap((step: any) => [step.do, step.check]).filter((exec: any) => ['call', 'agent'].includes(exec?.kind));
+  const agents = new Set<string>(Object.values(methodProfiles(method)).map((profile: any) => profile.backend));
+  if (fix || models.length) { const local = await localAgent(); if (local) agents.add(local); }
+  const room = await cleanRoomEnv([...agents].filter((agent): agent is 'claude' | 'codex' => agent === 'claude' || agent === 'codex'), process.env, { folders });
+  Object.assign(room.env, { METHOD_CONFIG_DIR: configRoot(), METHOD_CACHE_DIR: cacheDir, ...(process.env.METHOD_SERVER ? { METHOD_SERVER: process.env.METHOD_SERVER } : {}) });
+  return room;
+}
 /** Wait for the fix of a correction until it has a final outcome. */
 async function waitForFix(runId: string, id: string, env: NodeJS.ProcessEnv): Promise<Delivered> {
   for (;;) {
@@ -401,6 +432,7 @@ const copyFolder = (from: string, to: string) => { rmSync(to, { recursive: true,
 async function treat(plan: Plan, limit: number): Promise<ArmTreatment[]> {
   const events = plan.events.slice(0, limit) as any[];
   return Promise.all(plan.arms.map(async (arm: any) => {
+    if (arm.plain) return toldTreatment(plan, arm, events);
     const base = join(plan.folder, 'arms', arm.name, `treatment-${arm.hash.slice(0, 12)}`);
     const learner = { dir: join(base, 'learner'), file: arm.file };
     if (!existsSync(join(learner.dir, learner.file))) { copyFolder(arm.dir, learner.dir); writeMethodId(join(learner.dir, learner.file), newMethodId()); }
@@ -437,6 +469,31 @@ async function treat(plan: Plan, limit: number): Promise<ArmTreatment[]> {
   }));
 }
 
+/**
+ * The treatment of a plain arm: it is told each correction in its instructions, in order, and starts each run fresh.
+ * A correction is received when its words are in the instructions. A new input gives a plain agent nothing to keep,
+ * so it is received as given.
+ */
+export function toldInstructions(base: string, corrections: string[]) {
+  return corrections.length ? `${base.trimEnd()}\n\nCorrections to follow:\n${corrections.map(text => `- ${text}`).join('\n')}\n` : base;
+}
+function toldTreatment(plan: Plan, arm: any, events: any[]): ArmTreatment {
+  const snapshots: ArmTreatment['snapshots'] = { 0: { plain: arm.plain, hash: arm.hash } };
+  const told: string[] = [], missing: ArmTreatment['missing'] = [];
+  for (const event of events) {
+    if (event.kind === 'correction') {
+      told.push(event.text);
+      if (!toldInstructions(arm.plain.instructions, told).includes(event.text)) missing.push({ index: event.index, reason: 'its words are not in the instructions' });
+    }
+    if (plan.checkpoints.includes(event.index)) {
+      const plain = { ...arm.plain, instructions: toldInstructions(arm.plain.instructions, told) };
+      snapshots[event.index] = { plain, hash: sha(plain) };
+    }
+  }
+  const count = (kind: string) => ({ planned: events.filter(e => e.kind === kind).length, received: events.filter(e => e.kind === kind && !missing.some(m => m.index === e.index)).length });
+  return { arm: arm.name, planned: events.length, corrections: count('correction'), inputs: count('input'), missing, snapshots };
+}
+
 /** The lines that say what an arm received of its treatment. */
 function receivedLines(t: ArmTreatment, plan: Plan) {
   const parts = [];
@@ -455,37 +512,99 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, trial: boolean): Cell
   const inputs = trial ? plan.inputs.slice(0, plan.trial) : plan.inputs;
   const out: Cell[] = [];
   for (const arm of plan.arms) for (const checkpoint of checkpoints) {
-    const snapshot = checkpoint === null ? { dir: arm.dir, file: arm.file, hash: arm.hash } : treated?.find(t => t.arm === arm.name)?.snapshots[checkpoint];
+    const snapshot: Snapshot | undefined = checkpoint === null ? (arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : treated?.find(t => t.arm === arm.name)?.snapshots[checkpoint];
     if (!snapshot) continue;
     for (const input of inputs) for (let repeat = 0; repeat < (trial ? 1 : plan.runs); repeat++)
-      out.push({ folder: plan.folder, arm: arm.name, ...snapshot, cache_dir: arm.cache_dir, environment: arm.environment, input, repeat, checkpoint });
+      out.push({ folder: plan.folder, arm: arm.name, ...snapshot, cache_dir: arm.cache_dir, ...(arm.plain ? {} : { environment: arm.environment }), input, repeat, checkpoint });
   }
   return out;
 }
 const cellId = (c: { arm: string; input: { id: string } | string; repeat: number; checkpoint: number | null }) => JSON.stringify([c.arm, typeof c.input === 'string' ? c.input : c.input.id, c.repeat, c.checkpoint]);
 
-/** Run one cell: the arm's Method on one input, with nothing reused, in its own folder and with its own cache. */
+/** The tools of a plain arm: the ones that Method's own Claude Code and Codex steps have, so tools are no difference. */
+const plainTools = { claude: ['read', 'write', 'edit', 'search', 'web'], codex: ['shell', 'read', 'write', 'edit', 'search', 'web'] } as const;
+/** The Method that runs a plain arm: one session step with the arm's instructions and the input. */
+const plainMethod = (agent: 'claude' | 'codex') => ({
+  format: 'method/3.4', name: `Plain ${agent === 'claude' ? 'Claude Code' : 'Codex'}`, goal: 'Do the task in the instructions for the input, as a plain agent.',
+  inputs: { instructions: { type: 'text' }, input: { type: 'text' } },
+  limits: { step: { timeout_ms: 3_600_000 } },
+  steps: { work: { in: { instructions: 'inputs.instructions', input: 'inputs.input' }, out: 'session',
+    do: { kind: 'session', agent, prompt: '{{instructions}}\n\n{{input}}', tools: [...plainTools[agent]] } } },
+  result: 'session',
+});
+const inputText = (value: unknown) => typeof value === 'string' ? value : `Input:\n${JSON.stringify(value, null, 2)}`;
+
+/**
+ * Run one cell: the arm on one input, with nothing reused, in its own folder. A Method arm runs with its own cache in a
+ * clean room (armRoom) on its own copy of its bound folders, which the cell keeps in its folder. A plain arm runs as one
+ * session, which makes its own clean room. Both write the same run records, with a transcript of each agent attempt.
+ */
 async function runCell(cell: Cell) {
   process.env.METHOD_CACHE_DIR = cell.cache_dir;
   const runDir = join(cell.folder, 'runs', cell.arm, sha(cell).slice(0, 16));
   rmSync(runDir, { recursive: true, force: true });
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
-  const file = join(cell.dir, cell.file);
-  const { preparedConfig } = await import('./quality.js');
   const { runMethod } = await import('@withmethod/runtime/runner.js');
-  const { resolveSecrets } = await import('./secrets.js');
-  const prepared = await preparedConfig(file, {});
-  // Each cell works on its own copy of the folders that the arm reads and writes.
-  const environment: Record<string, string> = { ...prepared.config.environment };
-  for (const [envName, source] of Object.entries(cell.environment)) { const copy = join(runDir, 'environment', envName); cpSync(source, copy, { recursive: true }); environment[envName] = copy; }
   const started = Date.now();
-  const result: any = await runMethod(file, { ...prepared.config, ...(Object.keys(environment).length ? { environment } : {}) }, {
-    runDir: join(runDir, 'run'), inputs: cell.input.value as any, fresh: true, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle,
-    secrets: resolveSecrets(Object.keys(readDocument(file).secrets ?? {})), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(prepared.classification ? { classification: prepared.classification } : {}) });
+  let result: any;
+  if (cell.plain) {
+    const file = join(runDir, 'plain.method');
+    writeFileSync(file, JSON.stringify(plainMethod(cell.plain.agent), null, 2) + '\n', { mode: 0o600 });
+    result = await runMethod(file, { allow_local_processes: true }, { runDir: join(runDir, 'run'), inputs: { instructions: cell.plain.instructions, input: inputText(cell.input.value) }, fresh: true });
+    if (result.result) result.result = result.result.final_text;
+  } else {
+    const file = join(cell.dir!, cell.file!);
+    const { preparedConfig } = await import('./quality.js');
+    const { resolveSecrets } = await import('./secrets.js');
+    const prepared = await preparedConfig(file, {});
+    const secrets = resolveSecrets(Object.keys(readDocument(file).secrets ?? {}));
+    const room = await armRoom(file, cell.cache_dir, false, cell.environment ?? {});
+    // The cell's process runs the arm in the room: its agent steps and scripts get the room's environment.
+    const outside = { ...process.env };
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, room.env);
+    try {
+      result = await runMethod(file, { ...prepared.config, environment: { ...prepared.config.environment, ...room.folders } }, {
+        runDir: join(runDir, 'run'), inputs: cell.input.value as any, fresh: true, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle,
+        secrets, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(prepared.classification ? { classification: prepared.classification } : {}) });
+    } finally {
+      for (const key of Object.keys(process.env)) delete process.env[key];
+      Object.assign(process.env, outside);
+      // The cell keeps what the arm left in its folders, for the measures.
+      for (const [envName, copy] of Object.entries(room.folders as Record<string, string>)) cpSync(copy, join(runDir, 'environment', envName), { recursive: true, verbatimSymlinks: true });
+      await room.remove();
+    }
+  }
   if (!['completed', 'unconfirmed'].includes(result.status))
     throw Error(`The arm ${cell.arm} ${result.status === 'needs_input' ? 'asked a question' : 'failed'} on the input ${cell.input.id} (run ${cell.repeat + 1}${pointLabel(cell.checkpoint)}): ${result.failure?.headline ?? result.status}. Its run folder: ${join(runDir, 'run')}. Fix the cause and run the comparison again; finished runs are reused.`);
   return { arm: cell.arm, input: cell.input.id, repeat: cell.repeat, checkpoint: cell.checkpoint, result: result.result ?? null, run_dir: join(runDir, 'run'),
-    artifacts: join(runDir, 'run', 'artifacts'), duration_ms: Date.now() - started, cost_usd: typeof result.usage?.cost_usd === 'number' ? result.usage.cost_usd : null };
+    artifacts: join(runDir, 'run', 'artifacts'), transcript: readableTranscript(join(runDir, 'run', 'artifacts'), join(runDir, 'transcript.md')),
+    duration_ms: Date.now() - started, cost_usd: typeof result.usage?.cost_usd === 'number' ? result.usage.cost_usd : null };
+}
+
+/**
+ * A readable transcript of a run: each agent attempt's transcript.jsonl, oldest first, as one Markdown file. A long
+ * tool result is cut at 2,000 characters; the attempt's transcript.jsonl keeps the full text. Returns its path, or
+ * null when the run had no agent attempt.
+ */
+function readableTranscript(artifacts: string, target: string): string | null {
+  const attempts = ['claude', 'codex', 'session', 'model'].flatMap(kind => {
+    try { return readdirSync(join(artifacts, kind)).filter(name => name.startsWith('attempt-')).map(name => join(artifacts, kind, name)); } catch { return []; }
+  }).filter(dir => existsSync(join(dir, 'transcript.jsonl'))).sort((a, b) => statSync(join(a, 'transcript.jsonl')).mtimeMs - statSync(join(b, 'transcript.jsonl')).mtimeMs);
+  if (!attempts.length) return null;
+  const who: Record<string, string> = { user: 'You', assistant: 'Agent', tool: 'Tool', system: 'Method' };
+  const cut = (text: string) => text.length > 2000 ? `${text.slice(0, 2000)}\n[... ${text.length - 2000} more characters in transcript.jsonl]` : text;
+  const parts: string[] = [];
+  for (const dir of attempts) {
+    parts.push(`## ${dir.slice(artifacts.length + 1)}`, `Full record: ${join(dir, 'transcript.jsonl')}`, '');
+    for (const line of readFileSync(join(dir, 'transcript.jsonl'), 'utf8').split('\n').filter(Boolean)) {
+      const e = JSON.parse(line);
+      const label = [e.kind, e.tool, e.path].filter(Boolean).join(' · ');
+      parts.push(`**${who[e.role] ?? e.role}** (${label}${e.inferred ? ', inferred' : ''})`, '', e.role === 'tool' ? cut(e.text) : e.text, '');
+    }
+  }
+  writeFileSync(target, parts.join('\n'), { mode: 0o600 });
+  return target;
 }
 
 /** The summary of the trial for the approval question, or an error that names what an arm did not receive. */
@@ -509,8 +628,8 @@ function trialCheck(plan: Plan, runs: any[], treated: ArmTreatment[] | null) {
   const cost = runs.length && costs.every(c => typeof c === 'number')
     ? `about $${((costs.reduce((a, b) => a + b, 0) / runs.length) * fullCells).toFixed(2)} at API prices`
     : 'not known: the trial runs reported no price (a run on your own Claude Code or Codex subscription reports none)';
-  return [`Trial of "${plan.question}"`, '', 'What each arm received:', ...lines.map(l => `  ${l}`), '', 'The trial runs (each folder holds the run\'s records):',
-    ...runs.map(r => `  ${r.arm}, input ${r.input}: ${r.run_dir}`), '',
+  return [`Trial of "${plan.question}"`, '', 'What each arm received:', ...lines.map(l => `  ${l}`), '', 'The trial runs (each folder holds the run\'s records; each transcript reads as a conversation):',
+    ...runs.flatMap(r => [`  ${r.arm}, input ${r.input}: ${r.run_dir}`, ...(r.transcript ? [`    transcript: ${r.transcript}`] : [])]), '',
     !fullCells && !deliveries ? 'The full run: nothing more to run; the trial ran every cell.'
       : `The full run: ${plural(fullCells, 'more run')}${deliveries ? ` and ${plural(deliveries, 'more treatment event')} per arm` : ''}. Time: ${minutes ? `about ${plural(minutes, 'minute')}` : 'under a minute'} (about ${Math.round(mean / 1000)} s per run, 4 at a time${deliveries ? `, and about ${Math.round(deliveryMs / 1000)} s per treatment event, the arms at the same time` : ''}). Cost: ${cost}.`].join('\n');
 }

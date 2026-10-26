@@ -66,13 +66,82 @@ it('refuses a comparison with a missing part, more than one main measure, a rule
   expect(write(treatment)).toThrow(/the rule needs at/);
 });
 
-it('says that a plain Claude Code or Codex arm is not built yet', async () => {
+/** A stand-in for Codex on PATH: it answers with the number of lines in its prompt that start with "- " (corrections). */
+function codexStub(root: string) {
+  const bin = join(root, 'bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'codex'), `#!/usr/bin/env node
+const fs = require('fs');
+const argv = process.argv.slice(2);
+let prompt = '';
+process.stdin.on('data', d => prompt += d).on('end', () => {
+  fs.appendFileSync(${JSON.stringify(join(root, 'calls-plain'))}, 'x');
+  fs.writeFileSync(${JSON.stringify(join(root, 'plain-seen.json'))}, JSON.stringify({ prompt, home: process.env.HOME, user_secret: process.env.USER_SECRET ?? null }));
+  const n = JSON.parse(prompt.slice(prompt.indexOf('{'))).n;
+  fs.writeFileSync(argv[argv.indexOf('--output-last-message') + 1], String(n * 3));
+  console.log(JSON.stringify({ type: 'item.completed', item: { id: 'm', type: 'agent_message', text: String(n * 3) } }));
+});
+`, { mode: 0o700 });
+  // The sign-in that the clean room links: Codex's auth.json in the user's home.
+  mkdirSync(join(process.env.HOME!, '.codex'), { recursive: true });
+  writeFileSync(join(process.env.HOME!, '.codex', 'auth.json'), '{}');
+  return bin;
+}
+
+it('runs a plain Codex arm as one session in a clean room, with only its instructions and the input, and shows its transcript in the trial', async () => {
   const { root, file } = fixture();
-  writeFileSync(join(root, 'plain.md'), 'Answer with a number.');
+  const bin = codexStub(root);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  process.env.USER_SECRET = 'not for the arm';
+  try {
+    writeFileSync(join(root, 'plain.md'), 'Answer with three times n.');
+    // The Method arm records the home folder that its script saw.
+    writeFileSync(join(root, 'a', 'answer.mjs'), `import{appendFileSync,writeFileSync,readFileSync}from'node:fs';appendFileSync(${JSON.stringify(join(root, 'calls-a'))},'x');writeFileSync(${JSON.stringify(join(root, 'a-home'))},process.env.HOME);const{n}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({value:n}))`);
+    const doc = JSON.parse(readFileSync(file, 'utf8'));
+    writeFileSync(file, JSON.stringify({ ...doc, arms: { a: doc.arms.a, plain: { agent: 'codex', instructions: 'plain.md' } } }));
+    const args = await comparisonRunArgs(['run', file]);
+    const trial: any = await runCurrentFile(args[1]!, { inputs: args[args.indexOf('--inputs') + 1]!, 'run-dir': join(root, 'runs', 'first') } as any);
+    expect(trial.status).toBe('needs_input');
+    const question = readFileSync(join(root, 'runs', 'first', 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).find(e => e.event === 'human.required').prompt;
+    expect(question).toContain('plain: Inputs run: 1 of 1.');
+    const transcript = /plain, input inputs\/one\.json: .*\n {4}transcript: (\S+)/.exec(question)?.[1];
+    expect(transcript && readFileSync(transcript, 'utf8')).toMatch(/\*\*You\*\* \(prompt\)\n\nAnswer with three times n\.\n\nInput:\n\{\n {2}"n": 1\n\}/);
+    const seen = JSON.parse(readFileSync(join(root, 'plain-seen.json'), 'utf8'));
+    expect(seen.prompt).toBe('Answer with three times n.\n\nInput:\n{\n  "n": 1\n}');
+    expect(seen.home).not.toBe(process.env.HOME);
+    expect(seen.user_secret).toBeNull();
+    // The Method arm runs in a clean room too, with a fresh home that is removed after its run.
+    const armHome = readFileSync(join(root, 'a-home'), 'utf8');
+    expect(armHome).not.toBe(process.env.HOME);
+    expect(armHome).toMatch(/\/mr-[^/]+\/home$/);
+    expect(existsSync(armHome)).toBe(false);
+    writeFileSync(join(root, 'go.json'), JSON.stringify({ steps: { approve: { outputs: { go: true } } } }));
+    const done: any = await runCurrentFile(args[1]!, { 'run-dir': join(root, 'runs', 'first'), resume: true, human: join(root, 'go.json') } as any);
+    expect(done.result).toMatch(/^plain is better: plain is ahead of a by 0\.30 on size/);
+    expect(calls(root, 'plain')).toBe(2);
+  } finally { process.env.PATH = path; delete process.env.USER_SECRET; }
+}, 600_000);
+
+it('tells a plain arm each correction in its instructions, in order, and measures it at each checkpoint', async () => {
+  const { root, file } = fixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 2 },
+    treatment: { events: [{ correction: 'Be brief.', input: 'inputs/three.json' }, { input: 'inputs/three.json' }, { correction: 'Use numbers.', input: 'inputs/three.json' }], checkpoints: [0, 2, 3] } });
+  writeFileSync(join(root, 'plain.md'), 'Answer with three times n.');
   const doc = JSON.parse(readFileSync(file, 'utf8'));
   writeFileSync(file, JSON.stringify({ ...doc, arms: { ...doc.arms, plain: { agent: 'claude', instructions: 'plain.md' } } }));
-  expect(() => readComparison(file)).not.toThrow();
-  await expect(compileComparison(file)).rejects.toThrow(/The arm plain is plain Claude Code or Codex\. A comparison cannot run a plain agent yet: that needs the session step in Method's runtime, which is not built yet\./);
+  delivery.deliver = async () => ({ received: true, outcome: 'fixed' });
+  const { inputs } = await compileComparison(file);
+  const comparison = JSON.parse(readFileSync(inputs, 'utf8')).comparison;
+  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  const plain = treated.find((t: any) => t.arm === 'plain');
+  expect([plain.corrections, plain.inputs, plain.missing]).toEqual([{ planned: 2, received: 2 }, { planned: 1, received: 1 }, []]);
+  expect(plain.snapshots['0'].plain.instructions).toBe('Answer with three times n.');
+  expect(plain.snapshots['2'].plain.instructions).toBe('Answer with three times n.\n\nCorrections to follow:\n- Be brief.\n');
+  expect(plain.snapshots['3'].plain.instructions).toBe('Answer with three times n.\n\nCorrections to follow:\n- Be brief.\n- Use numbers.\n');
+  // Every point but the trial's: 3 checkpoints × 2 inputs, less the trial cell.
+  const cells = (await compareStage('plan', { comparison, go: true, treated: JSON.stringify(treated) })).cells as string[];
+  const plainCells = cells.map(c => JSON.parse(c)).filter((c: any) => c.arm === 'plain');
+  expect(plainCells.map((c: any) => [c.checkpoint, c.plain.instructions.includes('Use numbers.')])).toEqual([[0, false], [2, false], [2, false], [3, true], [3, true]]);
 });
 
 it('runs each Method arm as its own Method, decides by the rule, and reruns only the cells of a changed part', async () => {
