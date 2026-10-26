@@ -1,3 +1,7 @@
+# 0.20.5
+
+`method run`, `method sync` and `method wait` upload a step's file output when the step returns its absolute path inside `$METHOD_OUTPUT_DIR`, as the runtime already accepts. Before, the upload stopped with "The output is outside the run artifacts folder."
+
 # 0.20.4
 
 Use runtime 0.16.3: a live Claude Code agent step may use web search and web fetch, as a Codex step can. A case test (`method test`) still gives the agent no shell and no network.
