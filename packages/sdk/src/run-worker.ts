@@ -7,6 +7,7 @@ import { writePrivateJson } from './files.js';
 import { runDashboard } from './method-sync.js';
 import { runStatus } from './current-inspection.js';
 import { unreadableRecord } from './failure.js';
+import { comparisonPage } from './compare-account.js';
 
 /** server: the signed-in Method server, so that the start line links to the run's dashboard page. */
 export async function startRunWorker(args:string[], directory:string, background=false, server?:string) {
@@ -34,7 +35,8 @@ export async function startRunWorker(args:string[], directory:string, background
   await new Promise<void>((yes,no)=>{child.once('spawn',yes);child.once('error',no);});
   child.unref();
   // The child owns its status record after startup. Do not overwrite a fast completion.
-  const dashboard=runDashboard(directory)??(server?`${server}/runs/${runId}`:undefined);
+  // A comparison's start line links to the comparison's page.
+  const dashboard=comparisonPage(resolve(args[1]??''))??runDashboard(directory)??(server?`${server}/runs/${runId}`:undefined);
   process.stdout.write(JSON.stringify({status:'started',run_id:runId,...(dashboard?{dashboard}:{}),run_dir:directory,wait:`method wait ${JSON.stringify(directory)}`,cancel:`method cancel ${JSON.stringify(directory)}`})+'\n');
   const startupDeadline=Date.now()+30_000;
   while(!existsSync(status)){if(Date.now()>startupDeadline)throw Error('The worker did not write its status. Inspect its error log.');await new Promise(r=>setTimeout(r,50));}
@@ -70,7 +72,8 @@ export async function waitForRun(directory:string) {
     const file=join(directory,'worker.json');
     if(existsSync(file)){
       const status=JSON.parse(readFileSync(file,'utf8'));
-      const dashboard=runDashboard(directory),link=dashboard?{dashboard}:{};
+      const recorded=existsSync(join(directory,'method-file.json'))?JSON.parse(readFileSync(join(directory,'method-file.json'),'utf8')).path:undefined;
+      const dashboard=(typeof recorded==='string'?comparisonPage(recorded):undefined)??runDashboard(directory),link=dashboard?{dashboard}:{};
       if(status.status!=='running'){
         // The final line gives the run's own status, and the headline of a failure.
         process.exitCode=status.exit_code??1;

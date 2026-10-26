@@ -3,11 +3,13 @@
  * file, compiles it into a generated Method (as requestMethod does for a model request) and runs that Method. Its
  * steps are the stages: trial, treatment check, approval (an ask step), full run, grades, decision. Each cell (arm ×
  * input × run × checkpoint) is one iteration of an each step, so the runtime's step cache reuses every finished cell
- * on a rerun, and a changed measure regrades without running any agent again.
+ * on a rerun, and a changed measure regrades without running any agent again. Each stage reports to the comparison's
+ * page in the Method account (compare-account.ts); a cell is keyed by its content, so a cell that two versions of the
+ * file share runs once.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { z } from 'zod/v4';
 import { loadWorkflow, parseDocumentValue } from '../../workflow-language/src/validate.js';
@@ -16,12 +18,16 @@ import { methodContent, methodIdPattern, newMethodId, writeMethodId } from './ve
 import { packageFileNames } from './method-files.js';
 import { writePrivateJson } from './files.js';
 import { configRoot } from './computer-settings.js';
+import { linkCells, readAccount, saveComparison, sendPlan, sendStage, uploadText, type PlannedCell } from './compare-account.js';
+import { ensureLocalServer, registerLocalRun } from './local-server.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
 
 const text = z.string().trim().min(1);
-const name = z.string().regex(/^[a-z][a-z0-9_]*$/, 'Use lowercase letters, digits and underscores, starting with a letter.');
+const name = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/, 'Use lowercase letters, digits and underscores, starting with a letter, at most 40 characters.');
+/** The comparison's ID in the Method account: written into the file on its first run, like a Method's ID. */
+export const comparisonIdPattern = /^cmp_[a-f0-9]{32}$/;
 const measureSchema = z.strictObject({
   name: text.describe('A short name for the number, for example "would send".'),
   code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, output, expected, run_dir, artifacts} as JSON on stdin and prints {"score": NUMBER}.'),
@@ -38,6 +44,7 @@ const eventSchema = z.strictObject({
   model: text.optional().describe('A new model for the arm from this point on.'),
 });
 export const comparisonSchema = z.strictObject({
+  id: z.string().regex(comparisonIdPattern).optional().describe('The comparison\'s ID in your Method account. Method writes it on the first run; keep it.'),
   question: text.describe('One sentence in your words.'),
   arms: z.record(name, armSchema).describe('Each agent under test, by a short name.'),
   difference: text.describe('The one thing that is different between the arms.'),
@@ -184,8 +191,27 @@ if (run.error) console.error(run.error.message);
 process.exitCode = run.error ? 1 : run.status ?? 1;
 `;
 
+/**
+ * Write `id: cmp_...` as the first line of a comparison file (the first key of a JSON file), the way a Method file keeps
+ * its Method ID. The rest of the file is unchanged.
+ */
+export function writeComparisonId(file: string, id: string) {
+  const path = authoringPath(file), text = readFileSync(path, 'utf8');
+  const next = /^\s*\{/.test(text)
+    ? JSON.stringify((({ id: _old, ...rest }) => ({ id, ...rest }))(JSON.parse(text)), null, /\n {2}"/.test(text) ? 2 : undefined) + (text.endsWith('\n') ? '\n' : '')
+    : [`id: ${id}`, ...text.split('\n').filter(line => !/^id:/.test(line))].join('\n');
+  writeFileSync(path, next, { mode: 0o600 });
+}
+/** The file's comparison ID; writes a new one when the file has none. */
+function ensureComparisonId(file: string, doc: Comparison) {
+  if (doc.id) return doc.id;
+  const id = `cmp_${randomBytes(16).toString('hex')}`;
+  writeComparisonId(file, id);
+  return id;
+}
+
 /** The files of a folder, hashed, for an arm's content hash. The id: line of the Method is left out. */
-function folderHash(dir: string, methodFile: string) {
+function folderHash(dir: string, methodFile?: string) {
   const parts: Array<[string, string]> = [];
   const walk = (sub: string) => {
     for (const entry of readdirSync(join(dir, sub), { withFileTypes: true })) {
@@ -206,7 +232,7 @@ function folderHash(dir: string, methodFile: string) {
  */
 async function copyArm(source: string, target: string) {
   const root = dirname(source), file = basename(source);
-  const workflow = loadWorkflow(methodContent(readDocument(source)));
+  const document = readDocument(source), workflow = loadWorkflow(methodContent(document));
   const idFile = join(target, 'id.json');
   const id = existsSync(idFile) ? JSON.parse(readFileSync(idFile, 'utf8')).id : newMethodId();
   const method = join(target, 'method');
@@ -229,69 +255,121 @@ async function copyArm(source: string, target: string) {
     cpSync(bound, join(env, envName), { recursive: true, filter: path => !['.git', 'node_modules', '.venv', '.method-runs'].includes(basename(path)) });
     folders[envName] = join(env, envName);
   }
-  return { dir: method, file, id, hash: folderHash(method, file), environment: folders };
+  return { dir: method, file, id, hash: folderHash(method, file), environment: folders, run_data: document.run_data === 'device' ? 'device' : 'account' };
 }
 
 /** Marks that a person gave on earlier runs, by output and measure, so a rerun does not ask again. */
 const marksFile = (folder: string) => join(folder, 'marks.json');
 const readMarks = (folder: string): Record<string, number> => { try { return JSON.parse(readFileSync(marksFile(folder), 'utf8')); } catch { return {}; } };
 
-/** Steps of the generated Method, by stage. All are scripts that run method __compare STAGE. */
-function generatedMethod(doc: Comparison, previousId: string | undefined, counts: { cells: number }) {
+/**
+ * Steps of the generated Method, by stage. All are scripts that run method __compare STAGE. The stages that only plan
+ * and report (and so cost nothing) change state.reported, which keeps them from being reused: they report to the
+ * account on every run. approved: the person already said go to this version of the file, so the approval does not ask.
+ */
+function generatedMethod(doc: Comparison, previousId: string | undefined, counts: { cells: number }, approved: boolean) {
   const treatment = !!doc.treatment, person = [doc.measure, ...(doc.other_measures ?? [])].some(m => m.person !== undefined);
   const stage = (name: string) => ({ kind: 'run', runtime: 'node', entrypoint: 'stage.mjs', args: [name] });
   const list = { type: 'list', items: { type: 'text' } };
   const treated = treatment ? { treated: 'treatment' } : {};
+  const reports = ['state.reported'];
   const steps: Record<string, any> = {};
   if (treatment) steps.trial_treat = { name: 'Trial treatment', purpose: 'Gives each arm the treatment events before the first checkpoint and records what it received.', in: { comparison: 'inputs.comparison' }, do: stage('trial_treat'), changes: ['state.treatment'], out: { trial_treatment: { type: 'text' } } };
-  steps.trial_plan = { name: 'Trial plan', purpose: 'Lists the trial runs: each arm on the first inputs, once.', in: { comparison: 'inputs.comparison', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('trial_plan'), out: { trial_cells: list } };
+  steps.trial_plan = { name: 'Trial plan', purpose: 'Lists the trial runs (each arm on the first inputs, once) that have not finished yet, and reports them to the comparison page.', in: { comparison: 'inputs.comparison', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('trial_plan'), changes: reports, out: { trial_cells: list, trial_done: list } };
   steps.trial = { name: 'Trial', purpose: 'Runs each trial cell.', each: { cell: 'trial_cells' }, concurrency: 4, do: stage('trial_cell'), out: { trial_run: { type: 'text' } } };
-  steps.trial_check = { name: 'Treatment check', purpose: 'Says what each arm received, and stops when an arm did not receive everything. Estimates the full run from the trial.', in: { comparison: 'inputs.comparison', runs: 'trial_run', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('check'), out: { trial_summary: { type: 'text' } } };
-  steps.approve = { name: 'Approval', purpose: 'The person reads the trial and says go.', in: { summary: 'trial_summary' }, ask: '{{summary}}\n\nStart the full run? Answer go: true to start it, or go: false to stop.', out: { go: { type: 'boolean', description: 'true to start the full run.' } } };
+  steps.trial_check = { name: 'Treatment check', purpose: 'Says what each arm received, and stops when an arm did not receive everything. Estimates the full run from the trial.', in: { comparison: 'inputs.comparison', runs: 'trial_run', done: 'trial_done', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('check'), changes: reports, out: { trial_summary: { type: 'text' } } };
+  steps.approve = approved
+    ? { name: 'Approval', purpose: 'The person already approved the full run of this version of the file.', in: { summary: 'trial_summary' }, do: stage('approved'), out: { go: { type: 'boolean' } } }
+    : { name: 'Approval', purpose: 'The person reads the trial and says go.', in: { summary: 'trial_summary' }, ask: '{{summary}}\n\nStart the full run? Answer go: true to start it, or go: false to stop.', out: { go: { type: 'boolean', description: 'true to start the full run.' } } };
   if (treatment) steps.treat = { name: 'Treatment', purpose: 'Gives each arm every treatment event in order, freezes a copy at each checkpoint, and records what it received.', in: { comparison: 'inputs.comparison', go: 'go' }, do: stage('treat'), changes: ['state.treatment'], out: { treatment: { type: 'text' } } };
-  steps.plan = { name: 'Plan', purpose: 'Lists every cell of the full run that the trial did not already run.', in: { comparison: 'inputs.comparison', go: 'go', ...treated }, do: stage('plan'), out: { cells: list } };
+  steps.plan = { name: 'Plan', purpose: 'Lists every cell of the full run that has not finished yet, and reports the plan to the comparison page.', in: { comparison: 'inputs.comparison', go: 'go', ...treated }, do: stage('plan'), changes: reports, out: { cells: list, done: list } };
   steps.cells = { name: 'Full run', purpose: 'Runs each cell: one arm on one input, once, at one checkpoint.', each: { cell: 'cells' }, concurrency: 4, do: stage('cell'), out: { full_run: { type: 'text' } } };
-  const runs = { trial_runs: 'trial_run', full_runs: 'full_run' };
+  const runs = { trial_runs: 'trial_run', trial_done: 'trial_done', full_runs: 'full_run', done_runs: 'done' };
   if (person) {
     steps.to_mark = { name: 'Outputs to mark', purpose: 'Lists the outputs that a person has not marked yet.', in: { comparison: 'inputs.comparison', marks: 'inputs.marks', ...runs }, do: stage('to_mark'), out: { mark_questions: list, mark_keys: list } };
     steps.mark = { name: 'Person marks', purpose: 'A person marks each output with a number.', each: { question: 'mark_questions' }, ask: '{{question}}', out: { mark: { type: 'number', description: 'The number for this output.' } } };
   }
   steps.gather = { name: 'Gather', purpose: 'Lists every run with the measures that grade it.', in: { comparison: 'inputs.comparison', marks: 'inputs.marks', ...runs, ...(person ? { mark_keys: 'mark_keys', marks_given: 'mark' } : {}) }, do: stage('gather'), out: { graded: list } };
-  steps.grade = { name: 'Grade', purpose: 'Gives each run its number on each measure.', each: { item: 'graded' }, concurrency: 4, do: stage('grade'), out: { grade: { type: 'text' } } };
-  steps.decide = { name: 'Decide', purpose: 'Applies the decision rule and writes the result.', in: { comparison: 'inputs.comparison', grades: 'grade', ...treated }, do: stage('decide'), out: { answer: { type: 'text', description: 'The answer, the rule as a sentence, what each arm received, and n per point.' } } };
+  steps.grade = { name: 'Grade', purpose: 'Gives each run its number on each measure, with the grader\'s verdicts.', each: { item: 'graded' }, concurrency: 4, do: stage('grade'), out: { grade: { type: 'text' } } };
+  steps.decide = { name: 'Decide', purpose: 'Applies the decision rule, writes the result and reports it to the comparison page.', in: { comparison: 'inputs.comparison', grades: 'grade', ...runs, ...treated }, do: stage('decide'), changes: reports, out: { answer: { type: 'text', description: 'The answer, the rule as a sentence, what each arm received, and n per point.' } } };
   const most = 2_147_483_647;
   return {
     format: 'method/3.4', ...(previousId ? { id: previousId } : {}),
     name: `Comparison: ${doc.question}`.slice(0, 200), goal: doc.question,
     inputs: { comparison: { type: 'text', description: 'The checked comparison, as JSON.' }, marks: { type: 'text', description: 'Marks that a person gave earlier, as JSON.' } },
-    ...(treatment ? { state: { treatment: { type: 'text', description: 'What each arm received so far.', default: '' } } } : {}),
+    state: { reported: { type: 'text', description: 'When the comparison page last got a report.', default: '' },
+      ...(treatment ? { treatment: { type: 'text', description: 'What each arm received so far.', default: '' } } : {}) },
     limits: { timeout_ms: most, max_invocations: 3 * counts.cells + 100, step: { timeout_ms: most } },
     steps, result: 'answer',
   };
 }
 
+/** The comparison as the account keeps it (the parts of the accepted definition), for the dashboard. */
+function accountSpec(doc: Comparison, arms: Array<{ name: string; id?: string; plain?: Plain }>) {
+  const measure = (m: Comparison['measure']) => ({ name: m.name, how: m.code ? 'code' : m.rubric ? 'model' : 'person', ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}) });
+  const events = doc.treatment?.events ?? [];
+  const kind = events.every(e => e.correction !== undefined) ? 'Corrections' : events.every(e => e.correction === undefined) ? 'New inputs' : 'Events';
+  return {
+    question: doc.question,
+    arms: arms.map(arm => ({ id: arm.name, name: arm.name, ...(arm.plain ? { agent: arm.plain.agent } : { method_id: arm.id }) })),
+    difference: doc.difference, ...(doc.other_differences?.length ? { other_differences: doc.other_differences } : {}),
+    inputs: { checking: doc.inputs, ...(doc.teaching?.length ? { teaching: doc.teaching } : {}) },
+    main_measure: measure(doc.measure), ...(doc.other_measures?.length ? { other_measures: doc.other_measures.map(measure) } : {}),
+    rule: doc.rule, runs_per_point: doc.runs, ...(doc.trial ? { trial: doc.trial } : {}),
+    ...(doc.treatment ? { treatment: { kind, items: events.length, checkpoints: [...doc.treatment.checkpoints].sort((a, b) => a - b) } } : {}),
+    ...(doc.expected ? { expected_answers: true } : {}),
+    assumptions: [...(doc.treatment ? [{ text: 'Each arm received its full treatment.', check: 'treatment' }] : []), ...(doc.assumptions ?? []).map(text => ({ text, check: null }))],
+  };
+}
+
+/** The person said go to this version of the file (on this computer, or the account's version is past its trial). */
+const approvalFile = (folder: string) => join(folder, 'approval.json');
+function isApproved(folder: string, digest: string) {
+  const account = readAccount(folder);
+  if (account?.spec_digest === digest && ['running', 'done'].includes(account.stage)) return true;
+  try { return JSON.parse(readFileSync(approvalFile(folder), 'utf8')).spec_digest === digest; } catch { return false; }
+}
+
 /**
  * Check a .compare file and write its generated Method, the stage script and the inputs into the comparison folder.
- * A plain Claude Code or Codex arm runs as the runtime's session step; model events are not built yet.
+ * The file is saved as a version of its comparison in the account, for the comparison page. A plain Claude Code or
+ * Codex arm runs as the runtime's session step, in a room with the files that the Method arms get.
  */
 export async function compileComparison(file: string) {
   const path = authoringPath(file), root = dirname(path);
   const doc = readComparison(path);
   if (doc.treatment?.events.some(event => event.model !== undefined)) throw Error('A treatment event that changes the model cannot run yet: that is not built yet. Corrections and new inputs run today.');
+  const id = ensureComparisonId(path, doc);
   const folder = comparisonFolder(path);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const arms = [];
+  const arms: any[] = [];
   for (const [armName, arm] of Object.entries(doc.arms)) {
     const cache_dir = join(folder, 'arms', armName, 'cache');
-    if (!armIsMethod(arm)) {
-      const plain = { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8') };
-      arms.push({ name: armName, plain, hash: sha(plain), cache_dir });
-      continue;
-    }
-    const copied = await copyArm(resolve(root, arm), join(folder, 'arms', armName));
-    arms.push({ name: armName, ...copied, cache_dir });
+    if (!armIsMethod(arm)) { arms.push({ name: armName, plain: { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8') }, cache_dir }); continue; }
+    arms.push({ name: armName, ...await copyArm(resolve(root, arm), join(folder, 'arms', armName)), cache_dir });
   }
-  const resolveInput = (id: string) => { const value = inputValue(root, id); return { id, value, hash: sha(value) }; };
+  // A plain arm's room holds the same files that the Method arms get: a copy of each bound folder, by its name.
+  for (const arm of arms.filter(a => a.plain)) {
+    const room = join(folder, 'arms', arm.name, 'room');
+    rmSync(room, { recursive: true, force: true });
+    mkdirSync(join(folder, 'arms', arm.name), { recursive: true, mode: 0o700 });
+    const folders = Object.assign({}, ...arms.filter(a => !a.plain).map(a => a.environment)) as Record<string, string>;
+    for (const [envName, copy] of Object.entries(folders)) cpSync(copy, join(room, envName), { recursive: true });
+    if (Object.keys(folders).length) arm.plain.room = room;
+    const method = join(folder, 'arms', arm.name, 'plain.method');
+    let methodId: string | undefined;
+    try { methodId = readDocument(method).id; } catch { /* first run */ }
+    writeFileSync(method, JSON.stringify(plainMethod(arm.plain.agent, !!arm.plain.room), null, 2) + '\n', { mode: 0o600 });
+    writeMethodId(method, methodId && methodIdPattern.test(methodId) ? methodId : newMethodId());
+    arm.method = method;
+    arm.id = readDocument(method).id;
+    arm.hash = sha({ ...arm.plain, room: arm.plain.room ? folderHash(arm.plain.room) : null });
+  }
+  const spec = accountSpec(doc, arms);
+  const digest = sha(spec);
+  writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
+  await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec);
+  const resolveInput = (inputId: string) => { const value = inputValue(root, inputId); return { id: inputId, value, hash: sha(value) }; };
   const measure = (m: Comparison['measure'], main: boolean) => ({ name: m.name, main,
     ...(m.code ? { code: { path: resolve(root, m.code), hash: sha(readFileSync(resolve(root, m.code))) } } : {}),
     ...(m.rubric ? { rubric: m.rubric } : {}), ...(m.person ? { person: m.person } : {}) });
@@ -302,16 +380,16 @@ export async function compileComparison(file: string) {
     events: (doc.treatment?.events ?? []).map((event, i) => ({ index: i + 1, kind: event.correction !== undefined ? 'correction' : 'input', ...(event.correction ? { text: event.correction } : {}), input: resolveInput(event.input!) })),
     checkpoints: doc.treatment ? [...doc.treatment.checkpoints].sort((a, b) => a - b) : null,
     measures: [measure(doc.measure, true), ...(doc.other_measures ?? []).map(m => measure(m, false))],
-    expected: Object.fromEntries(Object.entries(doc.expected ?? {}).map(([id, p]) => [id, expectedValue(p)])),
+    expected: Object.fromEntries(Object.entries(doc.expected ?? {}).map(([inputId, p]) => [inputId, expectedValue(p)])),
     rule: doc.rule, rule_sentence: ruleSentence(doc), runs: doc.runs, trial: Math.min(doc.trial ?? 2, doc.inputs.length),
     assumptions: doc.assumptions ?? [], compare_root: root,
   };
   const methodPath = join(folder, 'comparison.method');
   let previousId: string | undefined;
   try { const old = JSON.parse(readFileSync(methodPath, 'utf8')).id; if (typeof old === 'string' && methodIdPattern.test(old)) previousId = old; } catch { /* first run */ }
-  const cells = arms.length * doc.inputs.length * doc.runs * (plan.checkpoints?.length ?? 1);
+  const cellCount = arms.length * doc.inputs.length * doc.runs * (plan.checkpoints?.length ?? 1);
   writeFileSync(join(folder, 'stage.mjs'), stageScript, { mode: 0o600 });
-  writeFileSync(methodPath, JSON.stringify(generatedMethod(doc, previousId, { cells }), null, 2) + '\n', { mode: 0o600 });
+  writeFileSync(methodPath, JSON.stringify(generatedMethod(doc, previousId, { cells: cellCount }, isApproved(folder, digest)), null, 2) + '\n', { mode: 0o600 });
   const inputs = join(folder, 'inputs.json');
   writePrivateJson(inputs, { comparison: JSON.stringify(plan), marks: JSON.stringify(readMarks(folder)) });
   return { method: methodPath, inputs, folder, plan };
@@ -332,11 +410,12 @@ export async function comparisonRunArgs(args: string[]) {
 // The stages (method __compare STAGE: the bindings as JSON on stdin, the outputs as JSON on stdout)
 
 type Plan = ReturnType<typeof JSON.parse>;
-/** A plain arm: Claude Code or Codex with its instructions (and the corrections it was told, after a treatment). */
-type Plain = { agent: 'claude' | 'codex'; instructions: string };
+/** A plain arm: Claude Code or Codex with its instructions (and the corrections it was told, after a treatment), and its room. */
+type Plain = { agent: 'claude' | 'codex'; instructions: string; room?: string };
 /** An arm at one point: a Method folder and file, or a plain agent. */
 type Snapshot = { dir: string; file: string; hash: string } | { plain: Plain; hash: string };
-type Cell = { folder: string; arm: string; dir?: string; file?: string; plain?: Plain; hash: string; cache_dir: string; environment?: Record<string, string>; input: { id: string; value: unknown; hash: string }; repeat: number; checkpoint: number | null };
+type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; method?: string; hash: string; cache_dir: string; environment?: Record<string, string>;
+  input: { id: string; value: unknown; hash: string }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
 
 /** Treatment of one arm: what it received so far, and the frozen copy of the arm at each checkpoint it reached. */
@@ -487,24 +566,44 @@ function toldTreatment(plan: Plan, arm: any, events: any[]): ArmTreatment {
     }
     if (plan.checkpoints.includes(event.index)) {
       const plain = { ...arm.plain, instructions: toldInstructions(arm.plain.instructions, told) };
-      snapshots[event.index] = { plain, hash: sha(plain) };
+      snapshots[event.index] = { plain, hash: sha({ plain, room: arm.hash }) };
     }
   }
   const count = (kind: string) => ({ planned: events.filter(e => e.kind === kind).length, received: events.filter(e => e.kind === kind && !missing.some(m => m.index === e.index)).length });
   return { arm: arm.name, planned: events.length, corrections: count('correction'), inputs: count('input'), missing, snapshots };
 }
 
-/** The lines that say what an arm received of its treatment. */
-function receivedLines(t: ArmTreatment, plan: Plan) {
-  const parts = [];
-  if (t.corrections.planned) parts.push(`Corrections received: ${t.corrections.received} of ${t.corrections.planned}.`);
-  if (t.inputs.planned) parts.push(`New inputs received: ${t.inputs.received} of ${t.inputs.planned}.`);
-  for (const m of t.missing) {
-    const event = plan.events.find((e: any) => e.index === m.index);
-    parts.push(`Missing event ${m.index}${event?.text ? ` ("${event.text.length > 60 ? event.text.slice(0, 60) + '…' : event.text}")` : ` (input ${event?.input.id})`}: ${m.reason}.`);
-  }
-  return parts.join(' ');
+/** The treatment that a run at a checkpoint received, in words, for its page. Null without a treatment over time. */
+function treatmentNote(plan: Plan, arm: any, checkpoint: number | null) {
+  if (checkpoint === null) return null;
+  const given = plan.events.filter((e: any) => e.index <= checkpoint);
+  if (!given.length) return 'No treatment events before this run.';
+  const how = arm.plain ? 'Told in its instructions, in this order' : 'Given to the Method through method judge, in this order';
+  return [`${how}:`, ...given.map((e: any) => `${e.index}. ${e.kind === 'correction' ? `Correction on ${e.input.id}: ${e.text}` : `New input: ${e.input.id}`}`)].join('\n');
 }
+
+/** What an arm received, as the account keeps it: the models its runs used, and one line per kind of thing. */
+function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment | undefined, plan: Plan) {
+  const own = runs.filter(r => r.arm === arm);
+  const lines = [{ what: 'Inputs run', received: own.length, planned, missing: [] as string[] }];
+  const missingText = (m: { index: number; reason: string }) => {
+    const event = plan.events.find((e: any) => e.index === m.index);
+    return `Event ${m.index}${event?.text ? ` ("${event.text.length > 60 ? event.text.slice(0, 60) + '…' : event.text}")` : ` (input ${event?.input.id})`}: ${m.reason}.`.slice(0, 500);
+  };
+  if (t?.corrections.planned) lines.push({ what: 'Corrections received', ...t.corrections, missing: t.missing.filter(m => plan.events.find((e: any) => e.index === m.index)?.kind === 'correction').map(missingText) });
+  if (t?.inputs.planned) lines.push({ what: 'New inputs received', ...t.inputs, missing: t.missing.filter(m => plan.events.find((e: any) => e.index === m.index)?.kind === 'input').map(missingText) });
+  return { models: [...new Set(own.flatMap(r => r.models ?? []))].slice(0, 10), lines };
+}
+/** The received record as lines of text: "Model: … · Inputs run: 2 of 2 · Corrections received: 5 of 5", then what is missing. */
+function receivedText(received: ReturnType<typeof receivedOf>) {
+  return [...(received.models.length ? [`Model: ${received.models.join(', ')}.`] : []), ...received.lines.map(l => `${l.what}: ${l.received} of ${l.planned}.`), ...received.lines.flatMap(l => l.missing.map(m => `Missing ${m.charAt(0).toLowerCase()}${m.slice(1)}`))].join(' ');
+}
+
+/** The key of a run cell: its content (the arm as it was at that point, the input, the run number and the checkpoint). */
+const runKey = (c: { arm: string; hash: string; input: { hash: string }; repeat: number; checkpoint: number | null }) => sha({ arm: c.arm, hash: c.hash, input: c.input.hash, repeat: c.repeat, checkpoint: c.checkpoint });
+/** The grader: every measure, as the comparison defines it. A changed measure is a new grader, and every run is graded again. */
+const graderVersion = (plan: Plan) => sha(plan.measures.map((m: any) => ({ name: m.name, code: m.code?.hash ?? null, rubric: m.rubric ?? null, person: m.person ?? null }))).slice(0, 16);
+const gradeKey = (plan: Plan, target: string, input: string) => sha({ target, grader: graderVersion(plan), expected: sha(plan.expected[input] ?? null) });
 
 /** The cells of a stage: every arm × input × run × checkpoint (trial: the first inputs, once, at the first checkpoint). */
 function cells(plan: Plan, treated: ArmTreatment[] | null, trial: boolean): Cell[] {
@@ -514,120 +613,244 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, trial: boolean): Cell
   for (const arm of plan.arms) for (const checkpoint of checkpoints) {
     const snapshot: Snapshot | undefined = checkpoint === null ? (arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : treated?.find(t => t.arm === arm.name)?.snapshots[checkpoint];
     if (!snapshot) continue;
-    for (const input of inputs) for (let repeat = 0; repeat < (trial ? 1 : plan.runs); repeat++)
-      out.push({ folder: plan.folder, arm: arm.name, ...snapshot, cache_dir: arm.cache_dir, ...(arm.plain ? {} : { environment: arm.environment }), input, repeat, checkpoint });
+    for (const input of inputs) for (let repeat = 0; repeat < (trial ? 1 : plan.runs); repeat++) {
+      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain ? { method: arm.method } : { environment: arm.environment }), cache_dir: arm.cache_dir, input, repeat, checkpoint,
+        trial: plan.inputs.slice(0, plan.trial).some((i: any) => i.id === input.id) && repeat === 0 && checkpoint === checkpoints[0], treatment_note: treatmentNote(plan, arm, checkpoint) };
+      out.push({ key: runKey(cell), ...cell });
+    }
   }
   return out;
 }
-const cellId = (c: { arm: string; input: { id: string } | string; repeat: number; checkpoint: number | null }) => JSON.stringify([c.arm, typeof c.input === 'string' ? c.input : c.input.id, c.repeat, c.checkpoint]);
+
+/** A finished cell, kept in the comparison folder by its key, so that a later run or version reuses it. */
+const recordFile = (folder: string, key: string) => join(folder, 'cells', `${key}.json`);
+const readRecord = (folder: string, key: string) => { try { return JSON.parse(readFileSync(recordFile(folder, key), 'utf8')); } catch { return null; } };
+const writeRecord = (folder: string, key: string, value: unknown) => { mkdirSync(join(folder, 'cells'), { recursive: true, mode: 0o700 }); writePrivateJson(recordFile(folder, key), value); };
+
+/** The account's plan of cells: each run cell and the grade cell of each. */
+function plannedCells(plan: Plan, list: Cell[]): PlannedCell[] {
+  const grader = graderVersion(plan);
+  return list.flatMap(c => {
+    const run = { key: c.key, kind: 'run' as const, arm: c.arm, input: c.input.id, checkpoint: c.checkpoint, repeat: c.repeat, trial: c.trial };
+    return [run, { ...run, key: gradeKey(plan, c.key, c.input.id), kind: 'grade' as const, target: c.key, grader_version: grader }];
+  });
+}
+/**
+ * Send the plan of these cells to the account and split them: the cells to run, and the finished ones that this
+ * computer keeps (a cell that an earlier run or version finished runs once). A finished cell that the account lacks is
+ * linked again.
+ */
+async function split(plan: Plan, list: Cell[], all: Cell[]) {
+  const missing = await sendPlan(plan.folder, plannedCells(plan, all));
+  const run: Cell[] = [], done: any[] = [];
+  for (const cell of list) {
+    const record = readRecord(plan.folder, cell.key);
+    if (!record) { run.push(cell); continue; }
+    done.push(record);
+    if (missing?.has(cell.key)) await linkRun(plan.folder, record);
+  }
+  return { run, done };
+}
 
 /** The tools of a plain arm: the ones that Method's own Claude Code and Codex steps have, so tools are no difference. */
 const plainTools = { claude: ['read', 'write', 'edit', 'search', 'web'], codex: ['shell', 'read', 'write', 'edit', 'search', 'web'] } as const;
-/** The Method that runs a plain arm: one session step with the arm's instructions and the input. */
-const plainMethod = (agent: 'claude' | 'codex') => ({
-  format: 'method/3.4', name: `Plain ${agent === 'claude' ? 'Claude Code' : 'Codex'}`, goal: 'Do the task in the instructions for the input, as a plain agent.',
-  inputs: { instructions: { type: 'text' }, input: { type: 'text' } },
-  limits: { step: { timeout_ms: 3_600_000 } },
-  steps: { work: { in: { instructions: 'inputs.instructions', input: 'inputs.input' }, out: 'session',
-    do: { kind: 'session', agent, prompt: '{{instructions}}\n\n{{input}}', tools: [...plainTools[agent]] } } },
-  result: 'session',
-});
+/** The Method that runs a plain arm: one session step with the arm's instructions and the input, in its room when it has one. */
+function plainMethod(agent: 'claude' | 'codex', room: boolean) {
+  return {
+    format: 'method/3.4', name: `Plain ${agent === 'claude' ? 'Claude Code' : 'Codex'}`, goal: 'Do the task in the instructions for the input, as a plain agent.',
+    inputs: { instructions: { type: 'text' }, input: { type: 'text' }, ...(room ? { room: { type: 'text', description: 'The folder with the files that the agent works on.' } } : {}) },
+    limits: { step: { timeout_ms: 3_600_000 } },
+    steps: { work: { in: { instructions: 'inputs.instructions', input: 'inputs.input', ...(room ? { room: 'inputs.room' } : {}) }, out: 'session',
+      do: { kind: 'session', agent, prompt: '{{instructions}}\n\n{{input}}', tools: [...plainTools[agent]], ...(room ? { room: 'room' } : {}) } } },
+    result: 'session',
+  };
+}
 const inputText = (value: unknown) => typeof value === 'string' ? value : `Input:\n${JSON.stringify(value, null, 2)}`;
+
+/**
+ * The models that a run used, from its record: what Claude Code said it ran on, the model that a Codex or hosted model
+ * step named, or Codex's default model when the step named none (Codex does not report its name).
+ */
+function modelsOfRun(runDir: string) {
+  const found = new Set<string>();
+  let events: any[] = [];
+  try { events = readFileSync(join(runDir, 'events.jsonl'), 'utf8').split('\n').flatMap(line => { try { return line ? [JSON.parse(line)] : []; } catch { return []; } }); } catch { return []; }
+  for (const e of events) {
+    if (e.event === 'agent.ready' && e.model) found.add(e.model);
+    if (e.event === 'model.used' && e.backend !== 'claude') found.add(e.model ?? (e.backend === 'codex' ? 'Codex\'s default model' : e.backend));
+  }
+  // A Claude Code step that stopped before it started names the model it asked for.
+  if (!events.some(e => e.event === 'agent.ready')) for (const e of events) if (e.event === 'model.used' && e.backend === 'claude') found.add(e.model ?? 'Claude Code\'s default model');
+  return [...found];
+}
+
+/** Save the run of a cell in the account: the version of its Method, and the run's records as it runs. */
+async function cellSync(folder: string, file: string) {
+  const account = readAccount(folder);
+  if (!account) return null;
+  try {
+    process.env.METHOD_CONFIG_DIR ??= account.config_dir;
+    const { MethodClient } = await import('./method-client.js');
+    const { Outbox } = await import('./outbox.js');
+    const { prepareVersion } = await import('./versions.js');
+    const { MethodSync } = await import('./method-sync.js');
+    const client = new MethodClient(account.server), outbox = new Outbox(client);
+    const version = await prepareVersion(client, outbox, file, 'Saved by a comparison.');
+    return (runDir: string) => new MethodSync(client, runDir, version.method_id, version.version_id, undefined, readDocument(file).run_data === 'device', outbox);
+  } catch (error) {
+    process.stderr.write(`This run is not saved to your Method account: ${(error as Error).message}\n`);
+    return null;
+  }
+}
 
 /**
  * Run one cell: the arm on one input, with nothing reused, in its own folder. A Method arm runs with its own cache in a
  * clean room (armRoom) on its own copy of its bound folders, which the cell keeps in its folder. A plain arm runs as one
- * session, which makes its own clean room. Both write the same run records, with a transcript of each agent attempt.
+ * session, which makes its own clean room, in a copy of its room. Both write the same run records, with a transcript of
+ * each agent attempt; the run is saved in the account and linked to its cell.
  */
 async function runCell(cell: Cell) {
   process.env.METHOD_CACHE_DIR = cell.cache_dir;
-  const runDir = join(cell.folder, 'runs', cell.arm, sha(cell).slice(0, 16));
+  const runDir = join(cell.folder, 'runs', cell.arm, cell.key.slice(0, 16));
   rmSync(runDir, { recursive: true, force: true });
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
   const { runMethod } = await import('@withmethod/runtime/runner.js');
   const started = Date.now();
+  const file = cell.plain ? cell.method! : join(cell.dir!, cell.file!);
+  const syncFor = await cellSync(cell.folder, file);
+  const sync = syncFor?.(join(runDir, 'run'));
+  const hooks = {
+    onStart: async ({ method, inputs }: any) => { await sync?.start(method, inputs, {}); },
+    onEvent: async () => { sync?.snapshot(); },
+  };
   let result: any;
-  if (cell.plain) {
-    const file = join(runDir, 'plain.method');
-    writeFileSync(file, JSON.stringify(plainMethod(cell.plain.agent), null, 2) + '\n', { mode: 0o600 });
-    result = await runMethod(file, { allow_local_processes: true }, { runDir: join(runDir, 'run'), inputs: { instructions: cell.plain.instructions, input: inputText(cell.input.value) }, fresh: true });
-    if (result.result) result.result = result.result.final_text;
-  } else {
-    const file = join(cell.dir!, cell.file!);
-    const { preparedConfig } = await import('./quality.js');
-    const { resolveSecrets } = await import('./secrets.js');
-    const prepared = await preparedConfig(file, {});
-    const secrets = resolveSecrets(Object.keys(readDocument(file).secrets ?? {}));
-    const room = await armRoom(file, cell.cache_dir, false, cell.environment ?? {});
-    // The cell's process runs the arm in the room: its agent steps and scripts get the room's environment.
-    const outside = { ...process.env };
-    for (const key of Object.keys(process.env)) delete process.env[key];
-    Object.assign(process.env, room.env);
-    try {
-      result = await runMethod(file, { ...prepared.config, environment: { ...prepared.config.environment, ...room.folders } }, {
-        runDir: join(runDir, 'run'), inputs: cell.input.value as any, fresh: true, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle,
-        secrets, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(prepared.classification ? { classification: prepared.classification } : {}) });
-    } finally {
+  try {
+    if (cell.plain) {
+      const inputs = { instructions: cell.plain.instructions, input: inputText(cell.input.value), ...(cell.plain.room ? { room: cell.plain.room } : {}) };
+      await sync?.start(readDocument(file), inputs, {}, false);
+      result = await runMethod(file, { allow_local_processes: true }, { runDir: join(runDir, 'run'), inputs, fresh: true, ...hooks });
+      if (result.result) result.result = result.result.final_text;
+    } else {
+      const { preparedConfig } = await import('./quality.js');
+      const { resolveSecrets } = await import('./secrets.js');
+      const prepared = await preparedConfig(file, {});
+      const secrets = resolveSecrets(Object.keys(readDocument(file).secrets ?? {}));
+      await sync?.start(readDocument(file), cell.input.value as any, {}, false);
+      const room = await armRoom(file, cell.cache_dir, false, cell.environment ?? {});
+      // The cell's process runs the arm in the room: its agent steps and scripts get the room's environment.
+      const outside = { ...process.env };
       for (const key of Object.keys(process.env)) delete process.env[key];
-      Object.assign(process.env, outside);
-      // The cell keeps what the arm left in its folders, for the measures.
-      for (const [envName, copy] of Object.entries(room.folders as Record<string, string>)) cpSync(copy, join(runDir, 'environment', envName), { recursive: true, verbatimSymlinks: true });
-      await room.remove();
+      Object.assign(process.env, room.env);
+      try {
+        result = await runMethod(file, { ...prepared.config, environment: { ...prepared.config.environment, ...room.folders } }, {
+          runDir: join(runDir, 'run'), inputs: cell.input.value as any, fresh: true, processPath: prepared.processPath, prepareBundle: prepared.prepareBundle,
+          secrets, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}), ...(prepared.classification ? { classification: prepared.classification } : {}), ...hooks });
+      } finally {
+        for (const key of Object.keys(process.env)) delete process.env[key];
+        Object.assign(process.env, outside);
+        // The cell keeps what the arm left in its folders, for the measures.
+        for (const [envName, copy] of Object.entries(room.folders as Record<string, string>)) cpSync(copy, join(runDir, 'environment', envName), { recursive: true, verbatimSymlinks: true });
+        await room.remove();
+      }
     }
+  } finally {
+    await sync?.finish();
+    await sync?.outbox.drain();
   }
   if (!['completed', 'unconfirmed'].includes(result.status))
     throw Error(`The arm ${cell.arm} ${result.status === 'needs_input' ? 'asked a question' : 'failed'} on the input ${cell.input.id} (run ${cell.repeat + 1}${pointLabel(cell.checkpoint)}): ${result.failure?.headline ?? result.status}. Its run folder: ${join(runDir, 'run')}. Fix the cause and run the comparison again; finished runs are reused.`);
-  return { arm: cell.arm, input: cell.input.id, repeat: cell.repeat, checkpoint: cell.checkpoint, result: result.result ?? null, run_dir: join(runDir, 'run'),
-    artifacts: join(runDir, 'run', 'artifacts'), transcript: readableTranscript(join(runDir, 'run', 'artifacts'), join(runDir, 'transcript.md')),
+  const transcript = writeTranscripts(join(runDir, 'run', 'artifacts'), runDir);
+  let runId: string | null = null;
+  try { runId = JSON.parse(readFileSync(join(runDir, 'run', 'method-sync.json'), 'utf8')).id; } catch { /* not saved in the account */ }
+  const record = { key: cell.key, arm: cell.arm, input: cell.input.id, repeat: cell.repeat, checkpoint: cell.checkpoint, trial: cell.trial, result: result.result ?? null,
+    run_dir: join(runDir, 'run'), artifacts: join(runDir, 'run', 'artifacts'), transcript: transcript?.markdown ?? null, transcript_jsonl: transcript?.jsonl ?? null,
+    treatment_note: cell.treatment_note, models: modelsOfRun(join(runDir, 'run')), run_id: runId, device: sync?.device ?? false,
     duration_ms: Date.now() - started, cost_usd: typeof result.usage?.cost_usd === 'number' ? result.usage.cost_usd : null };
+  writeRecord(cell.folder, cell.key, record);
+  await linkRun(cell.folder, record);
+  return record;
 }
 
 /**
- * A readable transcript of a run: each agent attempt's transcript.jsonl, oldest first, as one Markdown file. A long
- * tool result is cut at 2,000 characters; the attempt's transcript.jsonl keeps the full text. Returns its path, or
- * null when the run had no agent attempt.
+ * Link a run cell to its saved run. Its transcript and treatment go to the account only when the run's content is kept
+ * there; otherwise the local Method server shows them to the dashboard, from this computer.
  */
-function readableTranscript(artifacts: string, target: string): string | null {
+async function linkRun(folder: string, record: any) {
+  const account = readAccount(folder);
+  if (!account || !record.run_id) return;
+  if (record.device) {
+    registerLocalRun(account.cache_dir, record.run_id, account.server, entry => ({ ...entry, treatment_note: record.treatment_note, transcript: record.transcript_jsonl }));
+    await ensureLocalServer(account.cache_dir);
+    await linkCells(folder, [{ key: record.key, run_id: record.run_id }]);
+    return;
+  }
+  const transcript = record.transcript_jsonl ? await uploadText(folder, readFileSync(record.transcript_jsonl, 'utf8')) : null;
+  await linkCells(folder, [{ key: record.key, run_id: record.run_id, ...(transcript ? { transcript } : {}), ...(record.treatment_note ? { treatment_note: record.treatment_note } : {}) }]);
+}
+
+/** Every agent attempt of a run, oldest first, as one transcript: entries numbered again from 0 across the attempts. */
+function runTranscript(artifacts: string) {
   const attempts = ['claude', 'codex', 'session', 'model'].flatMap(kind => {
     try { return readdirSync(join(artifacts, kind)).filter(name => name.startsWith('attempt-')).map(name => join(artifacts, kind, name)); } catch { return []; }
   }).filter(dir => existsSync(join(dir, 'transcript.jsonl'))).sort((a, b) => statSync(join(a, 'transcript.jsonl')).mtimeMs - statSync(join(b, 'transcript.jsonl')).mtimeMs);
-  if (!attempts.length) return null;
-  const who: Record<string, string> = { user: 'You', assistant: 'Agent', tool: 'Tool', system: 'Method' };
-  const cut = (text: string) => text.length > 2000 ? `${text.slice(0, 2000)}\n[... ${text.length - 2000} more characters in transcript.jsonl]` : text;
-  const parts: string[] = [];
+  const entries: any[] = [], parts: Array<{ dir: string; from: number }> = [];
   for (const dir of attempts) {
-    parts.push(`## ${dir.slice(artifacts.length + 1)}`, `Full record: ${join(dir, 'transcript.jsonl')}`, '');
+    const offset = entries.length;
+    parts.push({ dir, from: offset });
     for (const line of readFileSync(join(dir, 'transcript.jsonl'), 'utf8').split('\n').filter(Boolean)) {
       const e = JSON.parse(line);
-      const label = [e.kind, e.tool, e.path].filter(Boolean).join(' · ');
-      parts.push(`**${who[e.role] ?? e.role}** (${label}${e.inferred ? ', inferred' : ''})`, '', e.role === 'tool' ? cut(e.text) : e.text, '');
+      entries.push({ ...e, i: e.i + offset, ...(e.parent !== undefined ? { parent: e.parent + offset } : {}) });
     }
   }
-  writeFileSync(target, parts.join('\n'), { mode: 0o600 });
-  return target;
+  return { entries, parts };
+}
+
+/**
+ * The run's transcript: transcript.jsonl (every attempt, numbered from 0; the dashboard shows it and a verdict names its
+ * line) and transcript.md, a readable copy in which a long tool result is cut at 2,000 characters. Null when the run had
+ * no agent attempt.
+ */
+function writeTranscripts(artifacts: string, target: string) {
+  const { entries, parts } = runTranscript(artifacts);
+  if (!entries.length) return null;
+  const jsonl = join(target, 'transcript.jsonl'), markdown = join(target, 'transcript.md');
+  writeFileSync(jsonl, entries.map(e => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
+  const who: Record<string, string> = { user: 'You', assistant: 'Agent', tool: 'Tool', system: 'Method' };
+  const cut = (text: string) => text.length > 2000 ? `${text.slice(0, 2000)}\n[... ${text.length - 2000} more characters in transcript.jsonl]` : text;
+  const lines: string[] = [];
+  for (const [n, part] of parts.entries()) {
+    lines.push(`## ${part.dir.slice(artifacts.length + 1)}`, `Full record: ${join(part.dir, 'transcript.jsonl')}`, '');
+    for (const e of entries.slice(part.from, parts[n + 1]?.from ?? entries.length)) {
+      const label = [e.kind, e.tool, e.path].filter(Boolean).join(' · ');
+      lines.push(`**${who[e.role] ?? e.role}** (${label}${e.inferred ? ', inferred' : ''})`, '', e.role === 'tool' ? cut(e.text) : e.text, '');
+    }
+  }
+  writeFileSync(markdown, lines.join('\n'), { mode: 0o600 });
+  return { jsonl, markdown };
 }
 
 /** The summary of the trial for the approval question, or an error that names what an arm did not receive. */
-function trialCheck(plan: Plan, runs: any[], treated: ArmTreatment[] | null) {
+async function trialCheck(plan: Plan, runs: any[], treated: ArmTreatment[] | null) {
   const lines: string[] = [], short: string[] = [];
   const trialInputs = plan.inputs.slice(0, plan.trial).length;
+  const received: Record<string, ReturnType<typeof receivedOf>> = {};
   for (const arm of plan.arms) {
-    const ran = runs.filter(r => r.arm === arm.name).length;
     const t = treated?.find(x => x.arm === arm.name);
-    const line = `${arm.name}: Inputs run: ${ran} of ${trialInputs}.${t ? ' ' + receivedLines(t, plan) : ''}`;
+    received[arm.name] = receivedOf(arm.name, runs, trialInputs, t, plan);
+    const line = `${arm.name}: ${receivedText(received[arm.name]!)}`;
     lines.push(line);
-    if (ran < trialInputs || (t && t.missing.length)) short.push(line);
+    if (runs.filter(r => r.arm === arm.name).length < trialInputs || (t && t.missing.length)) short.push(line);
   }
-  if (short.length) throw Error(`The trial stopped: an arm did not receive everything.\n${short.join('\n')}\nFix the cause and run the comparison again; everything that was received is kept.`);
   const fullCells = plan.arms.length * plan.inputs.length * plan.runs * (plan.checkpoints?.length ?? 1) - runs.length;
   const mean = runs.reduce((sum, r) => sum + r.duration_ms, 0) / Math.max(runs.length, 1);
   const deliveries = treated ? plan.events.length - trialEvents(plan) : 0;
   const deliveryMs = treated ? meanDelivery(plan) : 0;
   const minutes = Math.round((fullCells * mean / 4 + deliveries * deliveryMs) / 60_000);
   const costs = runs.map(r => r.cost_usd);
-  const cost = runs.length && costs.every(c => typeof c === 'number')
-    ? `about $${((costs.reduce((a, b) => a + b, 0) / runs.length) * fullCells).toFixed(2)} at API prices`
-    : 'not known: the trial runs reported no price (a run on your own Claude Code or Codex subscription reports none)';
+  const usd = runs.length && costs.every(c => typeof c === 'number') ? (costs.reduce((a, b) => a + b, 0) / runs.length) * fullCells : null;
+  await sendStage(plan.folder, { stage: 'trial', trial: { inputs: trialInputs, received }, cost_estimate: { minutes, runs: fullCells, usd } });
+  if (short.length) throw Error(`The trial stopped: an arm did not receive everything.\n${short.join('\n')}\nFix the cause and run the comparison again; everything that was received is kept.`);
+  const cost = usd !== null ? `about $${usd.toFixed(2)} at API prices` : 'not known: the trial runs reported no price (a run on your own Claude Code or Codex subscription reports none)';
   return [`Trial of "${plan.question}"`, '', 'What each arm received:', ...lines.map(l => `  ${l}`), '', 'The trial runs (each folder holds the run\'s records; each transcript reads as a conversation):',
     ...runs.flatMap(r => [`  ${r.arm}, input ${r.input}: ${r.run_dir}`, ...(r.transcript ? [`    transcript: ${r.transcript}`] : [])]), '',
     !fullCells && !deliveries ? 'The full run: nothing more to run; the trial ran every cell.'
@@ -644,20 +867,81 @@ function meanDelivery(plan: Plan) {
   return times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0;
 }
 
+/** The person said go: keep it for this version of the file, and tell the account (this locks the file there). */
+async function recordApproval(plan: Plan) {
+  const digest = JSON.parse(readFileSync(join(plan.folder, 'spec.json'), 'utf8')).spec_digest;
+  writePrivateJson(approvalFile(plan.folder), { spec_digest: digest, at: new Date().toISOString() });
+  await sendStage(plan.folder, { stage: 'running' });
+}
+
 /** The key of a person's mark: the measure's question and the output it marks. */
 const markKey = (measure: any, run: any) => sha({ question: measure.person, output: run.result });
 const outputText = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 
-/** Grade one run on every measure. */
+/**
+ * What a grader sees of a run, in order: the first prompt, then each file that the agent read and each tool result.
+ * Each part is cut at 20,000 characters, and the whole at 150,000.
+ */
+export function seenContext(entries: any[]) {
+  const cut = (text: string) => text.length > 20_000 ? `${text.slice(0, 20_000)}\n[... ${text.length - 20_000} more characters]` : text;
+  const prompt = entries.find(e => e.kind === 'prompt');
+  const parts = prompt ? [`The first prompt:\n${cut(prompt.text)}`] : [];
+  for (const e of entries) {
+    if (e.role !== 'tool') continue;
+    parts.push(`${e.path ? `The file ${e.path}, as the agent read it` : `The result of ${e.tool ?? 'a tool'}`}${e.kind === 'error' ? ' (an error)' : ''}:\n${cut(e.text)}`);
+  }
+  const text = parts.join('\n\n');
+  return text.length > 150_000 ? `${text.slice(0, 150_000)}\n[... the rest is left out]` : text;
+}
+const words = (text: string) => text.replace(/^\s*\d+[.)]\s+/gm, ' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+/**
+ * The transcript line that a quote comes from: the last reply that holds its words, else the result, else any line.
+ * Null for an empty quote, or one that no line holds.
+ */
+export function quoteLine(entries: any[], quote: string | null) {
+  const wanted = quote ? quote.split(/\.{3}|…/).map(words).filter(Boolean) : [];
+  if (!wanted.length) return null;
+  const holds = (e: any) => { const text = ` ${words(e.text ?? '')} `; return wanted.every(part => text.includes(` ${part} `)); };
+  const last = (test: (e: any) => boolean) => [...entries].reverse().find(e => test(e) && holds(e))?.i;
+  return last(e => e.role === 'assistant' && e.kind === 'message') ?? last(e => e.kind === 'result') ?? last(() => true) ?? null;
+}
+
+/** Grade one run on every measure. A rubric gives the grader's verdicts, each at the transcript line it judged. */
 async function grade(item: any) {
   const { run, measures, expected, marks } = item;
-  const scores: Record<string, number> = {};
+  const scores: Record<string, number> = {}, verdicts: any[] = [];
+  let seen: string | null = null;
+  const entries = run.transcript_jsonl && existsSync(run.transcript_jsonl)
+    ? readFileSync(run.transcript_jsonl, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
   for (const m of measures) {
     if (m.person !== undefined) { scores[m.name] = marks[m.name]; continue; }
-    if (m.code) scores[m.name] = await codeScore(m, run, expected);
-    else scores[m.name] = await rubricScore(m, run, expected, item.method);
+    if (m.code) { scores[m.name] = await codeScore(m, run, expected); continue; }
+    const graded = await rubricGrade(m, run, expected, item.method, entries);
+    scores[m.name] = graded.score;
+    verdicts.push(...graded.verdicts);
+    seen = graded.seen;
   }
-  return { arm: run.arm, input: run.input, repeat: run.repeat, checkpoint: run.checkpoint, run_dir: run.run_dir, scores };
+  const record = { key: item.key, target: run.key, grader_version: item.grader_version, arm: run.arm, input: run.input, repeat: run.repeat, checkpoint: run.checkpoint,
+    run_dir: run.run_dir, scores, verdicts, seen, run_id: run.run_id, device: run.device };
+  writeRecord(item.folder, item.key, record);
+  await linkGrade(item.folder, record);
+  return record;
+}
+/** Link a grade cell with its numbers; its verdicts and what the grader saw go where the run keeps its content. */
+async function linkGrade(folder: string, record: any) {
+  const account = readAccount(folder);
+  if (!account || !record.run_id) return;
+  const measures = Object.fromEntries(Object.entries(record.scores).filter(([, value]) => typeof value === 'number' && Number.isFinite(value)));
+  if (record.device) {
+    const seenFile = record.seen === null ? null : join(folder, 'cells', `${record.key}.seen.txt`);
+    if (seenFile) writeFileSync(seenFile, record.seen, { mode: 0o600 });
+    registerLocalRun(account.cache_dir, record.run_id, account.server, entry => ({ ...entry, grades: { ...entry.grades, [record.key]: { verdicts: record.verdicts, seen: seenFile } } }));
+    await ensureLocalServer(account.cache_dir);
+    await linkCells(folder, [{ key: record.key, measures }]);
+    return;
+  }
+  const seen = record.seen === null ? null : await uploadText(folder, record.seen);
+  await linkCells(folder, [{ key: record.key, measures, ...(record.verdicts.length ? { verdicts: record.verdicts } : {}), ...(seen ? { seen } : {}) }]);
 }
 async function codeScore(m: any, run: any, expected: unknown) {
   const isPython = extname(m.code.path) === '.py';
@@ -676,37 +960,54 @@ async function codeScore(m: any, run: any, expected: unknown) {
     throw Error(`The measure ${m.name} (${basename(m.code.path)}) gave no score for ${run.arm} on ${run.input}${result.stderr.trim() ? `: ${result.stderr.trim().split('\n').at(-1)}` : `; it must print {"score": NUMBER}`}.`);
   return score;
 }
-async function rubricScore(m: any, run: any, expected: unknown, methodFile: string) {
+/**
+ * A rubric grade: the judges read what the agent saw (seenContext) and the expected answer, and judge the run's output
+ * against each sentence. The score is the share of sentences met. Each verdict: met (every vote passes), not met (none
+ * does), or partly (the votes or the judges differ), with the quote that decides it and its transcript line.
+ */
+async function rubricGrade(m: any, run: any, expected: unknown, methodFile: string, entries: any[]) {
+  const context = [entries.length ? seenContext(entries) : '', expected !== undefined ? `The expected answer:\n${outputText(expected)}` : ''].filter(Boolean).join('\n\n');
+  const value = outputText(run.result);
   const { preparedConfig, judgeProfiles } = await import('./quality.js');
   const { judgeRubric } = await import('@withmethod/runtime/rubric.js');
   const prepared = await preparedConfig(methodFile, {}, { judge: true });
   const judges = await judgeProfiles(prepared.config);
-  const detail: any = await judgeRubric({ value: outputText(run.result), criteria: m.rubric.map((text: string, i: number) => ({ id: `c${i + 1}`, text })),
-    ...(expected !== undefined ? { context: { expected: outputText(expected) } } : {}), config: prepared.config,
+  const detail: any = await judgeRubric({ value, criteria: m.rubric.map((text: string, i: number) => ({ id: `c${i + 1}`, text })), context, config: prepared.config,
     options: { runOptions: { processPath: prepared.processPath, ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) }, ...(judges.length > 1 ? { judges } : {}) } });
-  return detail.criteria.filter((c: any) => c.pass).length / detail.criteria.length;
+  const verdicts = detail.criteria.map((c: any) => {
+    const votes: any[] = c.votes ?? [];
+    const verdict = c.unsure ? 'partly' : c.pass ? 'met' : votes.some(v => v.pass) ? 'partly' : 'not_met';
+    const quote = (votes.find(v => v.pass === (verdict === 'met') && v.quote?.trim()) ?? votes.find(v => v.quote?.trim()))?.quote?.trim() || null;
+    const line = quoteLine(entries, quote);
+    return { criterion: c.text, verdict, quote: quote ? quote.slice(0, 4000) : null, line };
+  });
+  return { score: detail.criteria.filter((c: any) => c.pass).length / detail.criteria.length, verdicts,
+    seen: `${context ? `${context}\n\n` : ''}The output that the grader judged:\n${value}` };
 }
 
 const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length;
 const fixed = (n: number) => Number.isInteger(n) ? String(n) : n.toFixed(2);
 
-/** Apply the decision rule to the grades: the answer, the reason, and the result text. */
-export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null) {
+/** Apply the decision rule to the grades: the answer, the reason, the decision as the account keeps it, and the result text. */
+export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null, runs: any[] = []) {
   const main = plan.measures.find((m: any) => m.main);
   const points: Array<number | null> = plan.checkpoints ?? [null];
   const at: number | null = plan.rule.at ?? null;
   const point = (arm: string, checkpoint: number | null, measure: string) => {
-    const runs = grades.filter(g => g.arm === arm && g.checkpoint === checkpoint);
-    const n = Math.min(...plan.inputs.map((input: any) => runs.filter(g => g.input === input.id).length));
-    return { n, mean: runs.length ? mean(runs.map(g => g.scores[measure])) : null };
+    const own = grades.filter(g => g.arm === arm && g.checkpoint === checkpoint);
+    const n = Math.min(...plan.inputs.map((input: any) => own.filter(g => g.input === input.id).length));
+    return { n, mean: own.length ? mean(own.map(g => g.scores[measure])) : null };
   };
   const reasons: string[] = [];
   const short = (treated ?? []).filter(t => t.missing.length);
-  for (const t of short) reasons.push(`${t.arm} did not receive its full treatment (${receivedLines(t, plan)})`);
+  const planned = plan.inputs.length * plan.runs * points.length;
+  const received = Object.fromEntries(plan.arms.map((arm: any) => [arm.name, receivedOf(arm.name, grades, planned, treated?.find(x => x.arm === arm.name), plan)]));
+  for (const arm of plan.arms) received[arm.name]!.models = [...new Set(runs.filter(r => r.arm === arm.name).flatMap(r => r.models ?? []))].slice(0, 10);
+  for (const t of short) reasons.push(`${t.arm} did not receive its full treatment (${receivedText(received[t.arm]!)})`);
   const allN = plan.arms.flatMap((arm: any) => points.map(c => point(arm.name, c, main.name).n));
   const fewest = Math.min(...allN);
   if (!short.length && fewest < plan.rule.min_runs) reasons.push(`${fewest === 0 ? 'a point has no runs' : `each point has ${plural(fewest, 'run')}`}, and the rule needs ${plan.rule.min_runs}`);
-  let answer = "Can't tell yet", reason = '';
+  let answer = "Can't tell yet", reason = '', better: string | undefined;
   if (reasons.length) reason = reasons[0]!;
   else {
     const ranked = plan.arms.map((arm: any) => ({ arm: arm.name, mean: point(arm.name, at, main.name).mean! })).sort((a: any, b: any) => b.mean - a.mean);
@@ -720,17 +1021,16 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
         ? point(best.arm, plan.checkpoints[0], guard.measure).mean! - point(best.arm, at, guard.measure).mean!
         : Math.max(...plan.arms.filter((a: any) => a.name !== best.arm).map((a: any) => point(a.name, at, guard.measure).mean! - point(best.arm, at, guard.measure).mean!));
       if (guard && drop > guard.max_drop) reason = `${best.arm} is ahead on ${main.name}, but its ${guard.measure} dropped by ${fixed(drop)}, and the rule allows ${guard.max_drop}`;
-      else { answer = `${best.arm} is better`; reason = `${best.arm} is ahead of ${next.arm} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, and the rule needs ${plan.rule.margin}`; }
+      else { answer = `${best.arm} is better`; better = best.arm; reason = `${best.arm} is ahead of ${next.arm} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, and the rule needs ${plan.rule.margin}`; }
     }
   }
   const lines = [`${answer}: ${reason}.`, '', `Question: ${plan.question}`, `Difference: ${plan.difference}`, ...plan.other_differences.map((d: string) => `Other difference: ${d}`),
     `Rule: ${plan.rule_sentence}`, '', 'What each arm received:'];
-  const planned = plan.inputs.length * plan.runs * points.length;
   for (const arm of plan.arms) {
     const ran = grades.filter(g => g.arm === arm.name).length;
     const t = treated?.find(x => x.arm === arm.name);
     const full = ran === planned && !t?.missing.length;
-    lines.push(`  ${full ? '' : 'SHORT '}${arm.name}: Inputs run: ${ran} of ${planned}.${t ? ' ' + receivedLines(t, plan) : ''}`);
+    lines.push(`  ${full ? '' : 'SHORT '}${arm.name}: ${receivedText(received[arm.name]!)}`);
   }
   for (const m of plan.measures) {
     lines.push('', `${m.main ? 'Main measure' : 'Also shown'}: ${m.name} (mean per run; n = runs per input behind the point)`);
@@ -740,7 +1040,9 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
   if (treated) lines.push(`  Each arm received its full treatment: checked by Method: ${short.length ? 'no' : 'yes'}.`);
   lines.push(`  Each point has at least ${plural(plan.rule.min_runs, 'run')} per input: checked by Method: ${fewest >= plan.rule.min_runs ? 'yes' : 'no'}.`);
   for (const a of plan.assumptions) lines.push(`  ${a}: not checked.`);
-  return { answer, reason, text: lines.join('\n') };
+  const decision = { answer: better ? 'better' : 'cant_tell', ...(better ? { arm: better } : {}), reason: `${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`.slice(0, 500),
+    values: Object.fromEntries(plan.arms.map((arm: any) => { const p = point(arm.name, at, main.name); return [arm.name, { value: p.mean, n: p.n }]; })) };
+  return { answer, reason, text: lines.join('\n'), decision, received };
 }
 
 /** `method __compare STAGE`: one stage of a comparison, run by the generated Method's stage script. */
@@ -748,21 +1050,28 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
   const plan = bindings.comparison ? JSON.parse(bindings.comparison) : undefined;
   const treated: ArmTreatment[] | null = bindings.treated ? JSON.parse(bindings.treated) : null;
   const runsOf = (list: string[] = []) => list.map(r => JSON.parse(r));
+  const reported = { state: { reported: new Date().toISOString() } };
   if (stage === 'trial_treat' || stage === 'treat') {
-    if (stage === 'treat' && bindings.go !== true) throw Error('The full run was not approved.');
+    if (stage === 'treat') { if (bindings.go !== true) throw Error('The full run was not approved.'); await recordApproval(plan); }
     const value = JSON.stringify(await treat(plan, stage === 'treat' ? plan.events.length : trialEvents(plan)));
     return { [stage === 'treat' ? 'treatment' : 'trial_treatment']: value, state: { treatment: value } };
   }
-  if (stage === 'trial_plan') return { trial_cells: cells(plan, treated, true).map(c => JSON.stringify(c)) };
+  if (stage === 'trial_plan') {
+    const list = cells(plan, treated, true), { run, done } = await split(plan, list, list);
+    return { trial_cells: run.map(c => JSON.stringify(c)), trial_done: done.map(r => JSON.stringify(r)), ...reported };
+  }
   if (stage === 'trial_cell') return { trial_run: JSON.stringify(await runCell(JSON.parse(bindings.cell))) };
   if (stage === 'cell') return { full_run: JSON.stringify(await runCell(JSON.parse(bindings.cell))) };
-  if (stage === 'check') return { trial_summary: trialCheck(plan, runsOf(bindings.runs), treated) };
+  if (stage === 'check') return { trial_summary: await trialCheck(plan, [...runsOf(bindings.runs), ...runsOf(bindings.done)], treated), ...reported };
+  if (stage === 'approved') return { go: true };
   if (stage === 'plan') {
     if (bindings.go !== true) throw Error('The full run was not approved.');
-    const trial = new Set(cells(plan, treated, true).map(cellId));
-    return { cells: cells(plan, treated, false).filter(c => !trial.has(cellId(c))).map(c => JSON.stringify(c)) };
+    await recordApproval(plan);
+    const all = cells(plan, treated, false), { run, done } = await split(plan, all, all);
+    return { cells: run.map(c => JSON.stringify(c)), done: done.map(r => JSON.stringify(r)), ...reported };
   }
-  const all = () => [...runsOf(bindings.trial_runs), ...runsOf(bindings.full_runs)];
+  // Every finished run, once: the trial's, the full run's, and those that earlier runs finished.
+  const all = () => [...new Map([...runsOf(bindings.trial_runs), ...runsOf(bindings.trial_done), ...runsOf(bindings.full_runs), ...runsOf(bindings.done_runs)].map(r => [r.key, r])).values()];
   if (stage === 'to_mark') {
     const marks = JSON.parse(bindings.marks || '{}'), questions: string[] = [], keys: string[] = [];
     let n = 0;
@@ -781,11 +1090,25 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
     if (bindings.mark_keys?.length) writePrivateJson(marksFile(plan.folder), { ...readMarks(plan.folder), ...marks });
     const measures = plan.measures;
     const method = join(plan.folder, 'comparison.method');
-    return { graded: all().map(run => JSON.stringify({ run, measures, method, expected: plan.expected[run.input],
+    return { graded: all().map(run => JSON.stringify({ key: gradeKey(plan, run.key, run.input), grader_version: graderVersion(plan), folder: plan.folder,
+      run, measures, method, expected: plan.expected[run.input],
       marks: Object.fromEntries(measures.filter((m: any) => m.person !== undefined).map((m: any) => [m.name, marks[markKey(m, run)]])) })) };
   }
   if (stage === 'grade') return { grade: JSON.stringify(await grade(JSON.parse(bindings.item))) };
-  if (stage === 'decide') return { answer: decide(plan, runsOf(bindings.grades), treated).text };
+  if (stage === 'decide') {
+    const grades = runsOf(bindings.grades), runs = all();
+    const result = decide(plan, grades, treated, runs);
+    // The account gets every finished cell that it lacks, then the decision.
+    const missing = await sendPlan(plan.folder, plannedCells(plan, cells(plan, treated, false)));
+    if (missing) {
+      for (const run of runs) if (missing.has(run.key)) await linkRun(plan.folder, run);
+      for (const g of grades) if (missing.has(g.key)) await linkGrade(plan.folder, g);
+    }
+    const minutes = Math.round(runs.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0) / 60_000);
+    const usd = runs.length && runs.every(r => typeof r.cost_usd === 'number') ? runs.reduce((sum, r) => sum + r.cost_usd, 0) : null;
+    await sendStage(plan.folder, { stage: 'done', decision: result.decision, received: result.received, cost_estimate: { minutes, runs: runs.length, usd } });
+    return { answer: result.text, ...reported };
+  }
   throw Error(`Unknown comparison stage ${stage}.`);
 }
 export async function compareStageCommand(stage: string) {

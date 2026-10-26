@@ -27,7 +27,7 @@ const help = "Use method run, steps, prompt, inspect, or doctor. See method help
 export function parse(args: string[]) {
   return parseArgs({ args, allowPositionals: true, options: {
     server: {type:"string"}, background: {type:"boolean"}, state: {type:"string"}, out: {type:"string"}, inputs: {type:"string"}, "inputs-from": {type:"string"}, workspace: {type:"string"},
-    "run-dir": {type:"string"}, fresh: {type:"boolean"}, rerun: {type:"string",multiple:true}, resume: {type:"boolean"}, human: {type:"string"}, retry: {type:"string",multiple:true},
+    "run-dir": {type:"string"}, fresh: {type:"boolean"}, rerun: {type:"string",multiple:true}, resume: {type:"boolean"}, retry: {type:"string",multiple:true},
     "include-files": {type:"boolean"}, verbose: {type:"boolean"}, help: {type:"boolean"}
   }});
 }

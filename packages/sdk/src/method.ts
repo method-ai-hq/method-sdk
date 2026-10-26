@@ -163,6 +163,9 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));
   if (args[0] === '__model') return (await import('./model-call.js')).modelCallCommand();
   if (args[0] === '__compare' && args[1]) return (await import('./compare.js')).compareStageCommand(args[1]);
+  if (args[0] === '__local-server') return (await import('./local-server.js')).localServerCommand();
+  // A run on this computer takes its answer here and continues; a production run's answer goes to the account.
+  if (args[0] === 'answer' && (await import('./local-answer.js')).localRunFolder(args[1] ?? '')) return (await import('./local-answer.js')).answerLocalRun(args.slice(1));
   if (args[0] === 'connect' || args[0] === 'answer') {
     const server = parseArgs({ args: args.slice(1), strict: false, options: { server: { type: 'string' } } }).values.server;
     const client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER);

@@ -460,11 +460,10 @@ method run support-triage.method --inputs inputs.json
 
 For your own help desk, run `method secret find` in this folder. It lists the key files nearby and the names in each, never the values, and prints the `method secret import` command for the file that has `HELPDESK_TOKEN`. Then bind `helpdesk` to your help desk's API URL. A help desk that needs a token for reads too gets it from `METHOD_OBSERVER_TOKEN`: the http observer sends that as a Bearer token.
 
-T-1042 (charged twice) goes to Billing with the `refund_request` tag. T-1043 ("Can't get in") does not say enough, so the run stops at `ask_person` with exit code 2. Answer it with `--human`:
+T-1042 (charged twice) goes to Billing with the `refund_request` tag. T-1043 ("Can't get in") does not say enough, so the run stops at `ask_person` with exit code 2 and its `run_id`. Answer it, and the run continues from that step:
 
 ```sh
-echo '{"steps": {"ask_person:0": {"outputs": {"chosen_queue": "account"}}}}' > answer.json
-method run support-triage.method --run-dir RUN_DIR --resume --human answer.json
+method answer RUN_ID --answer '{"chosen_queue": "account"}'
 ```
 
 ## The case in cases/

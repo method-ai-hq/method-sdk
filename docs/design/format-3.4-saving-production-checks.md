@@ -102,7 +102,7 @@ steps:
 - `ask` steps in production: the worker saves the run folder (`PUT /v1/worker/runs/:id/snapshot`), reports the question
   (`POST /v1/worker/runs/:id/wait`) and releases the lease; the run is `waiting`. The app answers (an `on_ask` handler or a
   `needs_input` webhook, `POST /v1/runs/:id/answer`), or the team answers in the inbox or through a one-time email link.
-  The answer queues the run; a worker restores the folder if needed and resumes with `--human`. No default deadline; a
+  The answer queues the run; a worker restores the folder if needed, keeps the answer in the run folder (`answers.json`) and resumes the run. No default deadline; a
   step's `limits.timeout_ms` fails it. Device runs: client-sealed inputs, questions, answers, and folder (HKDF-SHA256 of
   the credential, AES-256-GCM).
 - `method connect APP_FOLDER` makes the app's key, writes `.env`, publishes if needed, and prints the code.

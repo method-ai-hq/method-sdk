@@ -3,7 +3,7 @@ const mocks=vi.hoisted(()=>({execute:vi.fn(),close:vi.fn()}));
 vi.mock('../../packages/sdk/src/local-setup.js',()=>({localSetup:async()=>({config:{},sourceRoot:'/tmp'})}));
 vi.mock('../../packages/sdk/src/authoring.js',()=>({authoringPath:(v:string)=>v,readDocument:()=>({steps:{}})}));
 vi.mock('../../packages/sdk/src/capabilities.js',()=>({checkAgents:async()=>{},resolveAgentProfiles:async()=>({}),accountNeeds:()=>({models:false,classification:false})}));
-vi.mock('../../packages/sdk/src/prepare.js',()=>({prepareRuntime:async()=>({config:{},processPath:'',prepareBundle:async()=>{}}),methodCache:()=>'/nonexistent-method-cache'}));
+vi.mock('../../packages/sdk/src/prepare.js',()=>({prepareRuntime:async()=>({config:{},processPath:'',prepareBundle:async()=>{}}),methodCache:()=>`${process.env.TMPDIR ?? '/tmp'}/method-cleanup-cache`}));
 vi.mock('../../packages/sdk/src/browser.js',()=>({openBrowser:async()=>({connections:{},close:mocks.close})}));
 vi.mock('@withmethod/runtime/runner.js',()=>({runMethod:mocks.execute}));
 import {mkdtempSync,rmSync} from 'node:fs';

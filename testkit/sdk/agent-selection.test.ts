@@ -2,6 +2,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {saveAnswer} from '../../packages/sdk/src/local-answer.js';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
 import {resolveAgentProfiles} from '../../packages/sdk/src/capabilities.js';
 
@@ -53,8 +54,8 @@ it('keeps the declared agent across an actual pause and resume, whatever the cal
  const saved=readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8');
  expect(JSON.parse(saved).models.writer.backend).toBe('claude');
  vi.stubEnv('CLAUDECODE','');vi.stubEnv('CODEX_THREAD_ID','another-task');
- const human=join(f.root,'human.json');writeFileSync(human,JSON.stringify({steps:{'confirm:0':{outputs:{answer:'continue'}}}}));
- const result=await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true,human});
+ saveAnswer(f.runDir,'confirm:0',{answer:'continue'});
+ const result=await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true});
  expect(result).toMatchObject({status:'completed',result:'claude'});
  expect(readFileSync(join(f.root,'calls'),'utf8')).toBe('claude\n');
  expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(saved);

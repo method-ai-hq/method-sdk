@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {MethodClient} from '../../packages/sdk/src/method-client.js';
 import {managedClassification} from '../../packages/sdk/src/classification-client.js';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
+import {saveAnswer} from '../../packages/sdk/src/local-answer.js';
 import {inspectCurrentRun} from '../../packages/sdk/src/current-inspection.js';
 import {localAuthoring} from '../../packages/sdk/src/authoring.js';
 import {MethodSync} from '../../packages/sdk/src/method-sync.js';
@@ -57,8 +58,8 @@ it('runs without an installed agent, saves the model once, and reuses accepted c
   const response = inspection.invocations['classify:0']?.events.find(e=>e.type==='model_response');
   expect(response).toMatchObject({kind:'classify',model:'jev-test',confidence:.03,usage:null});
   expect(RunEventSchema.safeParse(response).success).toBe(true);
-  const human = join(f.root,'human.json'); writeFileSync(human,JSON.stringify({steps:{confirm:{outputs:{answer:'yes'}}}}));
-  expect(await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true,human},undefined,undefined,f.client)).toMatchObject({status:'completed',result:{choice:'billing'}});
+  saveAnswer(f.runDir,'confirm:0',{answer:'yes'});
+  expect(await runCurrentFile(f.file,{'run-dir':f.runDir,resume:true},undefined,undefined,f.client)).toMatchObject({status:'completed',result:{choice:'billing'}});
   expect([calls('/classifications/model'), calls('/classifications')]).toEqual([1, 1]);
   expect(readFileSync(join(f.runDir,'runtime.resolved.json'),'utf8')).toBe(config);
   const completed = inspectCurrentRun(f.runDir); expect(completed.started_at).toBe(inspection.started_at);

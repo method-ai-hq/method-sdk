@@ -278,16 +278,15 @@ export function cliExecutor(options: { command?: string[] } = {}): Executor {
       writePrivateJson(join(dir, "request.json"), { run_id: claim.run_id, workflow_id: claim.method_id, version_id: claim.version_id, server: api.server });
     const inputs = join(dir, "production-inputs.json");
     writePrivateJson(inputs, claim.inputs);
-    // Answers of ask steps, in the runtime's --human format.
-    const answers = Object.entries(claim.answers ?? {});
-    const human = join(dir, "production-answers.json");
-    if (answers.length) writePrivateJson(human, { steps: Object.fromEntries(answers.map(([step, answer]) => [step, { outputs: (answer as { outputs: unknown }).outputs }])) });
+    // Answers of ask steps: the run finds them in its folder when it continues.
+    const { saveAnswer } = await import("./local-answer.js");
+    for (const [step, answer] of Object.entries(claim.answers ?? {})) saveAnswer(dir, step, (answer as { outputs: unknown }).outputs);
     const command = options.command ?? methodCommand();
     const out = openSync(join(dir, "worker.stdout.log"), "a", 0o600), err = openSync(join(dir, "worker.stderr.log"), "a", 0o600);
     // The CLI sign-in of this computer reaches the child through its saved credential, not the environment.
     const credential = api.apiKey.startsWith("mk_live_") ? { METHOD_API_KEY: api.apiKey } : {};
     const child = spawn(command[0]!, [...command.slice(1), "run", claim.method_id, "--version", claim.version_id, "--server", api.server,
-      "--run-dir", dir, "--inputs", inputs, "--resume", ...(answers.length ? ["--human", human] : [])], {
+      "--run-dir", dir, "--inputs", inputs, "--resume"], {
       detached: true, stdio: ["ignore", out, err],
       env: { ...process.env, ...credential, METHOD_RUN_WORKER: "1", METHOD_NO_EXPLAIN: "1" },
     });

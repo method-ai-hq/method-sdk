@@ -21,6 +21,8 @@ import type { MethodSync } from "./method-sync.js";
 import { failureLines } from "./failure.js";
 import { methodFileRecord } from "./local-judgments.js";
 import type { parse } from "./local-cli.js";
+import { localRunId, readAnswers } from "./local-answer.js";
+import { comparisonPage } from "./compare-account.js";
 
 export { executeMethod as runCurrentMethod };
 
@@ -75,6 +77,9 @@ export function answers(human: any) {
 export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, runSecrets: Record<string, string> = {}, savedBy?: string | null) {
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
+  mkdirSync(authoringPath(flags['run-dir']!), { recursive: true, mode: 0o700 });
+  // The run's ID: method answer RUN_ID finds this folder by it.
+  const runId = localRunId(authoringPath(flags['run-dir']!));
   const json = (path: string | undefined) => path ? JSON.parse(readFileSync(authoringPath(path), "utf8")) : undefined;
   if (flags.resume) assertCheckpointExecutor(json(join(flags['run-dir']!, 'checkpoint.json')));
   const method = (await import('./authoring.js')).readDocument(file);
@@ -139,7 +144,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       cacheFrom: recentRuns(authoringPath(flags['run-dir']!)),
       fresh: flags.fresh ? true : flags.rerun?.length ? flags.rerun.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean) : undefined,
       secrets: { ...resolveSecrets(Object.keys(method.secrets ?? {})), ...Object.fromEntries(Object.entries(runSecrets).filter(([key]) => Object.hasOwn(method.secrets ?? {}, key))) }, ...(hostedModels ? { hostedModels } : {}),
-      human: answers(json(flags.human)), signal: controller.signal,
+      human: answers(readAnswers(authoringPath(flags['run-dir']!))), signal: controller.signal,
       ...(browser ? {connections:browser.connections} : {}),
       sourceRoot, ...(classification ? {classification} : {}),
       processPath: prepared.processPath,
@@ -158,10 +163,12 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       if (named !== result.failure) { result.failure = named; try { writePrivateJson(summary, { ...JSON.parse(readFileSync(summary, 'utf8')), failure: named }); } catch { /* no record to change */ } }
     }
     const synced = await sync?.finish();
-    let display:any=synced?{...result,dashboard:sync!.dashboard,dashboard_sync:synced}:result;
+    // A comparison links to its page; another run to its own.
+    const page = comparisonPage(authoringPath(file));
+    let display:any=synced?{...result,dashboard:page??sync!.dashboard,dashboard_sync:synced}:page?{...result,dashboard:page}:result;
     // A run that waits for a person shows the question itself, so the agent can ask the user and pass on the answer.
     const question=result.status==='needs_input'?(await import('./worker.js')).lastQuestion(authoringPath(flags['run-dir']!)):null;
-    if(question&&display.failure)display={...display,question,failure:{...display.failure,next:{...display.failure.next,text:`Ask the user this question in plain words and wait for the answer; do not answer it yourself. Then write {"steps": {"${question.step}": {"outputs": {...}}}} with the user's answer (the fields are in question.form) to a file, and run the same command again with --resume --run-dir ${JSON.stringify(flags['run-dir'])} --human FILE.`}}};
+    if(question&&display.failure)display={...display,run_id:runId,question,failure:{...display.failure,next:{...display.failure.next,text:`Ask the user this question in plain words and wait for the answer; do not answer it yourself. Then run method answer ${runId} --answer '${JSON.stringify(Object.fromEntries(Object.keys((question.form as any)?.properties ?? {}).map(name => [name, '…'])))}' with the user's answer (the fields are in question.form). The run continues from this step.`}}};
     // People read three plain lines on stderr; agents, apps, and tests parse the JSON on stdout.
     if (result.status === "failed" && display.failure) process.stderr.write(failureLines(display.failure) + (display.dashboard ? `Dashboard: ${display.dashboard}\n` : ""));
     process.stdout.write(JSON.stringify(display, null, 2) + "\n");

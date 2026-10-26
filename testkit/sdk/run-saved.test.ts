@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {runSaved,finishedRun} from '../../packages/sdk/src/run-saved.js';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
+import {saveAnswer} from '../../packages/sdk/src/local-answer.js';
 import {runtimeVersion} from '../../packages/sdk/src/method-files.js';
 import {packageDigest} from '../../packages/contracts/src/method-package.js';
 import {bindConnectionValue} from '../../packages/sdk/src/computer-settings.js';
@@ -57,10 +58,10 @@ for(const version of [undefined,'0.0.0',runtimeVersion])it(`checks the saved exe
  expect(await runSaved(f.saved,{...f.flags,inputs},f.client)).toMatchObject({status:'needs_input'});
  const checkpoint=join(f.flags['run-dir'],'checkpoint.json');const saved=JSON.parse(readFileSync(checkpoint,'utf8'));saved.executor_version=version;writeFileSync(checkpoint,JSON.stringify(saved));
  const before=readFileSync(checkpoint,'utf8');f.client.request.mockClear();f.client.transfer.mockClear();rmSync(join(f.root,'cache'),{recursive:true});
- const human=join(f.root,'human.json');writeFileSync(human,JSON.stringify({steps:{'confirm:0':{outputs:{answer:'yes'}}}}));
- if(version===runtimeVersion)expect(await runSaved(f.saved,{...f.flags,resume:true,human},f.client)).toMatchObject({status:'completed'});
+ saveAnswer(f.flags['run-dir'],'confirm:0',{answer:'yes'});
+ if(version===runtimeVersion)expect(await runSaved(f.saved,{...f.flags,resume:true},f.client)).toMatchObject({status:'completed'});
  else {
-  await expect(runSaved(f.saved,{...f.flags,resume:true,human},f.client)).rejects.toMatchObject({code:'resume_mismatch'});
+  await expect(runSaved(f.saved,{...f.flags,resume:true},f.client)).rejects.toMatchObject({code:'resume_mismatch'});
   expect(f.client.transfer).not.toHaveBeenCalled();
   expect(f.client.request.mock.calls.every(([path]:any[])=>path.startsWith('/api/cli/runs/')||path==='/api/cli/me')).toBe(true);
   await expect(runCurrentFile(join(f.flags['run-dir'],'saved.method'),{...f.flags,resume:true})).rejects.toMatchObject({code:'resume_mismatch'});
