@@ -156,10 +156,13 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return (await import('./improve.js')).backgroundFix(client, file, p.values.judgment ?? [], { prune: !!p.values.prune });
   }
   if (args[0] === 'changes') return (await import('./proposals.js')).changesMain(args.slice(1), clientFactory);
+  // A comparison file runs as the Method it compiles into.
+  if (args[0] === 'run' && /\.compare$/i.test(args[1] ?? '') && !args.includes('--help')) args = await (await import('./compare.js')).comparisonRunArgs(args);
   if (args[0] === 'run' && /\.method$/i.test(args[1] ?? '') && !args.includes('--help') && !await beforeFileRun(args, clientFactory)) return;
   if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);
   if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));
   if (args[0] === '__model') return (await import('./model-call.js')).modelCallCommand();
+  if (args[0] === '__compare' && args[1]) return (await import('./compare.js')).compareStageCommand(args[1]);
   if (args[0] === 'connect' || args[0] === 'answer') {
     const server = parseArgs({ args: args.slice(1), strict: false, options: { server: { type: 'string' } } }).values.server;
     const client = clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER);

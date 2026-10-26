@@ -170,8 +170,23 @@ export async function testCommand(args: string[]) {
     baseline: values.baseline ? authoringPath(values.baseline) : undefined, newIds: values.new ?? [], once: !!values.once,
     runs: count(values.runs, "--runs"), minPass: count(values["min-pass"], "--min-pass"), live: values.live?.flatMap(step => step.split(",")).map(step => step.trim()).filter(Boolean),
     ...(values["no-judge-cache"] ? { judgeCache: false } : {}), keepDir: values["keep-dir"] ? authoringPath(values["keep-dir"]) : undefined });
-  print(report);
+  print(values.baseline ? { ...report, comparison: baselineAnswer(report) } : report);
   process.exitCode = report.passed ? 0 : 1;
+}
+
+/**
+ * The smallest comparison: the same cases on the old and the new version. The new version is better when it fixes a
+ * case and breaks none; the old one when it breaks a case and fixes none; otherwise, or when a case cannot be checked,
+ * can't tell yet.
+ */
+export function baselineAnswer(report: { counts: Record<string, number> }) {
+  const { fixed = 0, regression = 0, unverifiable = 0 } = report.counts;
+  const cases = (n: number) => `${n} case${n === 1 ? "" : "s"}`;
+  if (unverifiable) return { answer: "Can't tell yet", reason: `${cases(unverifiable)} could not be checked.` };
+  if (fixed && !regression) return { answer: "The new version is better", reason: `It fixes ${cases(fixed)} and breaks none.` };
+  if (regression && !fixed) return { answer: "The old version is better", reason: `The new version breaks ${cases(regression)} and fixes none.` };
+  if (fixed && regression) return { answer: "Can't tell yet", reason: `The new version fixes ${cases(fixed)} and breaks ${cases(regression)}.` };
+  return { answer: "Can't tell yet", reason: "The two versions pass and fail the same cases." };
 }
 
 /**

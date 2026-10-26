@@ -1713,6 +1713,7 @@ Usage:
 
 ```sh
 method run FILE.method [OPTIONS]
+method run NAME.compare [OPTIONS]
 method run WORKFLOW_ID [--version VERSION_ID] [--server URL] [OPTIONS]
 method run NAME [OPTIONS]
 ```
@@ -1724,6 +1725,11 @@ Models come from the Method's models: (or the account default). --workspace sele
 --inputs-from RUN_ID: use the inputs of that run; --inputs FILE overrides single values.
 --run-dir DIR: the folder for this run's records (new runs too; default .method-runs/ID).
 --resume: continue the same saved run with its saved models.
+
+## Comparisons
+
+A NAME.compare file (YAML or JSON) asks one question about two or more agents and answers "ARM is better" or "Can't tell yet". Write it before anything runs. Required parts: question (one sentence); arms (a short name for each: a .method file, or {agent: claude|codex, instructions: FILE}); difference (the one thing that differs; other_differences lists the rest); inputs (case IDs, which are folders in cases/ beside the file, or JSON files of input values; the same for each arm); measure (the main measure: {name, and one of code: SCRIPT that prints {"score": N}, rubric: [sentences a model grader judges], person: QUESTION a person answers with a number}; higher is better); rule ({margin, min_runs, at?, guard?: {measure, max_drop}}; margin above 0); runs (runs per input at each point). Optional: trial (inputs in the trial, default 2); treatment ({events: [{correction: TEXT, input: ID} or {input: ID}], checkpoints: [N, ...]}, with rule.at); teaching (inputs that treatment events use, kept apart from inputs); other_measures (shown, not deciding); expected ({INPUT: FILE}, hidden from the arms); assumptions (shown as not checked). method schema compare prints the full form; method validate NAME.compare checks it.
+method run NAME.compare refuses a file with a missing part, arms that share a Method ID, or a rule that cannot say "can't tell yet". It runs a trial (each arm on the first inputs, and the treatment events before the first checkpoint), says what each arm received ("Corrections received: 5 of 5") and stops when an arm is short, naming each missing item. Then it asks to start the full run, with the time and cost estimated from the trial: pass the person's answer with --resume --run-dir DIR --human FILE. The result names the answer and its reason, the rule as a sentence, what each arm received, and n per point. Each Method arm runs as a copy with its own Method ID and cache in .compare/NAME/ beside the file. A correction reaches a Method arm through method judge on a training run. A failed run stops with a plain error; run the comparison again and finished runs are reused. A changed measure grades again without running the arms. Plain Claude Code or Codex arms, and events that change the model, cannot run yet.
 --rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
 --fresh: run every step; reuse nothing.
 --human FILE: answers for ask steps, as {steps: {"STEP": {outputs: {...}}}} (STEP:ITERATION, counted from 0, for a step with each or repeat).
@@ -1784,10 +1790,10 @@ method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--cases DIR
 ```
 
 Arguments and defaults:
-Cases are in cases/ beside the Method. Unchanged steps return their recorded outputs; changed steps run; each attempt works on its own copy of the files the recorded run read, so a changed step that writes files runs safely; a Method tool that sends or changes something returns a stand-in instead. --baseline also runs each case on the old version, to show what the change fixed or broke. --once runs each case once; --runs N and --min-pass N replace each case's own counts. --live STEP runs that step live even when it matches the recording. --no-judge-cache judges again instead of reusing earlier judgments. --keep-dir keeps each attempt's run folder there.
+Cases are in cases/ beside the Method. Unchanged steps return their recorded outputs; changed steps run; each attempt works on its own copy of the files the recorded run read, so a changed step that writes files runs safely; a Method tool that sends or changes something returns a stand-in instead. --baseline also runs each case on the old version, to show what the change fixed or broke, and answers which version is better: the new one when it fixes a case and breaks none, the old one when it breaks a case and fixes none, else can't tell yet. --once runs each case once; --runs N and --min-pass N replace each case's own counts. --live STEP runs that step live even when it matches the recording. --no-judge-cache judges again instead of reusing earlier judgments. --keep-dir keeps each attempt's run folder there.
 
 Result and changes:
-JSON report with a verdict per case and passed:true when no case blocks the change. Exit 0 or 1.
+JSON report with a verdict per case and passed:true when no case blocks the change; with --baseline also comparison: {answer, reason}. Exit 0 or 1.
 
 Errors:
 Unknown case or step, invalid Method, or setup errors.

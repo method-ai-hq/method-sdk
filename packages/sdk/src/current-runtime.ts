@@ -135,7 +135,8 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     const result = await executeMethod(authoringPath(file), config, {
       runDir: flags["run-dir"] ? authoringPath(flags["run-dir"]) : undefined,
       inputs: json(flags.inputs), state: json(flags.state), resume: flags.resume, retry: flags.retry,
-      cacheFrom: flags.resume ? [] : recentRuns(authoringPath(flags['run-dir']!)),
+      // A resumed run (after an ask step) also reuses iterations of earlier runs whose key matches.
+      cacheFrom: recentRuns(authoringPath(flags['run-dir']!)),
       fresh: flags.fresh ? true : flags.rerun?.length ? flags.rerun.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean) : undefined,
       secrets: { ...resolveSecrets(Object.keys(method.secrets ?? {})), ...Object.fromEntries(Object.entries(runSecrets).filter(([key]) => Object.hasOwn(method.secrets ?? {}, key))) }, ...(hostedModels ? { hostedModels } : {}),
       human: answers(json(flags.human)), signal: controller.signal,

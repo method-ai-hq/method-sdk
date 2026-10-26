@@ -1,3 +1,9 @@
+# Unreleased
+
+- **`method run NAME.compare` runs a comparison.** A `.compare` file asks one question about two or more agents: question, arms (Method files), the one difference, inputs (case IDs or JSON files), one main measure (code, model rubric or person), a fixed decision rule (`{margin, min_runs, at?, guard?}`) and runs per point; optional treatment over time, teaching inputs, other measures, expected answers and assumptions. Method refuses a file with a missing part, arms that share a Method ID, or a rule that cannot say "can't tell yet". It runs a trial, says what each arm received and stops when an arm is short, asks for approval with a time and cost estimate, runs every cell, grades and decides: "ARM is better" or "Can't tell yet", with the reason, the rule as a sentence, what each arm received and n per point. Each Method arm runs as its own copy, with its own Method ID and cache. A rerun reuses finished cells; a changed measure grades again without running the arms. `method validate NAME.compare` and `method schema compare` check and describe the file. Plain Claude Code or Codex arms are not built yet.
+- **`method test --baseline` answers which version is better** (`comparison: {answer, reason}`): the new one when it fixes a case and breaks none, the old one when it breaks a case and fixes none, else can't tell yet.
+- A resumed run (after an ask step) reuses matching steps of earlier runs, as a new run does.
+
 # 0.20.5
 
 `method run`, `method sync` and `method wait` upload a step's file output when the step returns its absolute path inside `$METHOD_OUTPUT_DIR`, as the runtime already accepts. Before, the upload stopped with "The output is outside the run artifacts folder."

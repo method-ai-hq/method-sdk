@@ -81,7 +81,7 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     if (["method", "config"].includes(p[0])) { print(p[0] === "config" ? configSchema : methodSchema); return true; }
     const schemas: Record<string, unknown> = {method: methodSchema, config: configSchema,
       ...Object.fromEntries(["step", "check", "data"].map(name => [name, { $schema: methodSchema.$schema, $defs: methodSchema.$defs, $ref: `#/$defs/${name}` }])),
-      environment: { ...methodSchema.properties.environment.additionalProperties }};
+      environment: { ...methodSchema.properties.environment.additionalProperties }, compare: (await import("./compare.js")).comparisonJsonSchema()};
     const schema = schemas[p[0] ?? "method"];
     if (!schema) throw Error("Unknown schema. See method authoring.");
     print(schema); return true;
@@ -96,6 +96,12 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     // Exclusive creation prevents simultaneous init from replacing a draft.
     mkdirSync(dirname(path), {recursive:true,mode:0o700});
     const fd = openSync(path, "wx", 0o600); closeSync(fd); writeDocument(path, draft); print({ file: path, workflow: draft }); return true;
+  }
+  if (command === "validate" && /\.compare$/i.test(file)) {
+    // A comparison file: its parts, checked as method run checks them before anything runs.
+    try { const doc = (await import("./compare.js")).readComparison(file); print({ valid: true, executed: false, arms: Object.keys(doc.arms), inputs: doc.inputs.length, rule: (await import("./compare.js")).ruleSentence(doc) }); }
+    catch (error) { print({ valid: false, executed: false, error: (error as Error).message }); process.exitCode = 1; }
+    return true;
   }
   if (command === "validate") {
     let definition = "invalid";
