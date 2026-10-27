@@ -12,7 +12,7 @@
  * instructions; runs count separate learners; corrections arrive one at a time; one Claude judge that reads every
  * source in full and scores "partly" as half; a noise check before approval; usage per correction.
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -93,13 +93,13 @@ export const comparisonSchema = z.strictObject({
     teaching_description: text.optional().describe('What the teaching inputs are, in one sentence.'),
     names: z.record(text, text).optional().describe('A short name for each input, by input ID.'),
   }).optional().describe('How the page names and describes the inputs. It changes no run.'),
-  teaching: z.array(text).min(1).optional().describe('Inputs that the arms learn from (treatment events), kept apart from the measured inputs.'),
+  teaching: z.array(text).min(1).optional().describe('Inputs that the arms learn from (treatment events), kept apart from the measured inputs. A teaching input\'s own files (inputs/ID/ beside inputs/ID.json, or the case\'s snapshot/env/), one folder per files connection, replace the arms\' folders of those names for its training runs.'),
   other_measures: z.array(measureSchema).optional().describe('Numbers that are shown but do not decide.'),
   expected: z.record(text, text).optional().describe('For an input, a file with its correct output. The arms never see it; the measures do. For checklist: expected, a list of items: Markdown "- item" lines, or JSON [{text, covered_by: [EVENT, ...]}].'),
   assumptions: z.array(assumptionSchema).optional().describe('Statements that must be true for the answer to mean something: text, or {text, if_false, check}. Method shows its own checks as checked by Method; these are not checked.'),
   notes: z.strictObject(Object.fromEntries(noteParts.map(part => [part, z.array(text).min(1).optional()])) as Record<(typeof noteParts)[number], z.ZodOptional<z.ZodArray<typeof text>>>)
     .optional().describe(`Notes that the page shows with their part: ${noteParts.join(', ')}.`),
-  decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin or arms.plain. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
+  decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin or arms.plain. Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
 }).describe('A comparison: one question about two or more agents.');
 export type Comparison = z.infer<typeof comparisonSchema>;
 type Measure = Comparison['measure'];
@@ -232,8 +232,9 @@ export function readComparison(file: string): Comparison {
     if (!inputs.includes(id)) problems.push(`The expected answer for ${id} names no measured input.`);
     if (!existsSync(resolve(root, expected))) problems.push(`The expected answer for ${id} (${expected}) is not there.`);
   }
-  // An input's own folder: each folder in it is named after a files connection, and no expected answer is in it.
-  for (const id of inputs) {
+  // An input's own folder (measured or teaching): each folder in it is named after a files connection, and no expected
+  // answer is in it.
+  for (const id of [...inputs, ...teaching]) {
     const room = inputRoom(root, id);
     if (!room) continue;
     for (const entry of readdirSync(room, { withFileTypes: true })) {
@@ -242,7 +243,6 @@ export function readComparison(file: string): Comparison {
     }
     for (const expected of Object.values(doc.expected ?? {})) if (`${resolve(root, expected)}/`.startsWith(`${room}/`)) problems.push(`The expected answer ${expected} is in the folder of the input ${id}, which the arms get. Keep expected answers outside it.`);
   }
-  for (const id of teaching) if (inputRoom(root, id)) problems.push(`The teaching input ${id} has a folder of its own files. Only measured inputs have one: a Method arm's training runs use its own folders.`);
   // The deliverable: every arm hands in the same file. A plain agent's last message is no output.
   const plainArms = arms.filter(([, arm]) => !armIsMethod(arm)).map(([armName]) => armName);
   if (plainArms.length && !doc.deliverable) problems.push(`The plain arm ${plainArms[0]} hands in a file, not its last message. Add deliverable: the path of the file that each input asks for, such as work/reply.md, in the folder of one of its files connections.`);
@@ -705,7 +705,7 @@ export async function compileComparison(file: string) {
     arms.push({ name: armName, ...await copyArm(resolve(root, arm), join(folder, 'arms', armName)), models: models.arms[armName] ?? [], cache_dir });
   }
   // A plain arm gets the same folders that the Method arms get: a copy of each bound folder, by its name. For an input
-  // with its own folder, every arm gets that input's folders instead (cellFolders).
+  // with its own folder, measured or teaching, every arm gets that input's folders instead (cellFolders).
   const shared = Object.assign({}, ...arms.filter(a => !a.plain).map(a => a.folders)) as Record<string, string>;
   const generated = (armName: string, fileName: string, method: unknown) => {
     const target = join(folder, 'arms', armName, fileName);
@@ -728,8 +728,8 @@ export async function compileComparison(file: string) {
   const judge = { agent: 'claude' as const, model: models.shared?.agent === 'claude' ? models.shared.model : null };
   const judgeMethod = join(folder, 'judge.method');
   writeFileSync(judgeMethod, JSON.stringify(sessionMethod('Comparison judge', 'Mark each checklist item of a handed-in document.', 'claude', { agent: 'claude', model: judge.model, effort: models.shared?.agent === 'claude' ? models.shared.effort : null }, ['read', 'search'], judgePrompt, [], 1_800_000), null, 2) + '\n', { mode: 0o600 });
-  const resolveInput = (inputId: string, measured = false) => {
-    const value = inputValue(root, inputId), room = measured ? inputRoom(root, inputId) : null;
+  const resolveInput = (inputId: string) => {
+    const value = inputValue(root, inputId), room = inputRoom(root, inputId);
     return { id: inputId, value, room, deliverable: doc.deliverable ? deliverableOf(doc.deliverable, value) : null, hash: room ? sha({ value, room: folderHash(room) }) : sha(value) };
   };
   const measure = (m: Measure, main: boolean) => ({ name: m.name, main,
@@ -749,7 +749,7 @@ export async function compileComparison(file: string) {
   await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec);
   const plan = {
     file: path, folder, question: doc.question, difference: doc.difference, other_differences: doc.other_differences ?? [],
-    arms, inputs: doc.inputs.map(id => resolveInput(id, true)),
+    arms, inputs: doc.inputs.map(id => resolveInput(id)),
     events,
     checkpoints: doc.treatment ? [...doc.treatment.checkpoints].sort((a, b) => a - b) : null,
     measures: [measure(doc.measure, true), ...(doc.other_measures ?? []).map(m => measure(m, false))],
@@ -808,6 +808,9 @@ type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array
 type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[] };
 
 /**
+ * Both kinds of arm run an event's input on the folders that a cell of that input gets (cellFolders): the arm's own,
+ * with each folder of the input's own folder in place of the one of its name.
+ *
  * How a correction reaches a Method arm. The arm runs the event's input (a training run, saved to the account), then
  * method judge RUN wrong --note TEXT, then method wait until the fix has a final outcome, for at most FIX_LIMIT_MS.
  * Received: fixed, no change needed (the fix did not reproduce the mistake), or no fix found. Not received: could not
@@ -822,16 +825,34 @@ type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[]
 type Delivered = { received: boolean; outcome: CorrectionOutcome; reason?: string; run_id?: string; judgment_id?: string; tokens?: number | null };
 type Built = { received: boolean; outcome: CorrectionOutcome; reason?: string; instructions?: string; tokens?: number | null };
 export const delivery = {
-  async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered, settings: { web: boolean } = { web: false }): Promise<Delivered> {
+  async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered, settings: { web: boolean; folders?: Record<string, string> } = { web: false }): Promise<Delivered> {
     // The training run and its fix run in a clean room, as the arm's cells do: they see none of the user's
     // instructions, memory or settings, only the sign-ins of the agents they use.
     const room = await armRoom(join(learner.dir, learner.file), cacheDir, true, {}, settings.web);
-    try { return await deliverIn(room.env, event, learner, workDir, before); } finally { await room.remove(); }
+    const placed = placeFolders(learner.dir, settings.folders ?? {});
+    try { return await deliverIn(room.env, event, learner, workDir, before); } finally { placed(); await room.remove(); }
   },
   async build(event: any, arm: any, instructions: string, workDir: string, plan: Plan): Promise<Built> {
     return buildIn(event, arm, instructions, workDir, plan);
   },
 };
+/**
+ * Put a copy of each folder beside the learner's Method, by its files connection's name: the learner's copy has its own
+ * Method ID and no bindings, so method run and its fix use the folder beside it. Returns what removes the copies (and
+ * puts back what was there), so that the learner's frozen copies hold only the Method.
+ */
+function placeFolders(dir: string, folders: Record<string, string>) {
+  const aside: Array<[string, string]> = [];
+  for (const [envName, from] of Object.entries(folders)) {
+    const target = join(dir, envName);
+    if (existsSync(target)) { aside.push([target, `${target}.method-aside`]); renameSync(target, `${target}.method-aside`); }
+    cpSync(from, target, { recursive: true, verbatimSymlinks: true });
+  }
+  return () => {
+    for (const envName of Object.keys(folders)) rmSync(join(dir, envName), { recursive: true, force: true });
+    for (const [target, saved] of aside) renameSync(saved, target);
+  };
+}
 async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: string; file: string }, workDir: string, before?: Delivered): Promise<Delivered> {
   if (before?.judgment_id && before.run_id) return waitForFix(before.run_id, before.judgment_id, env);
   const runDir = join(workDir, 'run');
@@ -952,11 +973,11 @@ function sessionFile(runDir: string, session: any, path: string): string | null 
   try { return readFileSync(join(runDir, 'artifacts', written.path), 'utf8'); } catch { return null; }
 }
 
-/** The builder of a plain arm, for one correction: a training run with the current instructions, then the edit. */
+/** The builder of a plain arm, for one correction: a training run with the current instructions (on the input's folders), then the edit. */
 async function buildIn(event: any, arm: any, instructions: string, workDir: string, plan: Plan): Promise<Built> {
   rmSync(workDir, { recursive: true, force: true });
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
-  const folders = cellFolders(arm, { room: null });
+  const folders = cellFolders(arm, event.input);
   const train = join(workDir, 'training', 'run');
   const trained: any = await runSession(arm.method, train, folders, { instructions, task: taskPrompt(event.input.value, event.input.deliverable) });
   if (trained.status !== 'completed') return { received: false, outcome: 'not_run', reason: `the training run on ${event.input.id} ended ${trained.status}${trained.failure?.headline ? `: ${trained.failure.headline}` : ''}` };
@@ -1038,7 +1059,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       let result: Delivered | Built;
       try {
         if (arm.plain) result = event.kind === 'correction' ? await delivery.build(event, arm, instructions, join(base, 'events', String(event.index)), plan) : { received: true, outcome: 'given', instructions };
-        else result = await delivery.deliver(event, method!, method!.cache, join(base, 'events', String(event.index)), records.get(key), { web: plan.web });
+        else result = await delivery.deliver(event, method!, method!.cache, join(base, 'events', String(event.index)), records.get(key), { web: plan.web, folders: cellFolders(arm, event.input) });
       } catch (error) { result = { received: false, outcome: 'stopped', reason: (error as Error).message }; }
       const record = { key, index: event.index, kind: event.kind, input: event.input.id, learner, text_sha256: event.text ? sha(event.text) : null, ...result, tokens: result.tokens ?? null, duration_ms: Date.now() - started, at: new Date().toISOString() };
       writeFileSync(recordFile, JSON.stringify(record) + '\n', { flag: 'a', mode: 0o600 });
@@ -1162,7 +1183,7 @@ function gradeKeys(plan: Plan, list: Array<{ key: string; arm: string; checkpoin
 /**
  * The folders that an arm works on for an input, by files connection: the arm's own (for a plain arm, those of the
  * Method arms), with each folder of the input's own folder in place of the one of its name. Both kinds of arm get the
- * same folders for an input, and nothing of another input's folder.
+ * same folders for an input, and nothing of another input's folder: in a cell and in a training run on a teaching input.
  */
 function cellFolders(arm: any, input: { room: string | null }): Record<string, string> {
   const own = input.room ? Object.fromEntries(readdirSync(input.room, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => [e.name, join(input.room!, e.name)])) : {};

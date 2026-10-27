@@ -66,4 +66,4 @@ assumptions:
 notes:
   inputs: [Each ticket runs alone with an empty work folder.]
   treatment: [The corrections come from the support lead's notes on four past tickets.]
-decided_by_you: [question, arms]
+decided_by_you: [arms]

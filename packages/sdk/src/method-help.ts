@@ -367,7 +367,7 @@ When the user asks whether one agent is better than another, write a NAME.compar
 ## The six rules
 
 1. Write the question so that it names the treatment and the test.
-2. Mark \`decided_by_you\` only for what the user said. Everything else is the writer's choice, and the page asks the user to review it.
+2. Mark \`decided_by_you\` only for a value the user stated. The question is the user's only when the file has it in the user's own words; when you rephrase it, it is the writer's. Everything else is the writer's choice, and the page asks the user to review it.
 3. Write corrections as the expert would say them: "It needs to be X because Y". Use the expert's real corrections when you have them.
 4. One main measure, in plain words, scored on what each input has.
 5. Assumptions are only things that must be true for the answer to mean something. Each one has "if false" and "how to check". Notes go with their part.
@@ -388,13 +388,13 @@ Do not write these into the file; Method applies them to every comparison and sh
 
 ## The file
 
-Required: \`question\`; \`arms\` (a short name for each: a .method file, or {agent: claude|codex, instructions: FILE}); \`difference\`; \`inputs\` (JSON files of input values or case IDs, the same for each arm); \`measure\` ({name, description, and one of code: SCRIPT, rubric: [sentences], checklist: expected (each input's expected answer is its checklist; add covered: true to score only the items that corrections given so far cover), person: QUESTION}); \`rule\` ({margin, min_runs, at?, guard?: {measure, max_drop}}); \`runs\` (learners per arm).
+Required: \`question\`; \`arms\` (a short name for each: a .method file, or {agent: claude|codex, instructions: FILE}); \`difference\`; \`inputs\` (JSON files of input values or case IDs, the same for each arm; an input's own folder, inputs/ID/ beside inputs/ID.json with one subfolder per files connection, replaces the arm's folders of those names for that input. This holds for teaching inputs too: a training run sees only its own input's folders); \`measure\` ({name, description, and one of code: SCRIPT, rubric: [sentences], checklist: expected (each input's expected answer is its checklist; add covered: true to score only the items that corrections given so far cover), person: QUESTION}); \`rule\` ({margin, min_runs, at?, guard?: {measure, max_drop}}); \`runs\` (learners per arm).
 
 Optional: \`deliverable\` (the file each arm hands in, such as work/reply.md; needed with a plain arm); \`treatment\` ({events: [{correction, input} or {input}], checkpoints, seed?}); \`teaching\` (the inputs the events use); \`expected\` ({INPUT: FILE}; for a checklist, "- item" lines or JSON [{text, covered_by: [EVENT, ...]}], events by their place in the file); \`other_measures\`; \`trial\` (inputs in the trial, 2 by default); \`assumptions\` (text, or {text, if_false, check}, or {text, limit: true} for a known limit); \`notes\` ({PART: [text]}); \`about_inputs\` ({noun, description, teaching_description, names: {INPUT: NAME}}); \`tested\` (model or tools); \`decided_by_you\` ([PART or PART.FIELD, ...]). \`method validate NAME.compare\` checks the file and lists the writer's choices; \`method schema compare\` prints the full form.
 
 ## Worked example: a support-reply agent with 20 corrections
 
-The support lead corrects a reply agent every week. The user asks whether the Method agent follows those corrections better than plain Claude Code. Both arms get the same 20 corrections on four past tickets, one at a time in one shuffled order, and are measured on three new tickets after every 5. Each new ticket's checklist is its expected answer, and each item names the corrections that cover it. The user stated the question and the arms, so only those are marked \`decided_by_you\`.
+The support lead corrects a reply agent every week. The user asks whether the Method agent follows those corrections better than plain Claude Code. Both arms get the same 20 corrections on four past tickets, one at a time in one shuffled order, and are measured on three new tickets after every 5. Each new ticket's checklist is its expected answer, and each item names the corrections that cover it. The user named the arms, so only \`arms\` is marked \`decided_by_you\`. The question is the writer's: it rephrases the user's request.
 
 \`\`\`yaml
 ${readFileSync(join(exampleDirectory('support-replies').directory, 'replies.compare'), 'utf8').trimEnd()}

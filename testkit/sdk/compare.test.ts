@@ -305,6 +305,37 @@ it('a plain arm with corrections is a builder: after each correction a session g
   expect(cells.find((c: any) => c.checkpoint === 3).treatment_note).toBe('Learner 1. Given to a builder that edited the agent\'s instructions after each correction, one at a time, in this order:\n1. Correction on inputs/three.json: Add one, because the count starts at one. (edited)\n2. New input: inputs/three.json\n3. Correction on inputs/three.json: Keep it. [keep] (not edited)');
 }, 600_000);
 
+it('a teaching input with its own folder gives its training runs that folder in place of the arms\' folders of that name, for a Method arm and a builder alike', async () => {
+  const { root, file } = plainFixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 2 },
+    treatment: { events: [{ input: 'inputs/three.json' }, { correction: 'Add one.', input: 'inputs/three.json' }], checkpoints: [0, 2] } });
+  mkdirSync(join(root, 'inputs', 'three', 'docs'), { recursive: true });
+  writeFileSync(join(root, 'inputs', 'three', 'docs', 'brief-three.md'), 'brief three');
+  const claude = claudeStub(root);
+  // A stand-in for the method CLI: a training run logs what is beside the learner's Method, and completes unsaved.
+  writeFileSync(join(root, 'bin', 'method'), `#!/usr/bin/env node
+const fs = require('fs'), path = require('path');
+const argv = process.argv.slice(2), file = argv[1], runDir = argv[argv.indexOf('--run-dir') + 1];
+fs.appendFileSync(${JSON.stringify(join(root, 'method-calls.jsonl'))}, JSON.stringify({ files: fs.readdirSync(path.dirname(file), { recursive: true }).sort() }) + '\\n');
+fs.mkdirSync(runDir, { recursive: true }); fs.writeFileSync(path.join(runDir, 'summary.json'), JSON.stringify({ status: 'completed' }));
+`, { mode: 0o700 });
+  const comparison = await stagePlan(file);
+  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  // The Method arm's training run: input three's docs in place of the arm's docs, and the arm's own work folder.
+  const beside = lines(join(root, 'method-calls.jsonl'))[0].files;
+  expect(beside).toEqual(expect.arrayContaining(['docs/brief-three.md', 'work/.keep']));
+  expect(beside.filter((f: string) => f.startsWith('docs/'))).toEqual(['docs/brief-three.md']);
+  // After the event the copies are gone: the learner's frozen copies hold only the Method.
+  const learner = treated.find((t: any) => t.arm === 'a').learners[0];
+  expect(learner.events[0]).toMatchObject({ outcome: 'given', received: true });
+  expect(existsSync(join(learner.snapshots['0'].dir, 'docs'))).toBe(false);
+  expect(existsSync(join(learner.snapshots['0'].dir, '..', 'method', 'docs'))).toBe(false);
+  // The builder's training run works on the same folders.
+  expect(claude.calls().filter(c => c.kind === 'task')[0].files).toEqual(['docs', 'docs/brief-three.md', 'work', 'work/.keep']);
+  // A teaching input's folder holds folders named after files connections, as a measured input's does.
+  writeFileSync(join(root, 'inputs', 'three', 'loose.md'), 'x');
+  expect(() => readComparison(file)).toThrow(/The folder of the input inputs\/three\.json holds the file loose\.md/);
+}, 600_000);
+
 it('runs counts separate learners: each Method learner has its own Method ID, folder and cache, and gets every correction one at a time', async () => {
   const { file } = fixture({ teaching: ['inputs/three.json'], runs: 2, rule: { margin: 0.1, min_runs: 2, at: 2 },
     treatment: { events: [{ correction: 'One.', input: 'inputs/three.json' }, { correction: 'Two.', input: 'inputs/three.json' }], checkpoints: [0, 2] } });
