@@ -41,34 +41,37 @@ export function runFolderIds(dir: string) {
     started?.event === 'run.started' ? started.execution_id : undefined, folder, basename(folder)].filter((id): id is string => typeof id === 'string' && !!id))];
 }
 
-/** The run folder on this computer that a run ID names, from the Method cache and .method-runs in this folder. */
+/**
+ * Every run folder on this computer: those in the Method cache and in .method-runs in this folder, and each folder that
+ * a run was given with --run-dir (the cache lists every run by its ID in run-ids/), such as a comparison's training run.
+ */
+function runFolders() {
+  const dirs: string[] = [];
+  for (const root of [join(methodCache(), 'runs'), join(process.cwd(), '.method-runs')]) {
+    try { for (const name of readdirSync(root)) dirs.push(join(root, name)); } catch { /* no such folder */ }
+  }
+  let listed: string[] = [];
+  try { listed = readdirSync(join(methodCache(), 'run-ids')); } catch { /* no run listed */ }
+  for (const name of listed) {
+    const dir = readJson(join(methodCache(), 'run-ids', name))?.run_dir;
+    if (typeof dir === 'string') dirs.push(resolve(dir));
+  }
+  return [...new Set(dirs)].filter(dir => existsSync(join(dir, 'method.json')));
+}
+
+/** The run folder on this computer that a run ID names. */
 export function findRunFolder(runId: string) {
   const direct = resolve(runId);
   if (existsSync(join(direct, 'method.json'))) return direct;
-  for (const root of [join(methodCache(), 'runs'), join(process.cwd(), '.method-runs')]) {
-    let names: string[] = [];
-    try { names = readdirSync(root); } catch { continue; }
-    // A folder named by the ID is the quick match; the others need their records read.
-    if (names.includes(runId) && existsSync(join(root, runId, 'method.json'))) return join(root, runId);
-    for (const name of names) {
-      const dir = join(root, name);
-      if (existsSync(join(dir, 'method.json')) && runFolderIds(dir).includes(runId)) return dir;
-    }
-  }
-  return undefined;
+  // A folder named by the ID is the quick match; the others need their records read.
+  const folders = runFolders();
+  return folders.find(dir => basename(dir) === runId) ?? folders.find(dir => runFolderIds(dir).includes(runId));
 }
 
 /** Every run folder on this computer by each of its IDs, read once (for many judgments). */
 export function runFolderIndex() {
   const index = new Map<string, string>();
-  for (const root of [join(process.cwd(), '.method-runs'), join(methodCache(), 'runs')]) {
-    let names: string[] = [];
-    try { names = readdirSync(root); } catch { continue; }
-    for (const name of names) {
-      const dir = join(root, name);
-      if (existsSync(join(dir, 'method.json'))) for (const id of runFolderIds(dir)) index.set(id, dir);
-    }
-  }
+  for (const dir of runFolders()) for (const id of runFolderIds(dir)) if (!index.has(id)) index.set(id, dir);
   return index;
 }
 
