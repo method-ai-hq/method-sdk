@@ -2,18 +2,20 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, fixOutcome, judging, noiseCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
+import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, fixOutcome, judging, noiseCheck, tooEasyCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { baselineAnswer } from '../../packages/sdk/src/quality.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
 import { LOCAL_SERVER_PORT, registerLocalRun, serveLocal } from '../../packages/sdk/src/local-server.js';
 import { methodMain } from '../../packages/sdk/src/method.js';
+import { MethodClient } from '../../packages/sdk/src/method-client.js';
 
 const roots: string[] = [];
 const original = { deliver: delivery.deliver, build: delivery.build, judge: judging.judge };
 const path = process.env.PATH;
 beforeEach(() => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token'; });
 afterEach(() => {
+  vi.restoreAllMocks();
   process.exitCode = 0; Object.assign(delivery, { deliver: original.deliver, build: original.build }); judging.judge = original.judge;
   process.env.PATH = path; delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -507,6 +509,59 @@ it('measures the noise at the start with two learners per arm, and stops before 
   expect(await compareStage('check', { comparison, runs, grades: grades(0.52).map(g => JSON.stringify(g)) })).toMatchObject({ trial_summary: expect.stringContaining('differ by up to 0.02 on size') });
 }, 600_000);
 
+it('stops before approval when the test is too easy: every arm already scores above 1 minus the margin at the start', async () => {
+  const { file } = fixture({ rule: { margin: 0.1, min_runs: 1 }, trial: 2 });
+  const plan = JSON.parse(await stagePlan(file)), inputs = ['inputs/one.json', 'inputs/two.json'];
+  const grades = (a: number, b: number, extra: Record<string, unknown> = {}) => ['a', 'b'].flatMap(arm => [0, 1].flatMap(repeat => inputs.map(input =>
+    ({ arm, input, repeat, checkpoint: null, scores: { size: arm === 'a' ? a : b }, ...extra }))));
+  // A code measure has no known top, so it is not checked.
+  expect(tooEasyCheck(plan, noiseCheck(plan, grades(0.95, 0.97)))).toBeNull();
+  plan.measures[0] = { name: 'size', main: true, rubric: ['Is big.'] };
+  expect(tooEasyCheck(plan, noiseCheck(plan, grades(0.95, 0.97)))).toEqual({ start: { a: 0.95, b: 0.97 }, margin: 0.1, passes: false,
+    sentence: 'This test is too easy to show a difference: both agents already score 0.95 (Agent a) and 0.97 (Agent b), and the rule needs a lead of 0.1.' });
+  // An arm at 1 minus the margin can still be beaten by the margin.
+  expect(tooEasyCheck(plan, noiseCheck(plan, grades(0.9, 0.97)))!.passes).toBe(true);
+  const runs = ['a', 'b'].flatMap(arm => [0, 1].flatMap(repeat => inputs.map(input => JSON.stringify({ arm, input, repeat, checkpoint: null, result: 1, run_dir: '/', duration_ms: 10, cost_usd: null }))));
+  await expect(compareStage('check', { comparison: JSON.stringify(plan), runs, grades: grades(0.95, 0.97).map(g => JSON.stringify(g)) })).rejects.toThrow(
+    'The trial stopped. This test is too easy to show a difference: both agents already score 0.95 (Agent a) and 0.97 (Agent b), and the rule needs a lead of 0.1. Use harder inputs or a stricter measure, then run the comparison again.');
+  expect(await compareStage('check', { comparison: JSON.stringify(plan), runs, grades: grades(0.5, 0.52).map(g => JSON.stringify(g)) })).toMatchObject({ trial_summary: expect.any(String) });
+  // A covered checklist has no covered item at the start: the check uses the start value of the noise check (all items).
+  Object.assign(plan, { checkpoints: [0, 1], events: [{ index: 1, kind: 'correction', text: 'It needs to be X because Y.' }] });
+  plan.measures[0] = { name: 'size', main: true, checklist: 'expected', covered: true };
+  const covered = grades(0, 0).map(g => ({ ...g, checkpoint: 0, scores: { size: null }, noise_scores: { size: g.arm === 'a' ? 0.96 : 0.98 } }));
+  expect(tooEasyCheck(plan, noiseCheck(plan, covered))).toMatchObject({ start: { a: 0.96, b: 0.98 }, passes: false,
+    sentence: expect.stringContaining('already score 0.96 (Agent a) and 0.98 (Agent b) before any correction, and the rule needs a lead of 0.1.') });
+}, 600_000);
+
+it('method publish NAME.compare saves the comparison as a draft with its inputs and prints its page, runs nothing, and a later run continues from that draft', async () => {
+  const { root, file } = fixture();
+  const id = () => JSON.parse(readFileSync(file, 'utf8')).id as string;
+  vi.spyOn(MethodClient.prototype, 'token').mockReturnValue(null);
+  await expect(methodMain(['publish', file])).rejects.toThrow('Sign in to publish this comparison: method login');
+  vi.spyOn(MethodClient.prototype, 'token').mockReturnValue('method_x');
+  const sent: Array<{ path: string; verb: string; body: any }> = [], uploaded: string[] = [];
+  vi.spyOn(MethodClient.prototype, 'request').mockImplementation(async (path: string, verb?: string, body?: any) => {
+    sent.push({ path, verb: verb!, body });
+    return { comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1` } as any;
+  });
+  vi.spyOn(MethodClient.prototype, 'transfer').mockImplementation(async (path: string) => { uploaded.push(path); return {} as any; });
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  await methodMain(['publish', file]);
+  const printed = JSON.parse(stdout.mock.calls.map(c => String(c[0])).join(''));
+  stdout.mockRestore();
+  expect(printed).toEqual({ comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1`,
+    next: 'Give the user this link to review every part of the comparison. When they are ready, run it: method run numbers.compare' });
+  expect(sent.map(s => `${s.verb} ${s.path}`)).toEqual([`PUT /api/cli/comparisons/${id()}`]);
+  // The same spec that method run saves, with each input's content uploaded.
+  expect(sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(uploaded).toContain(`/api/cli/result-files/${sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256}`);
+  expect([calls(root, 'a'), calls(root, 'b')]).toEqual([0, 0]);
+  // method run of the same file saves the same spec, so the account answers the same draft.
+  await comparisonRunArgs(['run', file]);
+  expect(sent[1]!.body).toEqual(sent[0]!.body);
+  await expect(methodMain(['publish', file, '--reason', 'x'])).rejects.toThrow('It takes no options');
+});
+
 it('grades two runs that hand in the same document at the same time, each in its own work folder', async () => {
   const { root, file } = fixture({ measure: { name: 'items right', rubric: ['Names the cause (met).', 'Gives a date (partly).'] } });
   const claude = claudeStub(root);
@@ -626,7 +681,9 @@ it('marks who decided each value: you for what decided_by_you names, Method for 
   expect(spec.method_rules.map((r: any) => r.part)).toEqual(expect.arrayContaining(['same_for_both', 'main_measure', 'noise', 'run_rules', 'runs_per_point']));
   // Method's rules in the person's words: agents and copies, a model as people say it, no path, command or internal name.
   const rules = spec.method_rules.map((r: any) => r.text).join(' ');
-  expect(rules).toContain('No agent can use the web. Only the handed-in file is measured; a plain agent\'s last message is not its output.');
+  expect(rules).toContain('No agent can use the web. Only the handed-in file is measured. A plain agent\'s last message is not its output.');
+  // Each rule is plain sentences, with no semicolon.
+  expect(rules).not.toContain(';');
   expect(rules).not.toMatch(/clean room|builder|learner|runner|method judge|\barm\b|answer\.txt|work\//);
   expect(spec.decisions.find((d: any) => d.what === 'deliverable')).toEqual({ part: 'same_for_both', what: 'deliverable', value: 'Each agent hands in the file answer.txt.', by: 'writer' });
   expect(spec.assumptions).toEqual([{ text: 'The measure is fair.', check: null, by: 'writer' },
@@ -644,11 +701,15 @@ it('marks who decided each value: you for what decided_by_you names, Method for 
   expect([marked(['arms']), marked(['arms.plain']), marked(['arms.plain.instructions'])]).toEqual(['writer', 'writer', 'you']);
   // A deliverable that takes a value of the input is said in words, without its placeholder.
   expect(methodRules({ ...doc, deliverable: 'work/{{name}}' }, { model: null, judge: { agent: 'claude', model: null }, labels: {} }).map(r => r.text))
-    .toContain('Only the handed-in file is measured; a plain agent\'s last message is not its output.');
+    .toEqual(expect.arrayContaining(['Only the handed-in file is measured.', 'A plain agent\'s last message is not its output.']));
   expect(decisions({ ...doc, deliverable: 'work/{{name}}' }).find(d => d.what === 'deliverable')?.value).toBe('Each agent hands in the file that the number names.');
   expect([modelName('claude-opus-5-5'), modelName('claude-sonnet-4-5-20250929'), modelName('gpt-5-codex')]).toEqual(['Claude Opus 5.5', 'Claude Sonnet 4.5', 'gpt-5-codex']);
   expect(methodRules({ ...doc, measure: { name: 'items right', rubric: ['Names the cause.'] } }, { model: { agent: 'claude', model: 'claude-opus-5-5', effort: 'high' }, judge: { agent: 'claude', model: 'claude-opus-5-5' }, labels: {} }).map(r => r.text))
-    .toEqual(expect.arrayContaining(['Every agent runs on Claude Opus 5.5 at high effort.', 'One Claude judge (Claude Opus 5.5) marks each item met, partly or not met; partly counts as half.']));
+    .toEqual(expect.arrayContaining(['Every agent runs on Claude Opus 5.5 at high effort.', 'One Claude judge (Claude Opus 5.5) marks each item met, partly or not met. Partly counts as half.',
+      'If every agent already scores more than 0.90 (1 minus the margin) at the start, no agent can lead by the margin, so the comparison stops before approval.']));
+  const corrected = methodRules({ ...doc, treatment: { events: [{ correction: 'It needs to be X because Y.', input: 'inputs/one.json' }], checkpoints: [0, 1] } }, { model: { agent: 'claude', model: 'claude-opus-5-5', effort: null }, judge: { agent: 'claude', model: null }, labels: {} }).map(r => r.text);
+  expect(corrected).toEqual(expect.arrayContaining(['Every agent runs on Claude Opus 5.5.', 'The session that changes an agent after a correction runs on the same model.']));
+  expect(corrected.join(' ')).not.toContain(';');
   // Notes, descriptions, assumptions and decided_by_you change no run cell or grade.
   const keys = async () => ((await compareStage('trial_plan', { comparison: JSON.parse(readFileSync((await compileComparison(file)).inputs, 'utf8')).comparison })).trial_cells as string[]).map(c => JSON.parse(c).key);
   const before = await keys();
@@ -846,11 +907,12 @@ it('method test --baseline answers which version is better', () => {
   expect(baselineAnswer(counts(1, 0, 1)).answer).toBe("Can't tell yet");
 });
 
-it('method authoring comparisons teaches the six rules with a support-reply example, and its example comparison is valid', async () => {
+it('method authoring comparisons teaches the seven rules with a support-reply example, and its example comparison is valid', async () => {
   const { authoringGuide } = await import('../../packages/sdk/src/method-help.js');
   const { exampleDirectory } = await import('../../packages/sdk/src/authoring-example.js');
   const guide = authoringGuide('comparisons');
-  expect(guide.match(/^\d\. /gm)).toHaveLength(6);
+  expect(guide.match(/^\d\. /gm)).toHaveLength(7);
+  expect(guide).toContain('Publish the draft with `method publish NAME.compare` and give the user the link before any run, so they can review every part.');
   expect(guide).toContain('Write the question so that it names the treatment and the test.');
   expect(guide).toContain('"It needs to be X because Y"');
   expect(guide).toContain('method authoring example support-replies');

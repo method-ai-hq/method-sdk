@@ -414,16 +414,17 @@ After a failed action with effects, failure.next.text lists what the observers s
 
 # Comparisons
 
-When the user asks whether one agent is better than another, write a NAME.compare file (YAML or JSON) and run it with `method run NAME.compare`. Method checks the file, runs a trial, measures the noise, asks the user to approve, runs every cell, and answers "ARM is better" or "Can't tell yet" by a fixed rule. The comparison's page on the dashboard shows every value with who decided it: you (the user), the writer (you, the agent that wrote the file) or Method.
+When the user asks whether one agent is better than another, write a NAME.compare file (YAML or JSON), publish it as a draft with `method publish NAME.compare`, and run it with `method run NAME.compare`. Method checks the file, runs a trial, measures the noise, asks the user to approve, runs every cell, and answers "ARM is better" or "Can't tell yet" by a fixed rule. The comparison's page on the dashboard shows every value with who decided it: you (the user), the writer (you, the agent that wrote the file) or Method.
 
-## The six rules
+## The seven rules
 
 1. Write the question so that it names the treatment and the test.
 2. Mark `decided_by_you` only for a value the user stated. The question is the user's only when the file has it in the user's own words; when you rephrase it, it is the writer's. Everything else is the writer's choice, and the page asks the user to review it. Naming an arm (`arms.plain`) says which agent it is; a plain arm's starting instructions are the user's only as `arms.plain.instructions`.
 3. Write corrections as the expert would say them: "It needs to be X because Y". Use the expert's real corrections when you have them.
 4. One main measure, in plain words, scored on what each input has.
 5. Assumptions are only things that must be true for the answer to mean something. Each one has "if false" and "how to check". Notes go with their part. The user reads the question, the difference, the notes and the assumptions on the page: write them in the user's words, name files and folders by what they are ("the 30 corrections", "the expected answers"), never by their path, and leave out how Method gives each arm its corrections, which the page says. The difference is one short phrase, such as "How a correction changes the agent."
-6. After the trial, read one run of each agent, and show the user the page before they approve.
+6. Publish the draft with `method publish NAME.compare` and give the user the link before any run, so they can review every part. Run it when they say so.
+7. After the trial, read one run of each agent, and show the user the page before they approve.
 
 ## What Method decides
 
@@ -434,8 +435,9 @@ Do not write these into the file; Method applies them to every comparison and sh
 - With corrections, a plain arm learns from each correction this way: a Claude Code (or Codex) session gets the correction and the wrong output of a training run, and edits the agent's instructions file. A Method arm gets each correction through `method judge`. Corrections arrive one at a time; each fix or edit has up to 2 hours.
 - `runs` counts separate copies of each arm (learners). Each copy gets the full treatment; each checkpoint measures each copy once per input. The trial teaches one copy of each arm; the full run teaches every copy.
 - A correction is received when its fix found a change, found no change was needed, or found no fix, or when the session that edits the instructions finished. A fix that could not test or that stopped is not received, and the comparison stops.
-- One Claude judge marks each item met, partly or not met; partly counts as half. It reads every source the agent read in full.
+- One Claude judge marks each item met, partly or not met. Partly counts as half. It reads every source the agent read in full.
 - The trial runs each trial input at the start with 2 copies of each arm. If they differ by more than half the margin, the comparison stops before approval.
+- With a rubric or checklist measure, if every arm already scores more than 1 minus the margin at the start, no arm can lead by the margin, and the comparison stops before approval: the test is too easy. Use harder inputs or a stricter measure.
 - Usage per correction is shown for each arm and does not decide.
 
 ## The file
@@ -1292,27 +1294,29 @@ method explain leads.method --step score
 
 ## publish
 
-Mark a version as published, for sharing, schedules, and production runs.
+Mark a version as published, for sharing, schedules, and production runs. For a comparison file: save it as a draft for review.
 
 Usage:
 
 ```sh
 method publish FILE [--reason TEXT] [--accept-failing-case ID[,ID]] [--cloud|--workers] [--env NAME] [--server URL]
+method publish NAME.compare
 ```
 
 Arguments and defaults:
-Runs the Method's cases first; a version that breaks an approved case is refused unless --accept-failing-case names it, and the version records that. Uses the version of the file's current content: it finishes that upload (no time limit while bytes move), checks the cases, then marks it published with the reason (default: Published.). --accept-failing-case needs --reason. The first save of a new file creates the Method. --cloud runs the production runs of the environment on Method Cloud; --workers runs them on your workers again. --env NAME selects the environment (default production).
+A NAME.compare file is saved to your account as a draft of its comparison, with its inputs, and nothing runs. Give the user the link so they can review every part before the trial. A later method run NAME.compare of the same file continues from that draft. For a Method file: Runs the Method's cases first; a version that breaks an approved case is refused unless --accept-failing-case names it, and the version records that. Uses the version of the file's current content: it finishes that upload (no time limit while bytes move), checks the cases, then marks it published with the reason (default: Published.). --accept-failing-case needs --reason. The first save of a new file creates the Method. --cloud runs the production runs of the environment on Method Cloud; --workers runs them on your workers again. --env NAME selects the environment (default production).
 
 Result and changes:
-JSON with workflow_id, version_id, url, published_at, the cases line, and the open warnings and notes (issues). With --cloud or --workers: placement. Warnings and notes never block a publish.
+JSON with workflow_id, version_id, url, published_at, the cases line, and the open warnings and notes (issues). With --cloud or --workers: placement. Warnings and notes never block a publish. For a comparison: JSON with comparison_id, version_number, stage, url (the page to review) and next.
 
 Errors:
-An error issue (nothing is published), failing case, --accept-failing-case without --reason, or no network.
+An error issue (nothing is published), failing case, --accept-failing-case without --reason, or no network. A comparison file with an error, or no sign-in.
 
 Example:
 
 ```sh
 method publish task.method --reason 'Shorter introduction'
+method publish replies.compare
 ```
 
 ## judge
@@ -1840,7 +1844,7 @@ Models come from the Method's models: (or the account default). --workspace sele
 
 ## Comparisons
 
-A NAME.compare file asks one question about two or more agents and answers "ARM is better" or "Can't tell yet". Read method authoring comparisons before writing one. method run NAME.compare checks the file, runs a trial (what each arm received, what happened to each correction, and the noise at the start with 2 learners per arm), and asks to start the full run: pass the person's answer with method answer RUN_ID --answer '{"go": true}'. A later run of the same file does not ask again. The start line and the result link to the comparison's page on the dashboard. A failed run stops with a plain error; run the comparison again and finished runs are reused. A changed measure grades again without running the arms. Events that change the model cannot run yet.
+A NAME.compare file asks one question about two or more agents and answers "ARM is better" or "Can't tell yet". Read method authoring comparisons before writing one. method publish NAME.compare saves it as a draft and prints its page, so the user can review every part before any run. method run NAME.compare checks the file, runs a trial (what each arm received, what happened to each correction, and the noise at the start with 2 learners per arm), and asks to start the full run: pass the person's answer with method answer RUN_ID --answer '{"go": true}'. A later run of the same file does not ask again. The start line and the result link to the comparison's page on the dashboard. A failed run stops with a plain error; run the comparison again and finished runs are reused. A changed measure grades again without running the arms. Events that change the model cannot run yet.
 --rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
 --fresh: run every step; reuse nothing.
 --verbose: print runtime events.

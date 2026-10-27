@@ -1,6 +1,7 @@
 /**
  * A comparison in the Method account. `method run NAME.compare` saves the file as a version of its comparison
- * (PUT /api/cli/comparisons/:id), and each stage of the generated Method reports to it: the cells that a version needs
+ * (PUT /api/cli/comparisons/:id; `method publish NAME.compare` saves it the same way as a draft for review, and runs
+ * nothing), and each stage of the generated Method reports to it: the cells that a version needs
  * (plan, which answers with the ones not finished yet), each finished cell (cells: a run cell with its synced run, a
  * grade cell with its numbers and verdicts), and each stage (trial, running, done). The result page on the dashboard
  * reads them. When run content stays on this computer, only run IDs and numbers go to the account.
@@ -40,12 +41,16 @@ function clientOf(account: Account) {
 
 /**
  * Save the comparison file as the newest version of its comparison. Signed out: nothing is saved and the comparison
- * runs on this computer. Returns the account record, or null.
+ * runs on this computer. Returns the account record, or null. strict (method publish, which only saves): signed out or a
+ * failed save is an error.
  */
-export async function saveComparison(folder: string, id: string, name: string, spec: unknown): Promise<Account | null> {
+export async function saveComparison(folder: string, id: string, name: string, spec: unknown, options: { strict?: boolean } = {}): Promise<Account | null> {
   let client: MethodClient;
-  try { client = new MethodClient(DEFAULT_SERVER); } catch { return null; }
-  if (!client.token()) { process.stderr.write('Sign in to see this comparison on the dashboard: method login\n'); return null; }
+  try { client = new MethodClient(DEFAULT_SERVER); } catch (error) { if (options.strict) throw error; return null; }
+  if (!client.token()) {
+    if (options.strict) throw Error('Sign in to publish this comparison: method login');
+    process.stderr.write('Sign in to see this comparison on the dashboard: method login\n'); return null;
+  }
   try {
     const saved = await client.request<{ comparison_id: string; version_number: number; stage: string; url: string }>(`/api/cli/comparisons/${id}`, 'PUT', { name, spec });
     const account: Account = { server: client.server, config_dir: configRoot(), cache_dir: methodCache(), comparison_id: saved.comparison_id, version_number: saved.version_number, stage: saved.stage,
@@ -53,6 +58,7 @@ export async function saveComparison(folder: string, id: string, name: string, s
     writePrivateJson(accountFile(folder), account);
     return account;
   } catch (error) {
+    if (options.strict) throw Error(`The comparison was not published: ${(error as Error).message.replace(/\s+/g, ' ').slice(0, 300)}`);
     warn(error);
     return null;
   }

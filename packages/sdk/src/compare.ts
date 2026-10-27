@@ -471,10 +471,14 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
     for (const [armName] of Object.entries(doc.arms).filter(([, arm]) => armIsMethod(arm))) add('arms', `${capital(settings.labels[armName] ?? armName)}: Method marks the wrong run with the correction, changes the agent, and tests the change against earlier corrections.`);
   }
   if (doc.tested === 'model') add('same_for_both', 'The model is the tested difference, so each agent runs on its own model.');
-  else add('same_for_both', `Every agent runs on ${settings.model ? modelPhrase(settings.model) : 'the model that its agent uses by default'}${corrections ? ', and so does the session that changes it after a correction' : ''}.`);
+  else {
+    add('same_for_both', `Every agent runs on ${settings.model ? modelPhrase(settings.model) : 'the model that its agent uses by default'}.`);
+    if (corrections) add('same_for_both', 'The session that changes an agent after a correction runs on the same model.');
+  }
   add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
   add('same_for_both', web ? 'The tools are the tested difference, so the agents may use the web.' : 'No agent can use the web.');
-  if (doc.deliverable) add('same_for_both', `Only the handed-in file is measured${plain.length ? '; a plain agent\'s last message is not its output' : ''}.`);
+  if (doc.deliverable) add('same_for_both', 'Only the handed-in file is measured.');
+  if (doc.deliverable && plain.length) add('same_for_both', 'A plain agent\'s last message is not its output.');
   if (plain.length) add('same_for_both', 'A plain agent gets its starting instructions and the same task as the Method agent, with the same files.');
   if (corrections) {
     add('treatment', 'Corrections arrive one at a time: an agent finishes learning from one correction before it gets the next.');
@@ -483,13 +487,14 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   }
   add('runs_per_point', `Runs count separate copies of each agent: each copy${doc.treatment ? ' gets the full treatment and' : ''} is measured once per input at each point.`);
   if ([doc.measure, ...(doc.other_measures ?? [])].some(m => m.rubric || m.checklist)) {
-    add('main_measure', `One Claude judge (${settings.judge.model ? modelName(settings.judge.model) : 'the model that Claude Code uses by default'}) marks each item met, partly or not met; partly counts as half.`);
+    add('main_measure', `One Claude judge (${settings.judge.model ? modelName(settings.judge.model) : 'the model that Claude Code uses by default'}) marks each item met, partly or not met. Partly counts as half.`);
     add('main_measure', 'The judge reads the handed-in file, every source the agent read in full, and the checklist.');
   }
   add('main_measure', 'Every item and every run counts the same.');
   if ([doc.measure, ...(doc.other_measures ?? [])].some(m => m.checklist)) add('main_measure', 'A checklist comes from each input\'s expected answer: each item counts for that input only, and nothing is added to it.');
   if (doc.measure.covered) add('main_measure', 'At each checkpoint only the items that a correction given so far covers count.');
   if (corrections) add('other_measures', 'Usage per correction for each agent is shown and does not decide: tokens when every agent reports them, else minutes.');
+  if (doc.measure.rubric || doc.measure.checklist) add('rule', `If every agent already scores more than ${fixed(1 - doc.rule.margin)} (1 minus the margin) at the start, no agent can lead by the margin, so the comparison stops before approval.`);
   add('noise', `The trial runs each trial input at the start with ${NOISE_LEARNERS} copies of each agent. If two copies of the same agent differ by more than half the margin, the comparison stops before approval.${doc.measure.covered ? ' No item is covered at the start, so the noise is measured on all items of the same checklist.' : ''}`);
   // Where run content goes, with the workspace's name, is the page's own line.
   add('run_rules', 'A failed run stops the comparison until you run it again. Runs that did not change are reused.');
@@ -731,7 +736,7 @@ Answer with one JSON object and nothing else: {"verdicts": [{"id": ITEM_ID, "ver
  * The file is saved as a version of its comparison in the account, for the comparison page. A plain Claude Code or
  * Codex arm runs as the runtime's session step, in a room with the files that the Method arms get.
  */
-export async function compileComparison(file: string) {
+export async function compileComparison(file: string, options: { strict?: boolean } = {}) {
   const path = authoringPath(file), root = dirname(path);
   const doc = readComparison(path);
   if (doc.treatment?.events.some(event => event.model !== undefined)) throw Error('A treatment event that changes the model cannot run yet: that is not built yet. Corrections and new inputs run today.');
@@ -793,7 +798,7 @@ export async function compileComparison(file: string) {
   // The approval holds for the definition, whether or not the inputs' content went up.
   const digest = sha({ ...spec, inputs: { ...spec.inputs, details: Object.fromEntries(Object.entries(spec.inputs.details).map(([key, d]) => [key, d.name])) } });
   writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
-  await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec);
+  const account = await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec, options);
   const plan = {
     file: path, folder, question: doc.question, difference: doc.difference, other_differences: doc.other_differences ?? [],
     arms, inputs: doc.inputs.map(id => resolveInput(id)),
@@ -812,7 +817,22 @@ export async function compileComparison(file: string) {
   writeFileSync(methodPath, JSON.stringify(generatedMethod(doc, previousId, { cells: cellCount }, isApproved(folder, digest)), null, 2) + '\n', { mode: 0o600 });
   const inputs = join(folder, 'inputs.json');
   writePrivateJson(inputs, { comparison: JSON.stringify(plan), marks: JSON.stringify(readMarks(folder)) });
-  return { method: methodPath, inputs, folder, plan, spec };
+  return { method: methodPath, inputs, folder, plan, spec, account };
+}
+
+/**
+ * `method publish NAME.compare`: save the file to the account as a draft of its comparison, with the same spec and
+ * input uploads that method run saves, and print the page's link. It runs nothing. A later method run of the same file
+ * continues from that draft (the account answers the same version for the same spec).
+ */
+export async function publishComparison(args: string[]) {
+  if (args.length !== 2) throw Error('Use method publish NAME.compare. It takes no options: it saves the comparison as a draft for review and runs nothing.');
+  const compiled = await compileComparison(args[1]!, { strict: true });
+  const account = compiled.account!, file = basename(authoringPath(args[1]!));
+  const next = account.stage === 'draft' ? `Give the user this link to review every part of the comparison. When they are ready, run it: method run ${file}`
+    : account.stage === 'trial' ? `The trial of this version has run. Give the user this link to read it. When they approve, run it: method run ${file}`
+    : 'This version has already run. Change the file to make a new draft.';
+  process.stdout.write(JSON.stringify({ comparison_id: account.comparison_id, version_number: account.version_number, stage: account.stage, url: account.url, next }, null, 2) + '\n');
 }
 
 /**
@@ -1580,7 +1600,29 @@ export function noiseCheck(plan: Plan, grades: any[]) {
   return { spread, margin, passes: spread === null ? null : spread <= margin / 2 + 1e-9, measure: main.name, by_arm, start: starts };
 }
 
-/** The summary of the trial for the approval question, or an error that names what an arm did not receive, or the noise. */
+/**
+ * The too easy check: when every arm's start value on the main measure (the mean of its learners' values that the
+ * noise check uses) is above 1 − margin, no arm can lead by the margin, and the trial stops before approval. Only for a
+ * main measure whose top is 1 (a rubric or a checklist); null when the measure has no known top or an arm has no start
+ * value. sentence: what the page and the error say when it stops.
+ */
+export function tooEasyCheck(plan: Plan, noise: ReturnType<typeof noiseCheck>) {
+  const main = plan.measures.find((m: any) => m.main);
+  if (!main.rubric && !main.checklist) return null;
+  const start: Record<string, number> = {};
+  for (const arm of plan.arms) {
+    const values = (noise.start[arm.name] ?? []).filter((v): v is number => typeof v === 'number');
+    if (!values.length) return null;
+    start[arm.name] = Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(4));
+  }
+  const margin = plan.rule.margin, passes = !Object.values(start).every(v => v > 1 - margin + 1e-9);
+  const values = plan.arms.map((arm: any) => `${fixed(start[arm.name]!)} (${labelOf(plan, arm.name)})`);
+  const when = plan.events.some((e: any) => e.kind === 'correction') ? ' before any correction' : plan.checkpoints ? ' at the start' : '';
+  const sentence = `This test is too easy to show a difference: ${plan.arms.length === 2 ? 'both agents' : `all ${plan.arms.length} agents`} already score ${values.slice(0, -1).join(', ')} and ${values.at(-1)}${when}, and the rule needs a lead of ${margin}.`;
+  return { start, margin, passes, sentence };
+}
+
+/** The summary of the trial for the approval question, or an error that names what an arm did not receive, the noise, or a test that is too easy. */
 async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTreatment[] | null) {
   const lines: string[] = [], short: string[] = [];
   const trialInputs = plan.inputs.slice(0, plan.trial).length;
@@ -1592,16 +1634,18 @@ async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTr
     lines.push(line);
     if (runs.filter(r => r.arm === arm.name).length < trialInputs * NOISE_LEARNERS || (t && t.learners.some(l => l.missing.length))) short.push(line);
   }
-  const noise = noiseCheck(plan, grades);
+  const noise = noiseCheck(plan, grades), easy = tooEasyCheck(plan, noise);
   const usage = usagePerCorrection(plan, treated);
   const estimate = fullRunEstimate(plan, runs, treated);
   await sendStage(plan.folder, { stage: 'trial', trial: { inputs: trialInputs, received: accountReceived(received),
-    ...(noise.spread !== null && noise.passes !== null ? { noise: { spread: noise.spread, margin: noise.margin, passes: noise.passes, start: noise.start } } : {}) },
+    ...(noise.spread !== null && noise.passes !== null ? { noise: { spread: noise.spread, margin: noise.margin, passes: noise.passes, start: noise.start } } : {}),
+    ...(easy ? { too_easy: { start: easy.start, margin: easy.margin, passes: easy.passes } } : {}) },
     cost_estimate: { ...estimate.account, ...(usage ? { usage: { unit: usage.unit, values: Object.fromEntries(Object.entries(usage.values).map(([arm, v]) => [arm, v.value])) } } : {}) } });
   if (short.length) throw Error(`The trial stopped: an arm did not receive everything.\n${short.join('\n')}\nFix the cause and run the comparison again; everything that was received is kept.`);
   const noiseText = noise.spread === null ? `Noise at the start: not measured (${noise.passes === null && plan.measures.find((m: any) => m.main).person !== undefined ? 'a person marks the main measure after the full run' : 'the trial runs have no number on the main measure'}).`
     : `Noise at the start: two learners of the same arm differ by up to ${fixed(noise.spread)} on ${noise.measure} (${Object.entries(noise.by_arm).map(([arm, v]) => `${labelOf(plan, arm)} ${v === null ? 'not measured' : fixed(v)}`).join(', ')}); the margin is ${noise.margin}, and half of it is ${fixed(noise.margin / 2)}.`;
   if (noise.passes === false) throw Error(`The trial stopped: the noise is more than half the margin. ${noiseText} A difference of ${noise.margin} between the arms could be noise. Make the measure steadier (more inputs, or a clearer checklist), or choose a larger margin, then run the comparison again.`);
+  if (easy && !easy.passes) throw Error(`The trial stopped. ${easy.sentence} Use harder inputs or a stricter measure, then run the comparison again.`);
   const usageText = usage ? [`Usage per correction (${usage.unit}): ${Object.entries(usage.values).map(([arm, v]) => `${labelOf(plan, arm)} ${v.value ?? 'not known'}`).join(', ')}.`] : [];
   return [`Trial of "${plan.question}"`, '', 'What each arm received:', ...lines.map(l => `  ${l}`), '', noiseText, ...usageText, '',
     'The trial runs (each folder holds the run\'s records; each transcript reads as a conversation):',
