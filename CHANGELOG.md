@@ -1,3 +1,9 @@
+# 0.21.1
+
+- **A comparison's guard compares the winner with the other arm.** At the checkpoint that decides, the winning arm's guard measure must not be more than `max_drop` below the other arm's (with more than two arms, the best other arm's); otherwise the answer is "can't tell yet". Before, the guard compared an arm with its own score at the first checkpoint. The rule sentence says this.
+- **Every arm gets the same folder for an input.** An input can have a folder of its own files (`inputs/ID/` beside `inputs/ID.json`, or a case's `snapshot/env/`), with one folder per files connection. For that input, a Method arm and a plain arm both get those folders in place of their own, and nothing of another input's folder. A plain arm's room is built for each run from the same folders as a Method arm's. An expected answer inside an input's folder is refused.
+- **A grade that reads earlier runs grades again when one of them runs again.** A grade's key holds the runs of its arm up to and including its checkpoint, as they finished, so a measure that reads earlier checkpoints never keeps a stale number.
+
 # 0.21.0
 
 Use runtime 0.16.4.
