@@ -419,7 +419,7 @@ When the user asks whether one agent is better than another, write a NAME.compar
 ## The six rules
 
 1. Write the question so that it names the treatment and the test.
-2. Mark `decided_by_you` only for a value the user stated. The question is the user's only when the file has it in the user's own words; when you rephrase it, it is the writer's. Everything else is the writer's choice, and the page asks the user to review it.
+2. Mark `decided_by_you` only for a value the user stated. The question is the user's only when the file has it in the user's own words; when you rephrase it, it is the writer's. Everything else is the writer's choice, and the page asks the user to review it. Naming an arm (`arms.plain`) says which agent it is; a plain arm's starting instructions are the user's only as `arms.plain.instructions`.
 3. Write corrections as the expert would say them: "It needs to be X because Y". Use the expert's real corrections when you have them.
 4. One main measure, in plain words, scored on what each input has.
 5. Assumptions are only things that must be true for the answer to mean something. Each one has "if false" and "how to check". Notes go with their part.

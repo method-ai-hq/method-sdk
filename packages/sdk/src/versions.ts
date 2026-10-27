@@ -76,11 +76,13 @@ export async function currentVersion(file: string) {
 export type PreparedVersion = { method_id: string; version_id: string; url: string; unchanged: boolean; workflow: any };
 /**
  * Prepare the save of the current file. It sends no request: it computes the version ID from the content and, when
- * this computer has not saved that version yet, puts the files and the version save in the outbox.
+ * this computer has not saved that version yet, puts the files and the version save in the outbox. The file becomes
+ * the Method's home (claimHome), except a frozen copy (home: false), such as a comparison learner at a checkpoint: it
+ * saves a version of the Method and runs on it, and the Method's home stays where it is.
  */
-export async function prepareVersion(client: MethodClient, outbox: Outbox, file: string, reason?: string): Promise<PreparedVersion> {
+export async function prepareVersion(client: MethodClient, outbox: Outbox, file: string, reason?: string, { home = true }: { home?: boolean } = {}): Promise<PreparedVersion> {
   const id = ensureMethodId(file);
-  claimHome(client.server, id, file);
+  if (home) claimHome(client.server, id, file);
   const workflow = loadWorkflow(methodContent(readDocument(file)));
   const { pack, sources, tooLarge } = await buildPackage(file, workflow);
   const versionId = versionIdFor(id, pack.digest);

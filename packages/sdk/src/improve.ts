@@ -162,8 +162,19 @@ export async function runImprovement(client: MethodClient, file: string, judgmen
   let result: Awaited<ReturnType<RunFile>>;
   try { result = await runFile(improve.file, { inputs, 'run-dir': join(runDir, 'run'), workspace: improve.root, server: client.server }, undefined, undefined, client, undefined, { IMPROVE_API_KEY: token, IMPROVE_SERVER: client.server }); }
   finally { process.stdout.write = out; process.stderr.write = err; }
-  if (result.status !== 'completed') throw Object.assign(Error(result.failure?.headline ?? `The improvement stopped with status ${result.status}.`), { log });
+  if (result.status !== 'completed') throw Object.assign(Error(stopCause(result)), { log });
   return { ...readImproveResult(result.result, { prune: mode === 'prune' }), log };
+}
+
+/**
+ * Why improve.method stopped, in the words of the cause: the last line that its failing script wrote (the script's own
+ * error, such as "Claude Code is not signed in on this computer."), else the error itself, else the failure's headline.
+ * The names of its steps and scripts stay in the log.
+ */
+export function stopCause(result: { status: string; failure?: { headline?: string; details?: string; diagnostics?: string } | null }) {
+  const said = String(result.failure?.diagnostics ?? '').split('\n').map(line => line.trim()).filter(Boolean).at(-1);
+  const error = result.failure?.details && !/^Process exited with code/.test(result.failure.details) ? result.failure.details : undefined;
+  return said ?? error ?? result.failure?.headline ?? `The improvement stopped with status ${result.status}.`;
 }
 
 /** The ID of the regression case that a correction makes: one per judgment, so a later loop finds it. */

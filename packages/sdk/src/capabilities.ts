@@ -6,7 +6,7 @@ export async function checkAgents(profiles:Record<string,any>){
  for(const profile of Object.values(profiles)){
   if(!['codex','claude'].includes(profile.backend)||profile.command||checked.has(profile.backend))continue;
   checked.add(profile.backend);
-  if(!await agentSignedIn(profile.backend))throw Object.assign(Error(`${profile.backend} is not installed or not signed in. Sign in with ${profile.backend}, then continue this run.`),{code:'needs_input'});
+  if(!await agentSignedIn(profile.backend))throw Object.assign(Error(profile.backend==='claude'?'Claude Code is not installed or not signed in on this computer. Sign in with claude, then run again.':'Codex is not installed or not signed in on this computer. Sign in with codex login, then run again.'),{code:'needs_input'});
  }
 }
 

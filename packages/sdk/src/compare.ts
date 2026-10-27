@@ -99,7 +99,7 @@ export const comparisonSchema = z.strictObject({
   assumptions: z.array(assumptionSchema).optional().describe('Statements that must be true for the answer to mean something: text, or {text, if_false, check}. Method shows its own checks as checked by Method; these are not checked.'),
   notes: z.strictObject(Object.fromEntries(noteParts.map(part => [part, z.array(text).min(1).optional()])) as Record<(typeof noteParts)[number], z.ZodOptional<z.ZodArray<typeof text>>>)
     .optional().describe(`Notes that the page shows with their part: ${noteParts.join(', ')}.`),
-  decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin or arms.plain. Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
+  decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin, arms.plain (which agent the arm is) or arms.plain.instructions (its starting instructions). Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
 }).describe('A comparison: one question about two or more agents.');
 export type Comparison = z.infer<typeof comparisonSchema>;
 type Measure = Comparison['measure'];
@@ -364,6 +364,33 @@ export function ruleSentence(doc: Comparison) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Names on the page
+
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+/**
+ * The name of each arm on the page, by its key: "Method agent" for the one Method arm (with more than one, each Method's
+ * own name), and "plain Claude Code" or "plain Codex" (with the key when two plain arms are the same agent).
+ */
+export function armLabels(doc: Comparison, root: string) {
+  const methods = Object.entries(doc.arms).filter(([, arm]) => armIsMethod(arm)) as Array<[string, string]>;
+  const base: Record<string, string> = {};
+  for (const [key, arm] of Object.entries(doc.arms)) {
+    if (!armIsMethod(arm)) { base[key] = `plain ${arm.agent === 'claude' ? 'Claude Code' : 'Codex'}`; continue; }
+    if (methods.length === 1) { base[key] = 'Method agent'; continue; }
+    let name: unknown;
+    try { name = readDocument(resolve(root, arm)).name; } catch { /* the file is checked elsewhere */ }
+    base[key] = typeof name === 'string' && name.trim() ? name.trim() : `Method agent ${key}`;
+  }
+  const shared = (label: string) => Object.values(base).filter(other => other === label).length > 1;
+  return Object.fromEntries(Object.entries(base).map(([key, label]) => [key, shared(label) ? `${label} (${key})` : label]));
+}
+/** The file that each arm hands in, in words: "the file work/reply.md", or "the file that the task names" when the path takes a value of the input. */
+export function deliverableWords(doc: Comparison) {
+  if (!doc.deliverable) return null;
+  return /\{\{/.test(doc.deliverable) ? `the file that the ${doc.about_inputs?.noun ?? 'input'} names` : `the file ${doc.deliverable}`;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Who decided each value
 
 /** The parts of the comparison page; notes, decisions and Method's rules each name one. */
@@ -382,13 +409,15 @@ const short = (value: string, max = 300) => value.length > max ? `${value.slice(
 export function decisions(doc: Comparison): Decision[] {
   const marked = doc.decided_by_you ?? [];
   const has = (key: string) => marked.some(entry => key === entry || key.startsWith(`${entry}.`));
+  // The starting instructions are yours only when decided_by_you names them: naming the arm says which agent it is, not what its instructions say.
+  const named = (keys: string[]) => keys.length > 0 && keys.every(key => marked.includes(key)) ? 'you' as const : 'writer' as const;
   // A value made of several fields is yours when each of them is.
   const all = (keys: string[]) => keys.length > 0 && keys.every(has) ? 'you' as const : 'writer' as const;
   const out: Decision[] = [];
   const add = (part: PagePart, what: string, value: string, by: 'you' | 'writer' | 'method') => out.push({ part, what, value: short(value, 2000), by });
   const plain = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)) as Array<[string, Exclude<Comparison['arms'][string], string>]>;
   add('arms', 'difference', doc.difference, all(['difference']));
-  if (plain.length) add('arms', 'instructions', plain.map(([armName, arm]) => `${armName}: ${arm.instructions}`).join('; '), all(plain.map(([armName]) => `arms.${armName}`)));
+  if (plain.length) add('arms', 'instructions', plain.map(([armName, arm]) => `${armName}: ${arm.instructions}`).join('; '), named(plain.map(([armName]) => `arms.${armName}.instructions`)));
   if (doc.other_differences?.length) add('arms', 'other differences', doc.other_differences.join('; '), all(['other_differences']));
   if (doc.tested) add('arms', 'tested', doc.tested, all(['tested']));
   if (doc.deliverable) add('same_for_both', 'deliverable', doc.deliverable, all(['deliverable']));
@@ -414,21 +443,21 @@ export function decisions(doc: Comparison): Decision[] {
 }
 
 /** The rules that Method applies to this comparison, in plain words, by the part of the page that shows them. */
-export function methodRules(doc: Comparison, settings: { model: ArmModel | null; judge: { agent: string; model: string | null }; device: boolean }) {
+export function methodRules(doc: Comparison, settings: { model: ArmModel | null; judge: { agent: string; model: string | null }; labels: Record<string, string> }) {
   const rules: Array<{ part: PagePart; text: string }> = [];
   const add = (part: PagePart, text: string) => rules.push({ part, text });
   const plain = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)) as Array<[string, Exclude<Comparison['arms'][string], string>]>;
   const corrections = (doc.treatment?.events ?? []).some(e => e.correction !== undefined);
   const web = doc.tested === 'tools';
   if (corrections) {
-    for (const [armName, arm] of plain) add('arms', `The plain arm ${armName} learns from corrections through a builder: after each correction, a ${arm.agent === 'claude' ? 'Claude Code' : 'Codex'} session reads the correction and the wrong output of the agent's training run, then edits the agent's instructions file. The edited file is what the arm keeps.`);
-    if (Object.values(doc.arms).some(armIsMethod)) add('arms', 'A Method arm learns from corrections through method judge: Method marks the wrong training run with the correction, changes the agent, and tests the change against earlier corrections.');
+    for (const [armName, arm] of plain) add('arms', `${capital(settings.labels[armName] ?? armName)} learns from corrections through a builder: after each correction, a ${arm.agent === 'claude' ? 'Claude Code' : 'Codex'} session reads the correction and the wrong output of the agent's training run, then edits the agent's instructions file. The edited file is what the agent keeps.`);
+    for (const [armName] of Object.entries(doc.arms).filter(([, arm]) => armIsMethod(arm))) add('arms', `${capital(settings.labels[armName] ?? armName)} learns from corrections through Method: Method marks the wrong training run with the correction, changes the agent, and tests the change against earlier corrections.`);
   }
   if (doc.tested === 'model') add('same_for_both', 'The model is the tested difference, so each arm runs on its own model.');
   else add('same_for_both', `Every arm runs on the same model and effort: ${settings.model ? modelWords(settings.model) : 'the model that each agent uses by default'}${corrections ? ', for the agent and for its fixer or builder' : ''}. A plain arm takes the Method arms' model.`);
   add('same_for_both', 'Every arm runs in a clean room: no personal instructions, memory, settings, skills or plugins, and its own copy of the files it reads.');
   add('same_for_both', web ? 'The tools are the tested difference, so the arms may use the web.' : 'No arm can use the web.');
-  if (doc.deliverable) add('same_for_both', `Every arm hands in the file ${doc.deliverable}; the runner reads that file. A plain agent's last message is not its output.`);
+  if (doc.deliverable) add('same_for_both', `Every arm hands in ${deliverableWords(doc)}; the runner reads that file. A plain agent's last message is not its output.`);
   if (plain.length) add('same_for_both', 'A plain arm gets its instructions and the same task prompt for each input, and works in a folder with the same files as the Method arms.');
   if (corrections) {
     add('treatment', 'Corrections arrive one at a time for every arm: each fix or edit finishes before the next correction.');
@@ -445,8 +474,8 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   if (doc.measure.covered) add('main_measure', 'At each checkpoint only the items that a correction given so far covers count.');
   if (corrections) add('other_measures', 'Usage per correction for each arm is shown and does not decide: tokens when every agent reports them, else minutes.');
   add('noise', `The trial runs each trial input at the start with ${NOISE_LEARNERS} learners per arm. If two learners of the same arm differ by more than half the margin, the comparison stops before approval.${doc.measure.covered ? ' No item is covered at the start, so the noise is measured on all items of the same checklist.' : ''}`);
+  // Where run content goes, with the workspace's name, is the page's own line.
   add('run_rules', 'A failed run stops the comparison until you run it again. Runs that did not change are reused.');
-  add('run_rules', settings.device ? 'Run content stays on this computer; the account gets only numbers.' : 'Run content goes to your Method account, and the members of its workspace can read it.');
   return rules;
 }
 
@@ -596,7 +625,7 @@ function assumptionsOf(doc: Comparison) {
  * of the definition, each input's name and uploaded content, the checklists, who decided each value, and Method's rules.
  * upload: puts a text in the account and returns its reference (null when signed out).
  */
-async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; id?: string; plain?: Plain }>, events: Array<{ input: { id: string }; text?: string }>,
+async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain }>, events: Array<{ input: { id: string }; text?: string }>,
   checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>) {
   const measure = async (m: Measure) => ({ name: m.name, how: m.code ? 'code' : m.rubric || m.checklist ? 'model' : 'person', ...(m.description ? { description: m.description } : {}),
     ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}),
@@ -615,7 +644,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
   for (const [part, list] of Object.entries(doc.notes ?? {})) { const page = notePart(part); if (page && list?.length) notes[page] = [...(notes[page] ?? []), ...list]; }
   return {
     question: doc.question,
-    arms: arms.map(arm => ({ id: arm.name, name: arm.name, ...(arm.plain ? { agent: arm.plain.agent, instructions: arm.plain.instructions } : { method_id: arm.id }) })),
+    arms: arms.map(arm => ({ id: arm.name, name: arm.label, ...(arm.plain ? { agent: arm.plain.agent, instructions: arm.plain.instructions } : { method_id: arm.id }) })),
     difference: doc.difference, ...(doc.other_differences?.length ? { other_differences: doc.other_differences } : {}),
     inputs: { checking: doc.inputs, ...(doc.teaching?.length ? { teaching: doc.teaching } : {}), ...(about?.description ? { description: about.description } : {}),
       ...(about?.teaching_description ? { teaching_description: about.teaching_description } : {}), ...(about?.noun ? { noun: about.noun } : {}), details },
@@ -631,7 +660,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     assumptions: assumptionsOf(doc),
     ...(Object.keys(notes).length ? { notes } : {}),
     decisions: decisions(doc),
-    method_rules: methodRules(doc, settings),
+    method_rules: methodRules(doc, { ...settings, labels: Object.fromEntries(arms.map(arm => [arm.name, arm.label])) }),
   };
 }
 
@@ -694,15 +723,16 @@ export async function compileComparison(file: string) {
   const folder = comparisonFolder(path);
   mkdirSync(folder, { recursive: true, mode: 0o700 });
   const web = doc.tested === 'tools';
+  const labels = armLabels(doc, root);
   const arms: any[] = [];
   for (const [armName, arm] of Object.entries(doc.arms)) {
     const cache_dir = join(folder, 'arms', armName, 'cache');
     if (!armIsMethod(arm)) {
       const model = models.arms[armName]![0]!;
-      arms.push({ name: armName, plain: { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8'), model: model.model, effort: model.effort }, models: [model], cache_dir });
+      arms.push({ name: armName, label: labels[armName], plain: { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8'), model: model.model, effort: model.effort }, models: [model], cache_dir });
       continue;
     }
-    arms.push({ name: armName, ...await copyArm(resolve(root, arm), join(folder, 'arms', armName)), models: models.arms[armName] ?? [], cache_dir });
+    arms.push({ name: armName, label: labels[armName], ...await copyArm(resolve(root, arm), join(folder, 'arms', armName)), models: models.arms[armName] ?? [], cache_dir });
   }
   // A plain arm gets the same folders that the Method arms get: a copy of each bound folder, by its name. For an input
   // with its own folder, measured or teaching, every arm gets that input's folders instead (cellFolders).
@@ -790,6 +820,8 @@ type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } 
 type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean;
   input: { id: string; value: unknown; hash: string; room: string | null; deliverable: string | null }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
+/** An arm's name on the page (armLabels), by its key. */
+const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => a.name === arm)?.label ?? arm;
 
 /**
  * What happened to one correction for one learner. Method: fixed, no_change_needed, no_fix_found (received), or
@@ -1085,6 +1117,8 @@ function treatmentNote(plan: Plan, arm: any, checkpoint: number | null, learner?
   return [`Learner ${(learner?.learner ?? 0) + 1}. ${how}:`, ...given.map((e: any) => `${e.index}. ${e.kind === 'correction' ? `Correction on ${e.input.id}: ${e.text}${outcome(e)}` : `New input: ${e.input.id}`}`)].join('\n');
 }
 
+/** A reason as the end of a sentence: one period, never two. */
+const sentence = (text: string) => `${text.trim().replace(/[.\s]+$/, '')}.`;
 /**
  * What an arm received, as the account keeps it: the models its runs used, one line per kind of thing (summed over its
  * learners), and each correction for each learner with what happened to it.
@@ -1095,7 +1129,7 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
   const missingText = (m: { index: number; reason: string }, learner: number) => {
     const event = plan.events.find((e: any) => e.index === m.index);
     const who = (t?.learners.length ?? 1) > 1 ? `Learner ${learner + 1}, event` : 'Event';
-    return `${who} ${m.index}${event?.text ? ` ("${event.text.length > 60 ? event.text.slice(0, 60) + '…' : event.text}")` : ` (input ${event?.input.id})`}: ${m.reason}.`.slice(0, 500);
+    return `${who} ${m.index}${event?.text ? ` ("${event.text.length > 60 ? event.text.slice(0, 60) + '…' : event.text}")` : ` (input ${event?.input.id})`}: ${sentence(m.reason)}`.slice(0, 500);
   };
   const kindOf = (index: number) => plan.events.find((e: any) => e.index === index)?.kind;
   const count = (kind: string) => {
@@ -1261,8 +1295,12 @@ function modelsOfRun(runDir: string) {
   return [...found];
 }
 
-/** Save the run of a cell in the account: the version of its Method, and the run's records as it runs. */
-async function cellSync(folder: string, file: string) {
+/**
+ * Save the run of a cell in the account: the version of its Method, and the run's records as it runs. A learner's frozen
+ * copy at a checkpoint (frozen) saves a version of the learner's Method without becoming its home, so the learner's own
+ * copy, which takes the later corrections, stays the home.
+ */
+async function cellSync(folder: string, file: string, frozen: boolean) {
   const account = readAccount(folder);
   if (!account) return null;
   try {
@@ -1272,7 +1310,7 @@ async function cellSync(folder: string, file: string) {
     const { prepareVersion } = await import('./versions.js');
     const { MethodSync } = await import('./method-sync.js');
     const client = new MethodClient(account.server), outbox = new Outbox(client);
-    const version = await prepareVersion(client, outbox, file, 'Saved by a comparison.');
+    const version = await prepareVersion(client, outbox, file, 'Saved by a comparison.', { home: !frozen });
     return (runDir: string) => new MethodSync(client, runDir, version.method_id, version.version_id, undefined, readDocument(file).run_data === 'device', outbox);
   } catch (error) {
     process.stderr.write(`This run is not saved to your Method account: ${(error as Error).message}\n`);
@@ -1295,7 +1333,8 @@ async function runCell(cell: Cell) {
   const { runMethod } = await import('@withmethod/runtime/runner.js');
   const started = Date.now();
   const file = cell.plain ? cell.method! : join(cell.dir!, cell.file!);
-  const syncFor = await cellSync(cell.folder, file);
+  // A Method cell at a checkpoint runs the learner's frozen copy (after-N); without a treatment it runs the arm's own copy.
+  const syncFor = await cellSync(cell.folder, file, !cell.plain && cell.checkpoint !== null);
   const sync = syncFor?.(join(runDir, 'run'));
   const hooks = {
     onStart: async ({ method, inputs }: any) => { await sync?.start(method, inputs, {}); },
@@ -1424,11 +1463,11 @@ function writeTranscripts(artifacts: string, target: string) {
 export function noiseCheck(plan: Plan, grades: any[]) {
   const main = plan.measures.find((m: any) => m.main);
   const margin = plan.rule.margin;
-  if (main.person !== undefined) return { spread: null, margin, passes: null, measure: main.name, by_arm: {} as Record<string, number | null> };
+  if (main.person !== undefined) return { spread: null, margin, passes: null, measure: main.name, by_arm: {} as Record<string, number | null>, start: {} as Record<string, Array<number | null>> };
   const start = plan.checkpoints ? 0 : null;
   const trialInputs: string[] = plan.inputs.slice(0, plan.trial).map((i: any) => i.id);
   const scoreOf = (g: any) => { const v = g.scores?.[main.name]; return typeof v === 'number' ? v : typeof g.noise_scores?.[main.name] === 'number' ? g.noise_scores[main.name] : null; };
-  const by_arm: Record<string, number | null> = {};
+  const by_arm: Record<string, number | null> = {}, starts: Record<string, Array<number | null>> = {};
   for (const arm of plan.arms) {
     const means = Array.from({ length: NOISE_LEARNERS }, (_, learner) => {
       const own = trialInputs.map(input => grades.find(g => g.arm === arm.name && g.checkpoint === start && g.repeat === learner && g.input === input)).map(g => g ? scoreOf(g) : null);
@@ -1438,11 +1477,12 @@ export function noiseCheck(plan: Plan, grades: any[]) {
     const both = trialInputs.map((_, i) => means.every(list => list[i] !== null && list[i] !== undefined));
     const meanOf = (list: Array<number | null>) => { const values = list.filter((_, i) => both[i]) as number[]; return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null; };
     const learnerMeans = means.map(meanOf);
+    starts[arm.name] = learnerMeans.map(m => m === null ? null : Number(m.toFixed(4)));
     by_arm[arm.name] = learnerMeans.some(m => m === null) ? null : Number((Math.max(...learnerMeans as number[]) - Math.min(...learnerMeans as number[])).toFixed(4));
   }
   const known = Object.values(by_arm).filter((v): v is number => v !== null);
   const spread = known.length ? Math.max(...known) : null;
-  return { spread, margin, passes: spread === null ? null : spread <= margin / 2 + 1e-9, measure: main.name, by_arm };
+  return { spread, margin, passes: spread === null ? null : spread <= margin / 2 + 1e-9, measure: main.name, by_arm, start: starts };
 }
 
 /** The summary of the trial for the approval question, or an error that names what an arm did not receive, or the noise. */
@@ -1453,42 +1493,64 @@ async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTr
   for (const arm of plan.arms) {
     const t = treated?.find(x => x.arm === arm.name);
     received[arm.name] = receivedOf(arm.name, runs, trialInputs * NOISE_LEARNERS, t, plan);
-    const line = `${arm.name}: ${receivedText(received[arm.name]!)}`;
+    const line = `${labelOf(plan, arm.name)}: ${receivedText(received[arm.name]!)}`;
     lines.push(line);
     if (runs.filter(r => r.arm === arm.name).length < trialInputs * NOISE_LEARNERS || (t && t.learners.some(l => l.missing.length))) short.push(line);
   }
   const noise = noiseCheck(plan, grades);
   const usage = usagePerCorrection(plan, treated);
-  // The trial's runs at the start count for the full run when the start is one of its points and the learner is one of its learners.
-  const reused = runs.filter(r => r.repeat < plan.learners && (!plan.checkpoints || plan.checkpoints.includes(0))).length;
-  const fullCells = Math.max(0, plan.arms.length * plan.inputs.length * plan.learners * (plan.checkpoints?.length ?? 1) - reused);
-  const mean = runs.reduce((sum, r) => sum + r.duration_ms, 0) / Math.max(runs.length, 1);
-  const deliveries = treated ? plan.events.length * plan.learners - trialEvents(plan) : 0;
-  const deliveryMs = treated ? meanDelivery(treated) : 0;
-  const minutes = Math.round((fullCells * mean / 4 + deliveries * deliveryMs / Math.max(1, plan.learners * plan.arms.length)) / 60_000);
-  const costs = runs.map(r => r.cost_usd);
-  const usd = runs.length && costs.every(c => typeof c === 'number') ? (costs.reduce((a, b) => a + b, 0) / runs.length) * fullCells : null;
-  await sendStage(plan.folder, { stage: 'trial', trial: { inputs: trialInputs, received: accountReceived(received), ...(noise.spread !== null && noise.passes !== null ? { noise: { spread: noise.spread, margin: noise.margin, passes: noise.passes } } : {}) }, cost_estimate: { minutes, runs: fullCells, usd } });
+  const estimate = fullRunEstimate(plan, runs, treated);
+  await sendStage(plan.folder, { stage: 'trial', trial: { inputs: trialInputs, received: accountReceived(received),
+    ...(noise.spread !== null && noise.passes !== null ? { noise: { spread: noise.spread, margin: noise.margin, passes: noise.passes, start: noise.start } } : {}) },
+    cost_estimate: { ...estimate.account, ...(usage ? { usage: { unit: usage.unit, values: Object.fromEntries(Object.entries(usage.values).map(([arm, v]) => [arm, v.value])) } } : {}) } });
   if (short.length) throw Error(`The trial stopped: an arm did not receive everything.\n${short.join('\n')}\nFix the cause and run the comparison again; everything that was received is kept.`);
   const noiseText = noise.spread === null ? `Noise at the start: not measured (${noise.passes === null && plan.measures.find((m: any) => m.main).person !== undefined ? 'a person marks the main measure after the full run' : 'the trial runs have no number on the main measure'}).`
-    : `Noise at the start: two learners of the same arm differ by up to ${fixed(noise.spread)} on ${noise.measure} (${Object.entries(noise.by_arm).map(([arm, v]) => `${arm} ${v === null ? 'not measured' : fixed(v)}`).join(', ')}); the margin is ${noise.margin}, and half of it is ${fixed(noise.margin / 2)}.`;
+    : `Noise at the start: two learners of the same arm differ by up to ${fixed(noise.spread)} on ${noise.measure} (${Object.entries(noise.by_arm).map(([arm, v]) => `${labelOf(plan, arm)} ${v === null ? 'not measured' : fixed(v)}`).join(', ')}); the margin is ${noise.margin}, and half of it is ${fixed(noise.margin / 2)}.`;
   if (noise.passes === false) throw Error(`The trial stopped: the noise is more than half the margin. ${noiseText} A difference of ${noise.margin} between the arms could be noise. Make the measure steadier (more inputs, or a clearer checklist), or choose a larger margin, then run the comparison again.`);
-  const cost = usd !== null ? `about $${usd.toFixed(2)} at API prices` : 'not known: the trial runs reported no price (a run on your own Claude Code or Codex subscription reports none)';
-  const usageText = usage ? [`Usage per correction (${usage.unit}): ${Object.entries(usage.values).map(([arm, v]) => `${arm} ${v.value ?? 'not known'}`).join(', ')}.`] : [];
+  const usageText = usage ? [`Usage per correction (${usage.unit}): ${Object.entries(usage.values).map(([arm, v]) => `${labelOf(plan, arm)} ${v.value ?? 'not known'}`).join(', ')}.`] : [];
   return [`Trial of "${plan.question}"`, '', 'What each arm received:', ...lines.map(l => `  ${l}`), '', noiseText, ...usageText, '',
     'The trial runs (each folder holds the run\'s records; each transcript reads as a conversation):',
-    ...runs.flatMap(r => [`  ${r.arm}, learner ${r.repeat + 1}, input ${r.input}: ${r.run_dir}${r.handed_in === false ? ` (did not hand in ${r.deliverable})` : ''}`, ...(r.transcript ? [`    transcript: ${r.transcript}`] : [])]), '',
-    !fullCells && !deliveries ? 'The full run: nothing more to run; the trial ran every cell.'
-      : `The full run: ${plural(fullCells, 'more run')}${deliveries ? ` and ${plural(deliveries, 'more treatment event')} over all learners` : ''}. Time: ${minutes ? `about ${plural(minutes, 'minute')}` : 'under a minute'} (about ${Math.round(mean / 1000)} s per run, 4 at a time${deliveries ? `, and about ${Math.round(deliveryMs / 1000)} s per treatment event, the learners at the same time` : ''}). Cost: ${cost}.`].join('\n');
+    ...runs.flatMap(r => [`  ${labelOf(plan, r.arm)}, learner ${r.repeat + 1}, input ${r.input}: ${r.run_dir}${r.handed_in === false ? ` (did not hand in ${r.deliverable})` : ''}`, ...(r.transcript ? [`    transcript: ${r.transcript}`] : [])]), '',
+    estimate.text].join('\n');
+}
+
+/**
+ * The full run, estimated from the trial and counted as the page counts it. runs: every graded run of the full run (each
+ * arm, input, learner and checkpoint), of which reused are the trial's runs that count again. events: the treatment
+ * events still to give over every arm and learner, each a training run and a fix or edit. The time: the treatment first,
+ * every learner of every arm at the same time, one event at a time at its arm's mean time per event in the trial (its
+ * training run and its fix or edit); then the runs still to run, 4 at a time, at the trial's mean time per run. An arm
+ * with no event in the trial has no time per event (null), and the minutes leave it out. The price is known only when
+ * every trial run reported one and there are no events (a fix or an edit reports no price).
+ */
+export function fullRunEstimate(plan: Plan, runs: any[], treated: ArmTreatment[] | null) {
+  const total = plan.arms.length * plan.inputs.length * plan.learners * (plan.checkpoints?.length ?? 1);
+  // The trial's runs at the start count for the full run when the start is one of its points and the learner is one of its learners.
+  const reused = Math.min(total, runs.filter(r => r.repeat < plan.learners && (!plan.checkpoints || plan.checkpoints.includes(0))).length);
+  const left = total - reused;
+  const perRun = runs.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0) / Math.max(runs.length, 1);
+  const arms = plan.arms.map((arm: any) => {
+    const learners = treated?.find(t => t.arm === arm.name)?.learners ?? [];
+    const given = learners.flatMap(l => l.events.filter(e => e.outcome !== 'not_given'));
+    const perEvent = given.length ? given.reduce((sum, e) => sum + e.duration_ms, 0) / given.length : null;
+    // Each learner of the full run gets every event that it has not received yet.
+    const due = Array.from({ length: plan.learners }, (_, l) => plan.events.length - (learners[l]?.events.filter(e => e.received).length ?? 0));
+    return { arm: arm.name, label: labelOf(plan, arm.name), events: due.reduce((a, b) => a + b, 0), perEvent, longest: perEvent === null ? 0 : Math.max(0, ...due) * perEvent };
+  });
+  const events = arms.reduce((n: number, a: any) => n + a.events, 0);
+  const minutes = Math.round((Math.max(0, ...arms.map((a: any) => a.longest)) + left * perRun / 4) / 60_000);
+  const costs = runs.map(r => r.cost_usd);
+  const usd = !events && runs.length && costs.every(c => typeof c === 'number') ? Number(((costs.reduce((a, b) => a + b, 0) / runs.length) * left).toFixed(2)) : null;
+  const eventMinutes = Object.fromEntries(arms.map((a: any) => [a.arm, a.perEvent === null ? null : Number((a.perEvent / 60_000).toFixed(1))]));
+  const unknown = events ? arms.filter((a: any) => a.events && a.perEvent === null).map((a: any) => a.label) : [];
+  const text = !left && !events ? 'The full run: nothing more to run; the trial ran every cell.'
+    : [`The full run: ${plural(total, 'graded run')} in all${reused ? ` (${reused} done in the trial)` : ''}${events ? `, and ${plural(events, 'treatment event')} to give over all learners, each a training run and a fix or edit` : ''}.`,
+      `Time: ${minutes ? `about ${plural(minutes, 'minute')}` : 'under a minute'}${unknown.length ? `, not counting the events of ${unknown.join(' and ')}, which has no finished event in the trial` : ''}: about ${Math.round(perRun / 1000)} s per run, 4 at a time${events ? `; per event ${arms.filter((a: any) => a.events).map((a: any) => `${a.label} ${a.perEvent === null ? 'not known' : `about ${Math.round(a.perEvent / 1000)} s`}`).join(', ')}, the learners at the same time` : ''}.`,
+      `Cost: ${usd !== null ? `about $${usd.toFixed(2)} at API prices` : events ? 'not known: a fix or an edit reports no price' : 'not known: the trial runs reported no price (a run on your own Claude Code or Codex subscription reports none)'}.`].join(' ');
+  return { text, account: { minutes, runs: total, reused, events, ...(events ? { event_minutes: eventMinutes } : {}), usd } };
 }
 /** The trial gives the events before the first checkpoint after 0 (none when every checkpoint is 0). */
 const trialEvents = (plan: Plan) => plan.checkpoints?.find((c: number) => c > 0) ?? 0;
-/** The mean time that the treatment events took so far. */
-function meanDelivery(treated: ArmTreatment[]) {
-  const times = treated.flatMap(t => t.learners.flatMap(l => l.events.filter(e => e.outcome !== 'not_given').map(e => e.duration_ms)));
-  return times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0;
-}
-
 /** The person said go: keep it for this version of the file, and tell the account (this locks the file there). */
 async function recordApproval(plan: Plan) {
   const digest = JSON.parse(readFileSync(join(plan.folder, 'spec.json'), 'utf8')).spec_digest;
@@ -1755,7 +1817,7 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
   const ownGrades = grades.filter(g => g.repeat < plan.learners);
   const received = Object.fromEntries(plan.arms.map((arm: any) => [arm.name, receivedOf(arm.name, ownGrades, planned, treated?.find(x => x.arm === arm.name), plan)]));
   for (const arm of plan.arms) received[arm.name]!.models = [...new Set(runs.filter(r => r.arm === arm.name).flatMap(r => r.models ?? []))].slice(0, 10);
-  for (const t of shortArms) reasons.push(`${t.arm} did not receive its full treatment (${receivedText(received[t.arm]!)})`);
+  for (const t of shortArms) reasons.push(`${labelOf(plan, t.arm)} did not receive its full treatment (${receivedText(received[t.arm]!)})`);
   const allN = plan.arms.flatMap((arm: any) => points.map(c => point(arm.name, c, main.name).n));
   const fewest = Math.min(...allN);
   if (!shortArms.length && fewest < plan.rule.min_runs) reasons.push(`${fewest === 0 ? 'a point has no runs' : `each point has ${plural(fewest, 'learner')}`}, and the rule needs ${plan.rule.min_runs}`);
@@ -1766,14 +1828,14 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
     const ranked = plan.arms.map((arm: any) => ({ arm: arm.name, mean: point(arm.name, at, main.name).mean! })).sort((a: any, b: any) => b.mean - a.mean);
     const [best, next] = [ranked[0], ranked[1]];
     const lead = best.mean - next.mean;
-    if (lead < plan.rule.margin) reason = `${best.arm} is ahead of ${next.arm} by ${fixed(lead)} on ${main.name}, and the rule needs ${plan.rule.margin}`;
+    if (lead < plan.rule.margin) reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}, and the rule needs ${plan.rule.margin}`;
     else {
       const guard = plan.rule.guard;
       // The guard: at the point that decides, the winner's guard measure against the best of the other arms'.
       const rival = guard ? plan.arms.filter((a: any) => a.name !== best.arm).map((a: any) => ({ arm: a.name, mean: point(a.name, at, guard.measure).mean! })).sort((a: any, b: any) => b.mean - a.mean)[0] : null;
       const below = guard ? rival.mean - point(best.arm, at, guard.measure).mean! : 0;
-      if (guard && below > guard.max_drop) reason = `${best.arm} is ahead on ${main.name}, but its ${guard.measure} is ${fixed(below)} below ${rival.arm}'s${pointLabel(at)}, and the rule allows ${guard.max_drop}`;
-      else { answer = `${best.arm} is better`; better = best.arm; reason = `${best.arm} is ahead of ${next.arm} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, and the rule needs ${plan.rule.margin}`; }
+      if (guard && below > guard.max_drop) reason = `${labelOf(plan, best.arm)} is ahead on ${main.name}, but its ${guard.measure} is ${fixed(below)} below ${labelOf(plan, rival.arm)}'s${pointLabel(at)}, and the rule allows ${guard.max_drop}`;
+      else { answer = `${labelOf(plan, best.arm)} is better`; better = best.arm; reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, and the rule needs ${plan.rule.margin}`; }
     }
   }
   const lines = [`${answer}: ${reason}.`, '', `Question: ${plan.question}`, `Difference: ${plan.difference}`, ...plan.other_differences.map((d: string) => `Other difference: ${d}`),
@@ -1782,14 +1844,14 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
     const ran = ownGrades.filter(g => g.arm === arm.name).length;
     const t = treated?.find(x => x.arm === arm.name);
     const full = ran === planned && !t?.learners.some(l => l.missing.length);
-    lines.push(`  ${full ? '' : 'SHORT '}${arm.name}: ${receivedText(received[arm.name]!)}`);
+    lines.push(`  ${full ? '' : 'SHORT '}${arm.label ?? arm.name}: ${receivedText(received[arm.name]!)}`);
   }
   for (const m of plan.measures) {
     lines.push('', `${m.main ? 'Main measure' : 'Also shown'}: ${m.name} (mean per run; n = learners behind the point)`);
-    for (const arm of plan.arms) lines.push(`  ${arm.name}: ${points.map(c => { const p = point(arm.name, c, m.name); return `${c === null ? '' : `after ${c}: `}${p.mean === null ? 'no number' : fixed(p.mean)} (n=${p.n})`; }).join('; ')}`);
+    for (const arm of plan.arms) lines.push(`  ${arm.label ?? arm.name}: ${points.map(c => { const p = point(arm.name, c, m.name); return `${c === null ? '' : `after ${c}: `}${p.mean === null ? 'no number' : fixed(p.mean)} (n=${p.n})`; }).join('; ')}`);
   }
   const usage = usagePerCorrection(plan, treated);
-  if (usage) lines.push('', `Also shown: usage per correction (${usage.unit}, decided by Method)`, ...Object.entries(usage.values).map(([arm, v]) => `  ${arm}: ${v.value === null ? 'not known' : fixed(v.value)} (n=${v.n})`));
+  if (usage) lines.push('', `Also shown: usage per correction (${usage.unit}, decided by Method)`, ...Object.entries(usage.values).map(([arm, v]) => `  ${labelOf(plan, arm)}: ${v.value === null ? 'not known' : fixed(v.value)} (n=${v.n})`));
   if (noise) lines.push('', noise.spread === null ? 'Noise at the start: not measured.' : `Noise at the start: ${fixed(noise.spread)} on ${noise.measure}, at most half the margin (${fixed(noise.margin / 2)}): ${noise.passes ? 'yes' : 'no'}.`);
   lines.push('', 'Assumptions:');
   if (treated) lines.push(`  Each arm received its full treatment: checked by Method: ${shortArms.length ? 'no' : 'yes'}.`);

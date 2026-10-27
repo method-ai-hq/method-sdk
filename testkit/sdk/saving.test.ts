@@ -172,6 +172,24 @@ it('an unreadable old run record from another process does not stop a version fr
   expect(outbox.pending()).toBe(0);
 }, 30_000);
 
+it('a frozen copy saves a version of its Method and runs on it without becoming its home, so the learner that runs after it still saves', async () => {
+  const s = setup();
+  // A comparison learner and its frozen copy at a checkpoint (after-0): the same Method ID, in temporary folders.
+  const learner = join(s.root, 'learner', 'method'), frozen = join(s.root, 'learner', 'after-0');
+  for (const dir of [learner, frozen]) mkdirSync(dir, { recursive: true });
+  writeMethod(join(learner, 'echo.method'), 'learner');
+  await methodMain(['new-id', join(learner, 'echo.method')]);
+  writeFileSync(join(frozen, 'echo.method'), readFileSync(join(learner, 'echo.method'))); writeFileSync(join(frozen, 'echo.mjs'), readFileSync(join(learner, 'echo.mjs')));
+  // The frozen copy runs first, as a cell of the trial does.
+  const outbox = new Outbox(s.client, { write: () => {} });
+  const atStart = await prepareVersion(s.client, outbox, join(frozen, 'echo.method'), 'Saved by a comparison.', { home: false });
+  // The learner's own copy then runs and saves: it is the home, and the frozen copy still saves its runs after it.
+  const own = await prepareVersion(s.client, outbox, join(learner, 'echo.method'));
+  expect(own).toMatchObject({ method_id: atStart.method_id, version_id: atStart.version_id });
+  await expect(prepareVersion(s.client, outbox, join(frozen, 'echo.method'), 'Saved by a comparison.', { home: false })).resolves.toMatchObject({ method_id: atStart.method_id });
+  await expect(prepareVersion(s.client, outbox, join(frozen, 'echo.method'))).rejects.toMatchObject({ code: 'other_home' });
+});
+
 it('keeps the Method of a renamed file through its id line', async () => {
   const s = setup(); writeMethod(s.file, 'name');
   await s.run('one');

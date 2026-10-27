@@ -66,7 +66,11 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   await compareStage('check', { comparison, runs, grades, treated });
   const trial = sent.stages.find(s => s.stage === 'trial');
   expect(Object.keys(trial).sort()).toEqual(['cost_estimate', 'stage', 'trial']);
-  expect(trial.trial.noise).toEqual({ spread: 0, margin: 0.1, passes: true });
+  // The noise names each arm's start value per learner, and the estimate counts the runs as the page does (2 arms × 2 inputs × 1 learner × 2 checkpoints).
+  expect(trial.trial.noise).toEqual({ spread: 0, margin: 0.1, passes: true, start: { a: [0.1, 0.1], b: [0.1, 0.1] } });
+  // The one learner got both corrections in the trial, so none is left to give.
+  expect(trial.cost_estimate).toEqual({ minutes: 0, runs: 8, reused: 2, events: 0, usd: null, usage: { unit: 'minutes', values: { a: expect.any(Number), b: expect.any(Number) } } });
+  expect(spec.arms.map((arm: any) => arm.name)).toEqual(['Agent (a)', 'Agent (b)']);
   expect(trial.trial.received.a.corrections).toEqual([
     { index: 1, input: 'inputs/teach.json', text: 'It needs to be bigger because small is wrong.', outcome: 'fixed', learner: 1 },
     { index: 2, input: 'inputs/teach.json', text: 'It needs a unit because readers ask.', outcome: 'no_change_needed', learner: 1 }]);

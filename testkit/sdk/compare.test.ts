@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { armModels, checklistOf, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, fixOutcome, judging, noiseCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
+import { armLabels, armModels, checklistOf, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, fixOutcome, judging, noiseCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { baselineAnswer } from '../../packages/sdk/src/quality.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
@@ -261,8 +261,8 @@ it('runs a plain arm as one session in a clean room with the same task prompt an
   expect(step.args[step.args.indexOf('--disallowedTools') + 1]).toBe('WebSearch,WebFetch');
   expect(step.args[step.args.indexOf('--allowedTools') + 1]).not.toContain('WebSearch');
   // The plain arm handed in 3n (its last message was "done"): plain is ahead of a by 0.30 per input.
-  expect(result.result).toMatch(/^plain is better: plain is ahead of a by 0\.30 on size/);
-  expect(question(root, 'first')).toMatch(/plain: Model: stub-default\. Inputs run: 2 of 2\./);
+  expect(result.result).toMatch(/^plain Claude Code is better: plain Claude Code is ahead of Method agent by 0\.30 on size/);
+  expect(question(root, 'first')).toMatch(/plain Claude Code: Model: stub-default\. Inputs run: 2 of 2\./);
   expect(question(root, 'first')).toContain('Noise at the start: two learners of the same arm differ by up to 0 on size');
 }, 600_000);
 
@@ -270,7 +270,7 @@ it('a Codex plain arm hands in its file too, and has no web search', async () =>
   const { root, file } = plainFixture({}, 'codex');
   codexStub(root);
   const result = await runComparison(root, file, 'first');
-  expect(result.result).toMatch(/^plain is better: plain is ahead of a by 0\.\d+ on size/);
+  expect(result.result).toMatch(/^plain Codex is better: plain Codex is ahead of Method agent by 0\.\d+ on size/);
   const seen = JSON.parse(readFileSync(join(root, 'codex-seen.json'), 'utf8'));
   expect(seen.args.join(' ')).toContain('web_search="disabled"');
   // The plain arm ran input two last: its room holds input two's folder, and nothing of input one's.
@@ -282,6 +282,9 @@ it('a plain arm with corrections is a builder: after each correction a session g
     treatment: { events: [{ correction: 'Add one, because the count starts at one.', input: 'inputs/three.json' }, { input: 'inputs/three.json' }, { correction: 'Keep it. [keep]', input: 'inputs/three.json' }], checkpoints: [0, 2, 3] } });
   const claude = claudeStub(root);
   delivery.deliver = async () => ({ received: true, outcome: 'fixed' });
+  // Method's rules name each arm as the page does.
+  expect((await compileComparison(file)).spec.method_rules.filter((r: any) => r.part === 'arms').map((r: any) => r.text.split(':')[0])).toEqual([
+    'Plain Claude Code learns from corrections through a builder', 'Method agent learns from corrections through Method']);
   const comparison = await stagePlan(file);
   const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
   const plain = treated.find((t: any) => t.arm === 'plain').learners[0];
@@ -371,7 +374,7 @@ it('says what happened to each correction for each learner; could not test and a
     treatment: { events: [1, 2, 3, 4, 5].map(i => ({ correction: `Correction ${i}.`, input: 'inputs/three.json' })), checkpoints: [0, 5] } });
   // Every correction reaches arm a; the fifth one could not be tested for arm b.
   delivery.deliver = async (event: any, learner) => learner.dir.includes(join('arms', 'b')) && event.index === 5
-    ? { received: false, outcome: 'could_not_test', reason: 'the fix could not test a change: the case needs a file' } : { received: true, outcome: event.index === 2 ? 'no_fix_found' : 'fixed' };
+    ? { received: false, outcome: 'could_not_test', reason: 'the fix could not test a change: the case needs a file.' } : { received: true, outcome: event.index === 2 ? 'no_fix_found' : 'fixed' };
   const comparison = await stagePlan(file);
   const treated = (await compareStage('trial_treat', { comparison })).trial_treatment as string;
   const arms = JSON.parse(treated);
@@ -381,7 +384,7 @@ it('says what happened to each correction for each learner; could not test and a
   expect(Object.keys(arms[1].learners[0].snapshots)).toEqual(['0']);
   const runs = ['a', 'b'].flatMap(arm => [0, 1].map(repeat => JSON.stringify({ arm, input: 'inputs/one.json', repeat, checkpoint: 0, result: 1, run_dir: root, duration_ms: 10, cost_usd: null })));
   await expect(compareStage('check', { comparison, runs, treated, grades: [] })).rejects.toThrow(
-    /The trial stopped: an arm did not receive everything\.\nb: Inputs run: 2 of 2\. Corrections received: 4 of 5 \(3 fixed, 1 no fix found, 1 could not test\)\. Missing: learner 1, event 5 \("Correction 5\."\): the fix could not test a change: the case needs a file\./);
+    /The trial stopped: an arm did not receive everything\.\nAgent b: Inputs run: 2 of 2\. Corrections received: 4 of 5 \(3 fixed, 1 no fix found, 1 could not test\)\. Missing: learner 1, event 5 \("Correction 5\."\): the fix could not test a change: the case needs a file\.\nFix the cause/);
   // A rerun gives only the missing correction again.
   let given = 0;
   delivery.deliver = async () => { given++; return { received: true, outcome: 'no_change_needed' }; };
@@ -392,10 +395,10 @@ it('says what happened to each correction for each learner; could not test and a
   const grades = ['a', 'b'].flatMap(arm => [0, 5].flatMap(checkpoint => ['inputs/one.json', 'inputs/two.json'].map(input => ({ arm, input, repeat: 0, checkpoint, scores: { size: arm === 'b' ? 0.9 : 0.1 } }))));
   const result = decide(JSON.parse(comparison), grades, arms);
   expect(result.answer).toBe("Can't tell yet");
-  expect(result.text).toMatch(/^Can't tell yet: b did not receive its full treatment/);
-  expect(result.text).toContain('SHORT b: Inputs run: 4 of 4. Corrections received: 4 of 5');
+  expect(result.text).toMatch(/^Can't tell yet: Agent b did not receive its full treatment/);
+  expect(result.text).toContain('SHORT Agent b: Inputs run: 4 of 4. Corrections received: 4 of 5');
   // Each correction of each learner, with its outcome, counted from 1.
-  expect(result.received.b.corrections[4]).toEqual({ index: 5, input: 'inputs/three.json', text: 'Correction 5.', outcome: 'could_not_test', received: false, learner: 1, reason: 'the fix could not test a change: the case needs a file' });
+  expect(result.received.b.corrections[4]).toEqual({ index: 5, input: 'inputs/three.json', text: 'Correction 5.', outcome: 'could_not_test', received: false, learner: 1, reason: 'the fix could not test a change: the case needs a file.' });
   expect(result.text).toContain('Each arm received its full treatment: checked by Method: no.');
 });
 
@@ -412,7 +415,7 @@ it('measures the noise at the start with two learners per arm, and stops before 
   expect(noiseCheck(plan, grades(0.6))).toMatchObject({ spread: 0.1, passes: false, by_arm: { a: 0, b: 0.1 } });
   const runs = ['a', 'b'].flatMap(arm => [0, 1].flatMap(repeat => ['inputs/one.json', 'inputs/two.json'].map(input => JSON.stringify({ arm, input, repeat, checkpoint: null, result: 1, run_dir: '/', duration_ms: 10, cost_usd: null }))));
   await expect(compareStage('check', { comparison, runs, grades: grades(0.6).map(g => JSON.stringify(g)) })).rejects.toThrow(
-    /The trial stopped: the noise is more than half the margin\. Noise at the start: two learners of the same arm differ by up to 0\.10 on size \(a 0, b 0\.10\); the margin is 0\.1, and half of it is 0\.05\./);
+    /The trial stopped: the noise is more than half the margin\. Noise at the start: two learners of the same arm differ by up to 0\.10 on size \(Agent a 0, Agent b 0\.10\); the margin is 0\.1, and half of it is 0\.05\./);
   expect(await compareStage('check', { comparison, runs, grades: grades(0.52).map(g => JSON.stringify(g)) })).toMatchObject({ trial_summary: expect.stringContaining('differ by up to 0.02 on size') });
 }, 600_000);
 
@@ -491,6 +494,26 @@ it('a checklist comes from each input\'s expected answer, and a covered measure 
   expect(() => readComparison(file)).toThrow(/covered by event 3, which is not a correction of the treatment/);
 }, 600_000);
 
+it('estimates the full run as the page counts it: every graded run, the treatment events left, and each arm\'s own time per event', () => {
+  const event = (index: number, received: boolean, minutes: number, outcome = received ? 'fixed' : 'stopped') => ({ key: String(index), index, kind: 'correction', input: 'i', learner: 0, received, outcome, tokens: null, duration_ms: minutes * 60_000, at: '' });
+  const plan = { arms: [{ name: 'method', label: 'Method agent' }, { name: 'plain', label: 'plain Claude Code' }], inputs: [{ id: 'one' }, { id: 'two' }, { id: 'three' }, { id: 'four' }],
+    learners: 2, checkpoints: [0, 15, 30], events: Array.from({ length: 30 }, (_, i) => ({ index: i + 1 })) };
+  // The trial: learner 1 of each arm got the first 15 corrections; a Method fix takes 10 minutes, a plain edit 2.
+  const treated: any = [{ arm: 'method', learners: [{ events: Array.from({ length: 15 }, (_, i) => event(i + 1, true, 10)) }, { events: [] }] },
+    { arm: 'plain', learners: [{ events: Array.from({ length: 15 }, (_, i) => event(i + 1, true, 2)) }, { events: [] }] }];
+  const runs = ['method', 'plain'].flatMap(arm => [0, 1].flatMap(repeat => ['one', 'two'].map(input => ({ arm, input, repeat, checkpoint: 0, duration_ms: 4 * 60_000, cost_usd: null }))));
+  const estimate = fullRunEstimate(plan, runs, treated);
+  // 2 arms × 4 inputs × 2 learners × 3 checkpoints, as "48 in all" on the page; the 8 trial runs count again.
+  expect(estimate.account).toEqual({ minutes: 300 + 40, runs: 48, reused: 8, events: 90, event_minutes: { method: 10, plain: 2 }, usd: null });
+  expect(estimate.text).toBe('The full run: 48 graded runs in all (8 done in the trial), and 90 treatment events to give over all learners, each a training run and a fix or edit. '
+    + 'Time: about 340 minutes: about 240 s per run, 4 at a time; per event Method agent about 600 s, plain Claude Code about 120 s, the learners at the same time. Cost: not known: a fix or an edit reports no price.');
+  // A Method fix that stopped in the trial still counts its time; an arm with no event in the trial says that its time is not known.
+  treated[0].learners[0].events = [event(1, false, 30)];
+  expect(fullRunEstimate(plan, runs, treated).account).toMatchObject({ events: 105, event_minutes: { method: 30, plain: 2 }, minutes: 900 + 40 });
+  treated[0].learners[0].events = [];
+  expect(fullRunEstimate(plan, runs, treated).text).toContain('not counting the events of Method agent, which has no finished event in the trial');
+});
+
 it('shows usage per correction for each arm, in tokens when every agent reports them, else minutes', () => {
   const learner = (events: Array<{ tokens: number | null; duration_ms: number }>) => ({ learner: 0, missing: [], snapshots: {}, events: events.map((e, i) => ({ index: i + 1, kind: 'correction', received: true, outcome: 'fixed', ...e })) });
   const tokens = usagePerCorrection({}, [{ arm: 'plain', planned: 2, learners: [learner([{ tokens: 100, duration_ms: 60_000 }, { tokens: 300, duration_ms: 60_000 }])] }] as any);
@@ -517,8 +540,17 @@ it('marks who decided each value: you for what decided_by_you names, Method for 
     { text: 'The corrections and the checklist come from one source.', check: null, by: 'writer', limit: true }]);
   expect(spec.main_measure).toEqual({ name: 'size', how: 'code', description: 'The handed-in number over ten.' });
   expect(spec.inputs).toMatchObject({ noun: 'number', details: { 'inputs/one.json': { name: 'The first number' }, 'inputs/two.json': { name: 'two' } } });
-  expect(spec.arms.find((a: any) => a.id === 'plain')).toEqual({ id: 'plain', name: 'plain', agent: 'claude', instructions: 'Answer with three times n.' });
+  expect(spec.arms.find((a: any) => a.id === 'plain')).toEqual({ id: 'plain', name: 'plain Claude Code', agent: 'claude', instructions: 'Answer with three times n.' });
+  expect(spec.arms.find((a: any) => a.id === 'a')).toMatchObject({ id: 'a', name: 'Method agent' });
   expect(spec.notes).toEqual({ inputs: ['Each input runs alone.'], main_measure: ['Bigger is better.'] });
+  // Where run content goes is the page's own line, with the workspace's name: no rule says it again.
+  expect(spec.method_rules.filter((r: any) => /Run content/.test(r.text))).toEqual([]);
+  // Naming the arm says which agent it is; its starting instructions are the user's only when decided_by_you names them.
+  const marked = (entries: string[]) => decisions({ ...doc, decided_by_you: entries }).find(d => d.what === 'instructions')?.by;
+  expect([marked(['arms']), marked(['arms.plain']), marked(['arms.plain.instructions'])]).toEqual(['writer', 'writer', 'you']);
+  // A deliverable that takes a value of the input is said in words, without its placeholder.
+  expect(methodRules({ ...doc, deliverable: 'work/{{name}}' }, { model: null, judge: { agent: 'claude', model: null }, labels: {} }).map(r => r.text))
+    .toContain('Every arm hands in the file that the number names; the runner reads that file. A plain agent\'s last message is not its output.');
   // Notes, descriptions, assumptions and decided_by_you change no run cell or grade.
   const keys = async () => ((await compareStage('trial_plan', { comparison: JSON.parse(readFileSync((await compileComparison(file)).inputs, 'utf8')).comparison })).trial_cells as string[]).map(c => JSON.parse(c).key);
   const before = await keys();
@@ -527,6 +559,16 @@ it('marks who decided each value: you for what decided_by_you names, Method for 
   expect(await keys()).toEqual(before);
   expect(plan.measures[0]).not.toHaveProperty('description');
 }, 600_000);
+
+it('names the arms as people say them: the Method agent and plain Claude Code, or each Method by its name', () => {
+  const { root, file } = plainFixture();
+  expect(armLabels(readComparison(file), root)).toEqual({ a: 'Method agent', plain: 'plain Claude Code' });
+  const two = fixture();
+  expect(armLabels(readComparison(two.file), two.root)).toEqual({ a: 'Agent a', b: 'Agent b' });
+  const doc = readComparison(file);
+  expect(armLabels({ ...doc, arms: { one: { agent: 'codex', instructions: 'plain.md' }, two: { agent: 'codex', instructions: 'plain.md' } } } as any, root))
+    .toEqual({ one: 'plain Codex (one)', two: 'plain Codex (two)' });
+});
 
 it('gives the corrections in one shuffled order from the seed, the same for every arm, and maps the items they cover', async () => {
   expect(shuffled([1, 2, 3, 4, 5], 2610)).toEqual(shuffled([1, 2, 3, 4, 5], 2610));
@@ -546,10 +588,10 @@ it('runs each Method arm as its own Method, decides by the rule, and reruns only
   const { root, file } = fixture();
   const first = await runComparison(root, file, 'first');
   expect(first.status).toBe('completed');
-  expect(first.result).toMatch(/^b is better: b is ahead of a by 0\.15 on size, and the rule needs 0\.1\./);
+  expect(first.result).toMatch(/^Agent b is better: Agent b is ahead of Agent a by 0\.15 on size, and the rule needs 0\.1\./);
   expect(first.result).toContain('Rule: An arm is better when its mean size is at least 0.1 above every other arm\'s, with at least 1 learner behind each point. Otherwise: can\'t tell yet.');
-  expect(first.result).toContain('  a: Inputs run: 2 of 2.');
-  expect(first.result).toContain('  b: 0.30 (n=1)');
+  expect(first.result).toContain('  Agent a: Inputs run: 2 of 2.');
+  expect(first.result).toContain('  Agent b: 0.30 (n=1)');
   // The trial ran input one with 2 learners; the full run reused learner 1 and ran input two.
   expect([calls(root, 'a'), calls(root, 'b')]).toEqual([3, 3]);
 
@@ -565,7 +607,7 @@ it('runs each Method arm as its own Method, decides by the rule, and reruns only
   // A changed arm runs again; the other arm's runs are reused.
   answer(root, 'b', 3);
   const second = await runComparison(root, file, 'second');
-  expect(second.result).toMatch(/^b is better: b is ahead of a by 0\.30/);
+  expect(second.result).toMatch(/^Agent b is better: Agent b is ahead of Agent a by 0\.30/);
   expect([calls(root, 'a'), calls(root, 'b')]).toEqual([3, 6]);
   // The person approved this version of the file: the next run does not ask again.
   const asked = (name: string) => readFileSync(join(root, 'runs', name, 'events.jsonl'), 'utf8').includes('"human.required"');
@@ -574,7 +616,7 @@ it('runs each Method arm as its own Method, decides by the rule, and reruns only
   // A changed measure grades again without running any arm.
   measure(root, 1000);
   const third = await runComparison(root, file, 'third');
-  expect(third.result).toMatch(/^Can't tell yet: b is ahead of a by 0\.00 on size, and the rule needs 0\.1\./);
+  expect(third.result).toMatch(/^Can't tell yet: Agent b is ahead of Agent a by 0\.00 on size, and the rule needs 0\.1\./);
   expect([calls(root, 'a'), calls(root, 'b')]).toEqual([3, 6]);
 }, 600_000);
 
@@ -584,10 +626,10 @@ it('decides by the fixed rule: margin, minimum learners and guard', async () => 
   const grades = (runs: number, b: { size: number; words: number }) => ['a', 'b'].flatMap(arm => ['inputs/one.json', 'inputs/two.json'].flatMap(input =>
     Array.from({ length: runs }, (_, repeat) => ({ arm, input, repeat, checkpoint: null, scores: arm === 'a' ? { size: 0.2, words: 0.5 } : b }))));
   expect(decide(plan, grades(1, { size: 0.9, words: 0.5 }), null).text).toMatch(/^Can't tell yet: each point has 1 learner, and the rule needs 2\./);
-  expect(decide(plan, grades(2, { size: 0.9, words: 0.4 }), null).text).toMatch(/^Can't tell yet: b is ahead on size, but its words is 0\.10 below a's, and the rule allows 0\.05\./);
+  expect(decide(plan, grades(2, { size: 0.9, words: 0.4 }), null).text).toMatch(/^Can't tell yet: Agent b is ahead on size, but its words is 0\.10 below Agent a's, and the rule allows 0\.05\./);
   expect(plan.rule_sentence).toBe('An arm is better when its mean size is at least 0.1 above every other arm\'s, and its words is not more than 0.05 below the other arm\'s, with at least 2 learners behind each point. Otherwise: can\'t tell yet.');
   const better = decide(plan, grades(2, { size: 0.9, words: 0.5 }), null);
-  expect(better.answer).toBe('b is better');
+  expect(better.answer).toBe('Agent b is better');
   expect(better.text).toContain('Graders agree with the expert.: not checked.');
 });
 
@@ -600,9 +642,9 @@ it('guards the winner against the other arm at the deciding checkpoint, not agai
     ['inputs/one.json', 'inputs/two.json'].map(input => ({ arm, input, repeat: 0, checkpoint, scores: scores[arm]![checkpoint]! }))));
   const low = decide(plan, grades({ a: { 0: { size: 0.2, words: 0.8 }, 1: { size: 0.2, words: 0.8 } }, b: { 0: { size: 0.2, words: 0.5 }, 1: { size: 0.9, words: 0.5 } } }), null);
   expect(low.answer).toBe("Can't tell yet");
-  expect(low.text).toMatch(/^Can't tell yet: b is ahead on size, but its words is 0\.30 below a's after 1 event, and the rule allows 0\.05\./);
+  expect(low.text).toMatch(/^Can't tell yet: Agent b is ahead on size, but its words is 0\.30 below Agent a's after 1 event, and the rule allows 0\.05\./);
   const level = decide(plan, grades({ a: { 0: { size: 0.2, words: 0.9 }, 1: { size: 0.2, words: 0.5 } }, b: { 0: { size: 0.2, words: 0.9 }, 1: { size: 0.9, words: 0.5 } } }), null);
-  expect(level.answer).toBe('b is better');
+  expect(level.answer).toBe('Agent b is better');
   mkdirSync(join(root, 'c'));
   writeFileSync(join(root, 'c', 'agent.method'), readFileSync(join(root, 'a', 'agent.method')));
   writeFileSync(join(root, 'c', 'answer.mjs'), readFileSync(join(root, 'a', 'answer.mjs')));
@@ -612,7 +654,7 @@ it('guards the winner against the other arm at the deciding checkpoint, not agai
   expect(three.rule_sentence).toContain('below the best other arm\'s,');
   const best = decide(three, grades({ a: { 0: { size: 0.2, words: 0.5 }, 1: { size: 0.2, words: 0.5 } }, b: { 0: { size: 0.2, words: 0.5 }, 1: { size: 0.9, words: 0.5 } },
     c: { 0: { size: 0.1, words: 0.9 }, 1: { size: 0.1, words: 0.9 } } }), null);
-  expect(best.text).toMatch(/^Can't tell yet: b is ahead on size, but its words is 0\.40 below c's after 1 event/);
+  expect(best.text).toMatch(/^Can't tell yet: Agent b is ahead on size, but its words is 0\.40 below Agent a \(c\)'s after 1 event/);
 });
 
 it('grades again every grade that could read a run that ran again', async () => {
@@ -661,7 +703,7 @@ it('takes the person\'s go from method answer RUN_ID, as an agent passes it on, 
     await methodMain(['answer', stopped.run_id, '--answer', '{"go":true}']);
     const summary = JSON.parse(readFileSync(join(root, 'runs', 'first', 'summary.json'), 'utf8'));
     expect(summary.status).toBe('completed');
-    expect(summary.result).toMatch(/^b is better/);
+    expect(summary.result).toMatch(/^Agent b is better/);
   } finally { out.mockRestore(); process.execArgv = execArgv; }
 }, 600_000);
 

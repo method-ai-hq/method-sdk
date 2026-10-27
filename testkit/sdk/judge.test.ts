@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { methodMain } from '../../packages/sdk/src/method.js';
 import { MethodClient } from '../../packages/sdk/src/method-client.js';
-import { backgroundFix, caseFromCorrection, correctionCaseId, fixCorrections } from '../../packages/sdk/src/improve.js';
+import { backgroundFix, caseFromCorrection, correctionCaseId, fixCorrections, stopCause } from '../../packages/sdk/src/improve.js';
 import { fixStarter, storedOutcome } from '../../packages/sdk/src/fix-outcomes.js';
 import { notHereLine, workingLine } from '../../packages/sdk/src/fix-lines.js';
 import { methodContent } from '../../packages/sdk/src/versions.js';
@@ -147,7 +147,7 @@ let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{
  * A fake improve.method: one script step that keeps the judgments it gets next to the Method file and returns the
  * outcome it is made with: a fix of the write step, none, a fix that breaks another case, or a question.
  */
-function fakeImprove(root: string, outcome: 'change' | 'none' | 'breaks' | 'question' | 'again') {
+function fakeImprove(root: string, outcome: 'change' | 'none' | 'breaks' | 'question' | 'again' | 'stops') {
   const folder = join(root, 'improve'); mkdirSync(folder);
   const text = (description: string) => ({ type: 'text', description, default: '' });
   writeFileSync(join(folder, 'improve.method'), JSON.stringify({ format: 'method/3.4', name: 'Improve', goal: 'Return a fixed outcome.',
@@ -163,6 +163,7 @@ writeFileSync(join(dirname(input.method_file),'received.json'),JSON.stringify(ju
 appendFileSync(join(dirname(input.method_file),'passes.log'),judgments.filter(j=>j.new).length+'\\n');
 const {id,...workflow}=JSON.parse(readFileSync(input.method_file,'utf8'));workflow.steps.write.purpose='Writes the reply and escalates each restriction that the playbook does not cover.';
 const kind=${JSON.stringify(outcome)}, fresh=judgments.filter(j=>j.new);
+if(kind==='stops'){process.stderr.write('Testing the change.\\nClaude Code is not installed or not signed in on this computer. Sign in with claude, then run again.\\n');process.exit(1);}
 const ids=fresh.map(j=>j.case_id).filter(Boolean);
 const outcomes=fresh.map((j,i)=>kind==='again'&&i>0?{id:j.id,outcome:'no_fix_found',again:true,detail:'Another fix changed the same step; this correction is tried again on the new version.'}
   :kind==='question'&&!j.answer?{id:j.id,outcome:'question',question:'Should every counterparty NDA come back redlined, or only some?'}
@@ -364,6 +365,21 @@ it('gives the corrections back when the loop stops, and method wait prints the e
   s.stdout.mockClear();
   await methodMain(['wait'], () => client);
   expect(s.printed()).toMatch(/^The fix stopped: METHOD_IMPROVE_METHOD names .*\. I'll try again on the next run\.\n$/);
+});
+
+it('a fix that stops says its cause in plain words: what the failing script said, without step or script names', async () => {
+  const s = setup(); noStart();
+  fakeClaude(s.root); fakeImprove(s.root, 'stops');
+  const { file } = await project(s.root);
+  const client = fakeClient();
+  await methodMain(['judge', 'run_1', 'wrong', '--note', 'Wrong.'], () => client);
+  await backgroundFix(client, file, [id]);
+  s.stdout.mockClear();
+  await methodMain(['wait'], () => client);
+  expect(s.printed()).toBe('The fix stopped: Claude Code is not installed or not signed in on this computer. Sign in with claude, then run again. I\'ll try again on the next run.\n');
+  // A step that stopped without a script says its own error, not the step's name.
+  expect(stopCause({ status: 'failed', failure: { headline: 'In step "Find the step by trying" (task 1 of 1), Claude Code stopped.', details: 'Claude Code reached its usage limit.' } })).toBe('Claude Code reached its usage limit.');
+  expect(stopCause({ status: 'failed', failure: { headline: 'The run stopped.', details: 'Process exited with code 1' } })).toBe('The run stopped.');
 });
 
 it('makes a failing case from a vague note on the user\'s agent, judged on the result', async () => {
