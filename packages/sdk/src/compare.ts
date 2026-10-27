@@ -49,13 +49,13 @@ export const comparisonSchema = z.strictObject({
   arms: z.record(name, armSchema).describe('Each agent under test, by a short name.'),
   difference: text.describe('The one thing that is different between the arms.'),
   other_differences: z.array(text).optional().describe('Any other difference between the arms.'),
-  inputs: z.array(text).min(1).describe('The inputs that each arm runs: case IDs (folders in cases/ beside this file) or JSON files of input values. The same for each arm.'),
+  inputs: z.array(text).min(1).describe('The inputs that each arm runs: case IDs (folders in cases/ beside this file) or JSON files of input values. The same for each arm. An input\'s own files (inputs/ID/ beside inputs/ID.json, or the case\'s snapshot/env/), one folder per files connection, replace the arms\' folders of those names for that input.'),
   measure: measureSchema.describe('The main measure: one number per run that decides.'),
   rule: z.strictObject({
     margin: z.number().describe('How far ahead an arm must be on the main measure (the mean per run). Above 0.'),
     min_runs: z.number().int().min(1).describe('The fewest runs per input behind each point.'),
     at: z.number().int().min(0).optional().describe('The checkpoint that decides, when there is a treatment over time.'),
-    guard: z.strictObject({ measure: text, max_drop: z.number().min(0) }).optional().describe('Another measure that must not drop by more than max_drop.'),
+    guard: z.strictObject({ measure: text, max_drop: z.number().min(0) }).optional().describe('Another measure on which the winning arm must not be more than max_drop below the other arm (with more than two arms, the best other arm), at the checkpoint that decides.'),
   }).describe('The decision rule. Anything that does not pass is "can\'t tell yet".'),
   runs: z.number().int().min(1).describe('How many times each arm runs each input at each point.'),
   trial: z.number().int().min(1).optional().describe('How many inputs each arm runs in the trial before the full run. 2 when not given.'),
@@ -94,6 +94,15 @@ function inputValue(root: string, id: string): unknown {
   return isFileInput(id) ? value : value.inputs ?? {};
 }
 const armIsMethod = (arm: Comparison['arms'][string]): arm is string => typeof arm === 'string';
+/**
+ * The folder of an input's own files, or null: inputs/ID/ beside the file inputs/ID.json, or a case's recorded copy of
+ * the folders its run read (cases/ID/snapshot/env/). Each folder in it is named after a files connection. Every arm gets
+ * these folders for this input, in place of its own folders of those names.
+ */
+function inputRoom(root: string, id: string): string | null {
+  const path = isFileInput(id) ? resolve(root, id).replace(/\.json$/i, '') : join(root, 'cases', id, 'snapshot', 'env');
+  return existsSync(path) && statSync(path).isDirectory() ? path : null;
+}
 
 /**
  * Read and check a .compare file. Every problem is named in one error: a missing required part, more than one main
@@ -121,7 +130,7 @@ export function readComparison(file: string): Comparison {
   for (const m of measures) if (m.code && !['.mjs', '.js', '.py'].includes(extname(m.code))) problems.push(`The code of the measure ${m.name} must be a .mjs, .js or .py file.`);
   const arms = Object.entries(doc.arms);
   if (arms.length < 2) problems.push('A comparison needs two or more arms.');
-  const ids = new Map<string, string>();
+  const ids = new Map<string, string>(), connections = new Set<string>();
   for (const [armName, arm] of arms) {
     if (!armIsMethod(arm)) { if (!existsSync(resolve(root, arm.instructions))) problems.push(`The instructions of the arm ${armName} (${arm.instructions}) are not there.`); continue; }
     const armFile = resolve(root, arm);
@@ -129,6 +138,7 @@ export function readComparison(file: string): Comparison {
     if (!existsSync(armFile)) { problems.push(`The Method file of the arm ${armName} (${arm}) is not there.`); continue; }
     let document: any;
     try { document = readDocument(armFile); loadWorkflow(methodContent(document)); } catch (error) { problems.push(`The Method of the arm ${armName} does not load: ${(error as Error).message}`); continue; }
+    for (const [envName, definition] of Object.entries(document.environment ?? {}) as Array<[string, any]>) if (definition?.type === 'files') connections.add(envName);
     const key = typeof document.id === 'string' && methodIdPattern.test(document.id) ? document.id : armFile;
     const other = ids.get(key);
     if (other) problems.push(`The arms ${other} and ${armName} are the same Method${key.startsWith('wf_') ? ` (${key})` : ''}. Each arm needs its own Method ID: run method new-id ${arm}.`);
@@ -144,6 +154,17 @@ export function readComparison(file: string): Comparison {
     if (!inputs.includes(id)) problems.push(`The expected answer for ${id} names no measured input.`);
     if (!existsSync(resolve(root, expected))) problems.push(`The expected answer for ${id} (${expected}) is not there.`);
   }
+  // An input's own folder: each folder in it is named after a files connection, and no expected answer is in it.
+  for (const id of inputs) {
+    const room = inputRoom(root, id);
+    if (!room) continue;
+    for (const entry of readdirSync(room, { withFileTypes: true })) {
+      if (!entry.isDirectory()) problems.push(`The folder of the input ${id} holds the file ${entry.name}. Put each file in a folder named after the files connection that holds it.`);
+      else if (connections.size && !connections.has(entry.name)) problems.push(`The folder of the input ${id} holds ${entry.name}/, which is not a files connection of the Method arms (${[...connections].join(', ')}).`);
+    }
+    for (const expected of Object.values(doc.expected ?? {})) if (`${resolve(root, expected)}/`.startsWith(`${room}/`)) problems.push(`The expected answer ${expected} is in the folder of the input ${id}, which the arms get. Keep expected answers outside it.`);
+  }
+  for (const id of teaching) if (inputRoom(root, id)) problems.push(`The teaching input ${id} has a folder of its own files. Only measured inputs have one: a Method arm's training runs use its own folders.`);
   if (doc.treatment) {
     const { events, checkpoints } = doc.treatment;
     events.forEach((event, i) => {
@@ -168,13 +189,15 @@ export function readComparison(file: string): Comparison {
   return doc;
 }
 
-/** The rule as a sentence, as the result shows it. */
+/**
+ * The rule as a sentence, as the result shows it. The guard compares the winning arm with the other arm (with more
+ * than two arms, the best other arm) on the guard measure at the point that decides.
+ */
 export function ruleSentence(doc: Comparison) {
   const { margin, min_runs, at, guard } = doc.rule;
   const point = at !== undefined ? ` after ${plural(at, 'treatment event')}` : '';
-  const guardText = guard ? (doc.treatment
-    ? `, and its ${guard.measure} at that point is not more than ${guard.max_drop} below its ${guard.measure} at the first checkpoint`
-    : `, and its ${guard.measure} is not more than ${guard.max_drop} below any other arm's`) : '';
+  const other = Object.keys(doc.arms).length > 2 ? 'the best other arm\'s' : 'the other arm\'s';
+  const guardText = guard ? `, and its ${guard.measure}${at !== undefined ? ' at that point' : ''} is not more than ${guard.max_drop} below ${other}` : '';
   return `An arm is better when its mean ${doc.measure.name}${point} is at least ${margin} above every other arm's${guardText}, with at least ${plural(min_runs, 'run')} per input behind each point. Otherwise: can't tell yet.`;
 }
 
@@ -255,7 +278,7 @@ async function copyArm(source: string, target: string) {
     cpSync(bound, join(env, envName), { recursive: true, filter: path => !['.git', 'node_modules', '.venv', '.method-runs'].includes(basename(path)) });
     folders[envName] = join(env, envName);
   }
-  return { dir: method, file, id, hash: folderHash(method, file), environment: folders, run_data: document.run_data === 'device' ? 'device' : 'account' };
+  return { dir: method, file, id, hash: folderHash(method, file), folders, run_data: document.run_data === 'device' ? 'device' : 'account' };
 }
 
 /** Marks that a person gave on earlier runs, by output and measure, so a rerun does not ask again. */
@@ -289,7 +312,7 @@ function generatedMethod(doc: Comparison, previousId: string | undefined, counts
     steps.to_mark = { name: 'Outputs to mark', purpose: 'Lists the outputs that a person has not marked yet.', in: { comparison: 'inputs.comparison', marks: 'inputs.marks', ...runs }, do: stage('to_mark'), out: { mark_questions: list, mark_keys: list } };
     steps.mark = { name: 'Person marks', purpose: 'A person marks each output with a number.', each: { question: 'mark_questions' }, ask: '{{question}}', out: { mark: { type: 'number', description: 'The number for this output.' } } };
   }
-  steps.gather = { name: 'Gather', purpose: 'Lists every run with the measures that grade it.', in: { comparison: 'inputs.comparison', marks: 'inputs.marks', ...runs, ...(person ? { mark_keys: 'mark_keys', marks_given: 'mark' } : {}) }, do: stage('gather'), out: { graded: list } };
+  steps.gather = { name: 'Gather', purpose: 'Lists every run with the measures that grade it.', in: { comparison: 'inputs.comparison', marks: 'inputs.marks', ...runs, ...treated, ...(person ? { mark_keys: 'mark_keys', marks_given: 'mark' } : {}) }, do: stage('gather'), out: { graded: list } };
   steps.grade = { name: 'Grade', purpose: 'Gives each run its number on each measure, with the grader\'s verdicts.', each: { item: 'graded' }, concurrency: 4, do: stage('grade'), out: { grade: { type: 'text' } } };
   steps.decide = { name: 'Decide', purpose: 'Applies the decision rule, writes the result and reports it to the comparison page.', in: { comparison: 'inputs.comparison', grades: 'grade', ...runs, ...treated }, do: stage('decide'), changes: reports, out: { answer: { type: 'text', description: 'The answer, the rule as a sentence, what each arm received, and n per point.' } } };
   const most = 2_147_483_647;
@@ -348,35 +371,36 @@ export async function compileComparison(file: string) {
     if (!armIsMethod(arm)) { arms.push({ name: armName, plain: { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8') }, cache_dir }); continue; }
     arms.push({ name: armName, ...await copyArm(resolve(root, arm), join(folder, 'arms', armName)), cache_dir });
   }
-  // A plain arm's room holds the same files that the Method arms get: a copy of each bound folder, by its name.
+  // A plain arm gets the same folders that the Method arms get: a copy of each bound folder, by its name. For an input
+  // with its own folder, every arm gets that input's folders instead (cellFolders).
+  const shared = Object.assign({}, ...arms.filter(a => !a.plain).map(a => a.folders)) as Record<string, string>;
   for (const arm of arms.filter(a => a.plain)) {
-    const room = join(folder, 'arms', arm.name, 'room');
-    rmSync(room, { recursive: true, force: true });
-    mkdirSync(join(folder, 'arms', arm.name), { recursive: true, mode: 0o700 });
-    const folders = Object.assign({}, ...arms.filter(a => !a.plain).map(a => a.environment)) as Record<string, string>;
-    for (const [envName, copy] of Object.entries(folders)) cpSync(copy, join(room, envName), { recursive: true });
-    if (Object.keys(folders).length) arm.plain.room = room;
+    arm.folders = shared;
     const method = join(folder, 'arms', arm.name, 'plain.method');
     let methodId: string | undefined;
     try { methodId = readDocument(method).id; } catch { /* first run */ }
-    writeFileSync(method, JSON.stringify(plainMethod(arm.plain.agent, !!arm.plain.room), null, 2) + '\n', { mode: 0o600 });
+    mkdirSync(dirname(method), { recursive: true, mode: 0o700 });
+    writeFileSync(method, JSON.stringify(plainMethod(arm.plain.agent), null, 2) + '\n', { mode: 0o600 });
     writeMethodId(method, methodId && methodIdPattern.test(methodId) ? methodId : newMethodId());
     arm.method = method;
     arm.id = readDocument(method).id;
-    arm.hash = sha({ ...arm.plain, room: arm.plain.room ? folderHash(arm.plain.room) : null });
+    arm.hash = sha({ ...arm.plain, folders: Object.fromEntries(Object.entries(shared).map(([envName, dir]) => [envName, folderHash(dir)])) });
   }
   const spec = accountSpec(doc, arms);
   const digest = sha(spec);
   writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
   await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec);
-  const resolveInput = (inputId: string) => { const value = inputValue(root, inputId); return { id: inputId, value, hash: sha(value) }; };
+  const resolveInput = (inputId: string, measured = false) => {
+    const value = inputValue(root, inputId), room = measured ? inputRoom(root, inputId) : null;
+    return { id: inputId, value, room, hash: room ? sha({ value, room: folderHash(room) }) : sha(value) };
+  };
   const measure = (m: Comparison['measure'], main: boolean) => ({ name: m.name, main,
     ...(m.code ? { code: { path: resolve(root, m.code), hash: sha(readFileSync(resolve(root, m.code))) } } : {}),
     ...(m.rubric ? { rubric: m.rubric } : {}), ...(m.person ? { person: m.person } : {}) });
   const expectedValue = (p: string) => { const raw = readFileSync(resolve(root, p), 'utf8'); try { return JSON.parse(raw); } catch { return raw; } };
   const plan = {
     file: path, folder, question: doc.question, difference: doc.difference, other_differences: doc.other_differences ?? [],
-    arms, inputs: doc.inputs.map(resolveInput),
+    arms, inputs: doc.inputs.map(id => resolveInput(id, true)),
     events: (doc.treatment?.events ?? []).map((event, i) => ({ index: i + 1, kind: event.correction !== undefined ? 'correction' : 'input', ...(event.correction ? { text: event.correction } : {}), input: resolveInput(event.input!) })),
     checkpoints: doc.treatment ? [...doc.treatment.checkpoints].sort((a, b) => a - b) : null,
     measures: [measure(doc.measure, true), ...(doc.other_measures ?? []).map(m => measure(m, false))],
@@ -410,12 +434,12 @@ export async function comparisonRunArgs(args: string[]) {
 // The stages (method __compare STAGE: the bindings as JSON on stdin, the outputs as JSON on stdout)
 
 type Plan = ReturnType<typeof JSON.parse>;
-/** A plain arm: Claude Code or Codex with its instructions (and the corrections it was told, after a treatment), and its room. */
-type Plain = { agent: 'claude' | 'codex'; instructions: string; room?: string };
+/** A plain arm: Claude Code or Codex with its instructions (and the corrections it was told, after a treatment). */
+type Plain = { agent: 'claude' | 'codex'; instructions: string };
 /** An arm at one point: a Method folder and file, or a plain agent. */
 type Snapshot = { dir: string; file: string; hash: string } | { plain: Plain; hash: string };
-type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; method?: string; hash: string; cache_dir: string; environment?: Record<string, string>;
-  input: { id: string; value: unknown; hash: string }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
+type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; method?: string; hash: string; cache_dir: string; folders: Record<string, string>;
+  input: { id: string; value: unknown; hash: string; room: string | null }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
 
 /** Treatment of one arm: what it received so far, and the frozen copy of the arm at each checkpoint it reached. */
@@ -603,7 +627,30 @@ function receivedText(received: ReturnType<typeof receivedOf>) {
 const runKey = (c: { arm: string; hash: string; input: { hash: string }; repeat: number; checkpoint: number | null }) => sha({ arm: c.arm, hash: c.hash, input: c.input.hash, repeat: c.repeat, checkpoint: c.checkpoint });
 /** The grader: every measure, as the comparison defines it. A changed measure is a new grader, and every run is graded again. */
 const graderVersion = (plan: Plan) => sha(plan.measures.map((m: any) => ({ name: m.name, code: m.code?.hash ?? null, rubric: m.rubric ?? null, person: m.person ?? null }))).slice(0, 16);
-const gradeKey = (plan: Plan, target: string, input: string) => sha({ target, grader: graderVersion(plan), expected: sha(plan.expected[input] ?? null) });
+/**
+ * The keys of the grade cells of these runs, by run key. A measure may read other runs of the same arm (a regression
+ * measure reads the earlier checkpoints), so a grade key holds the hash of each run of that arm up to and including the
+ * run's checkpoint, as it finished. When one of those runs again, every grade that could read it grades again.
+ */
+function gradeKeys(plan: Plan, list: Array<{ key: string; arm: string; checkpoint: number | null; input: string | { id: string } }>) {
+  const finished = new Map(list.map(c => { try { return [c.key, sha(readFileSync(recordFile(plan.folder, c.key)))]; } catch { return [c.key, null]; } }));
+  const grader = graderVersion(plan);
+  return new Map(list.map(c => {
+    const reads = list.filter(o => o.arm === c.arm && (o.checkpoint ?? 0) <= (c.checkpoint ?? 0)).map(o => [o.key, finished.get(o.key)]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    const input = typeof c.input === 'string' ? c.input : c.input.id;
+    return [c.key, sha({ target: c.key, grader, expected: sha(plan.expected[input] ?? null), reads })];
+  }));
+}
+
+/**
+ * The folders that an arm works on for an input, by files connection: the arm's own (for a plain arm, those of the
+ * Method arms), with each folder of the input's own folder in place of the one of its name. Both kinds of arm get the
+ * same folders for an input, and nothing of another input's folder.
+ */
+function cellFolders(arm: any, input: { room: string | null }): Record<string, string> {
+  const own = input.room ? Object.fromEntries(readdirSync(input.room, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => [e.name, join(input.room!, e.name)])) : {};
+  return { ...arm.folders, ...own };
+}
 
 /** The cells of a stage: every arm × input × run × checkpoint (trial: the first inputs, once, at the first checkpoint). */
 function cells(plan: Plan, treated: ArmTreatment[] | null, trial: boolean): Cell[] {
@@ -614,7 +661,7 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, trial: boolean): Cell
     const snapshot: Snapshot | undefined = checkpoint === null ? (arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : treated?.find(t => t.arm === arm.name)?.snapshots[checkpoint];
     if (!snapshot) continue;
     for (const input of inputs) for (let repeat = 0; repeat < (trial ? 1 : plan.runs); repeat++) {
-      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain ? { method: arm.method } : { environment: arm.environment }), cache_dir: arm.cache_dir, input, repeat, checkpoint,
+      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain ? { method: arm.method } : {}), folders: cellFolders(arm, input), cache_dir: arm.cache_dir, input, repeat, checkpoint,
         trial: plan.inputs.slice(0, plan.trial).some((i: any) => i.id === input.id) && repeat === 0 && checkpoint === checkpoints[0], treatment_note: treatmentNote(plan, arm, checkpoint) };
       out.push({ key: runKey(cell), ...cell });
     }
@@ -629,10 +676,10 @@ const writeRecord = (folder: string, key: string, value: unknown) => { mkdirSync
 
 /** The account's plan of cells: each run cell and the grade cell of each. */
 function plannedCells(plan: Plan, list: Cell[]): PlannedCell[] {
-  const grader = graderVersion(plan);
+  const grader = graderVersion(plan), keys = gradeKeys(plan, list);
   return list.flatMap(c => {
     const run = { key: c.key, kind: 'run' as const, arm: c.arm, input: c.input.id, checkpoint: c.checkpoint, repeat: c.repeat, trial: c.trial };
-    return [run, { ...run, key: gradeKey(plan, c.key, c.input.id), kind: 'grade' as const, target: c.key, grader_version: grader }];
+    return [run, { ...run, key: keys.get(c.key)!, kind: 'grade' as const, target: c.key, grader_version: grader }];
   });
 }
 /**
@@ -654,14 +701,14 @@ async function split(plan: Plan, list: Cell[], all: Cell[]) {
 
 /** The tools of a plain arm: the ones that Method's own Claude Code and Codex steps have, so tools are no difference. */
 const plainTools = { claude: ['read', 'write', 'edit', 'search', 'web'], codex: ['shell', 'read', 'write', 'edit', 'search', 'web'] } as const;
-/** The Method that runs a plain arm: one session step with the arm's instructions and the input, in its room when it has one. */
-function plainMethod(agent: 'claude' | 'codex', room: boolean) {
+/** The Method that runs a plain arm: one session step with the arm's instructions and the input, in its room. */
+function plainMethod(agent: 'claude' | 'codex') {
   return {
     format: 'method/3.4', name: `Plain ${agent === 'claude' ? 'Claude Code' : 'Codex'}`, goal: 'Do the task in the instructions for the input, as a plain agent.',
-    inputs: { instructions: { type: 'text' }, input: { type: 'text' }, ...(room ? { room: { type: 'text', description: 'The folder with the files that the agent works on.' } } : {}) },
+    inputs: { instructions: { type: 'text' }, input: { type: 'text' }, room: { type: 'text', description: 'The folder with the files that the agent works on.' } },
     limits: { step: { timeout_ms: 3_600_000 } },
-    steps: { work: { in: { instructions: 'inputs.instructions', input: 'inputs.input', ...(room ? { room: 'inputs.room' } : {}) }, out: 'session',
-      do: { kind: 'session', agent, prompt: '{{instructions}}\n\n{{input}}', tools: [...plainTools[agent]], ...(room ? { room: 'room' } : {}) } } },
+    steps: { work: { in: { instructions: 'inputs.instructions', input: 'inputs.input', room: 'inputs.room' }, out: 'session',
+      do: { kind: 'session', agent, prompt: '{{instructions}}\n\n{{input}}', tools: [...plainTools[agent]], room: 'room' } } },
     result: 'session',
   };
 }
@@ -726,9 +773,14 @@ async function runCell(cell: Cell) {
   let result: any;
   try {
     if (cell.plain) {
-      const inputs = { instructions: cell.plain.instructions, input: inputText(cell.input.value), ...(cell.plain.room ? { room: cell.plain.room } : {}) };
+      // The session's room: a copy of each of the cell's folders, by its name. The session works on its own copy of it.
+      const room = join(runDir, 'room');
+      mkdirSync(room, { recursive: true, mode: 0o700 });
+      for (const [envName, dir] of Object.entries(cell.folders)) cpSync(dir, join(room, envName), { recursive: true });
+      const inputs = { instructions: cell.plain.instructions, input: inputText(cell.input.value), room };
       await sync?.start(readDocument(file), inputs, {}, false);
-      result = await runMethod(file, { allow_local_processes: true }, { runDir: join(runDir, 'run'), inputs, fresh: true, ...hooks });
+      try { result = await runMethod(file, { allow_local_processes: true }, { runDir: join(runDir, 'run'), inputs, fresh: true, ...hooks }); }
+      finally { rmSync(room, { recursive: true, force: true }); }
       if (result.result) result.result = result.result.final_text;
     } else {
       const { preparedConfig } = await import('./quality.js');
@@ -736,7 +788,7 @@ async function runCell(cell: Cell) {
       const prepared = await preparedConfig(file, {});
       const secrets = resolveSecrets(Object.keys(readDocument(file).secrets ?? {}));
       await sync?.start(readDocument(file), cell.input.value as any, {}, false);
-      const room = await armRoom(file, cell.cache_dir, false, cell.environment ?? {});
+      const room = await armRoom(file, cell.cache_dir, false, cell.folders);
       // The cell's process runs the arm in the room: its agent steps and scripts get the room's environment.
       const outside = { ...process.env };
       for (const key of Object.keys(process.env)) delete process.env[key];
@@ -1016,11 +1068,10 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
     if (lead < plan.rule.margin) reason = `${best.arm} is ahead of ${next.arm} by ${fixed(lead)} on ${main.name}, and the rule needs ${plan.rule.margin}`;
     else {
       const guard = plan.rule.guard;
-      let drop = 0;
-      if (guard) drop = plan.checkpoints
-        ? point(best.arm, plan.checkpoints[0], guard.measure).mean! - point(best.arm, at, guard.measure).mean!
-        : Math.max(...plan.arms.filter((a: any) => a.name !== best.arm).map((a: any) => point(a.name, at, guard.measure).mean! - point(best.arm, at, guard.measure).mean!));
-      if (guard && drop > guard.max_drop) reason = `${best.arm} is ahead on ${main.name}, but its ${guard.measure} dropped by ${fixed(drop)}, and the rule allows ${guard.max_drop}`;
+      // The guard: at the point that decides, the winner's guard measure against the best of the other arms'.
+      const rival = guard ? plan.arms.filter((a: any) => a.name !== best.arm).map((a: any) => ({ arm: a.name, mean: point(a.name, at, guard.measure).mean! })).sort((a: any, b: any) => b.mean - a.mean)[0] : null;
+      const below = guard ? rival.mean - point(best.arm, at, guard.measure).mean! : 0;
+      if (guard && below > guard.max_drop) reason = `${best.arm} is ahead on ${main.name}, but its ${guard.measure} is ${fixed(below)} below ${rival.arm}'s${pointLabel(at)}, and the rule allows ${guard.max_drop}`;
       else { answer = `${best.arm} is better`; better = best.arm; reason = `${best.arm} is ahead of ${next.arm} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, and the rule needs ${plan.rule.margin}`; }
     }
   }
@@ -1090,7 +1141,11 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
     if (bindings.mark_keys?.length) writePrivateJson(marksFile(plan.folder), { ...readMarks(plan.folder), ...marks });
     const measures = plan.measures;
     const method = join(plan.folder, 'comparison.method');
-    return { graded: all().map(run => JSON.stringify({ key: gradeKey(plan, run.key, run.input), grader_version: graderVersion(plan), folder: plan.folder,
+    // The grade keys hold the runs as they finished: the account gets the plan with them before the grades link.
+    const planned = cells(plan, treated, false), runs = all();
+    await sendPlan(plan.folder, plannedCells(plan, planned));
+    const keys = gradeKeys(plan, [...planned, ...runs.filter(run => !planned.some(c => c.key === run.key))]);
+    return { graded: runs.map(run => JSON.stringify({ key: keys.get(run.key), grader_version: graderVersion(plan), folder: plan.folder,
       run, measures, method, expected: plan.expected[run.input],
       marks: Object.fromEntries(measures.filter((m: any) => m.person !== undefined).map((m: any) => [m.name, marks[markKey(m, run)]])) })) };
   }
