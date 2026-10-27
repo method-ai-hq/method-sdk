@@ -1,3 +1,9 @@
+# 0.22.5
+
+- **Publish a comparison as a draft for review.** `method publish NAME.compare` saves the comparison to your account as a draft, with its inputs, and prints its page. Nothing runs. The person reviews every part, then a `method run` of the same file continues from that draft. The comparisons guide says to publish the draft and give the user the link before any run.
+- **A test that is too easy stops the trial.** With a rubric or checklist measure, when every agent already scores more than 1 minus the margin at the start, no agent can lead by the margin. The trial stops before approval and says so: "This test is too easy to show a difference: both agents already score X and Y before any correction, and the rule needs a lead of M." The page shows it as a trial result.
+- **Method's rules have no semicolons.** Each rule on the page is plain sentences.
+
 # 0.22.4
 
 - **A stopped fix is given again.** A rerun of a comparison waits for an old judgment only while its fix is still working or waits for your answer. After a fix stopped or could not test a change, the rerun gives the correction again, with a new training run and a new judgment. The same outcome is not recorded twice.
