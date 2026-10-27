@@ -1,3 +1,13 @@
+# 0.22.3
+
+Use runtime 0.16.6.
+
+- **A comparison's clean room keeps a working Claude Code sign-in.** The room links your login Keychain (or credentials file) instead of copying the token, so Claude Code in the room refreshes an expired token itself, and the fix inside `method judge` (and every agent that its scripts start) finds the same sign-in.
+- **A learner's frozen copy never takes the learner's place.** A trial that ran a frozen copy (`after-0`) before the learner itself no longer stops the learner's runs with "This Method is saved from …", and every run of a frozen copy is saved to the learner's Method, so the page lists all trial runs.
+- **A stopped fix says why in plain words**: what failed (such as "Claude Code is not installed or not signed in on this computer"), with no step or script name and one period.
+- **The trial's estimate counts as the page does**: every graded run in all (with those the trial already ran), the treatment events left, and each arm's own time per event, training run and fix or edit included. The noise check sends each arm's start values; usage per correction goes with the estimate.
+- **Arms have the names people use**: Method agent and plain Claude Code, on the page, in Method's rules and in the decision. A deliverable such as `work/{{deliverable}}` is "the file that the task names". A plain arm's starting instructions are yours only when `decided_by_you` names `arms.NAME.instructions`.
+
 # 0.22.2
 
 - **Two runs with the same document grade at the same time.** Each grade judges in its own work folder; before, two runs that handed in the same document shared one folder, and the trial failed with "Run is locked". The cached verdicts are still kept once per document.
