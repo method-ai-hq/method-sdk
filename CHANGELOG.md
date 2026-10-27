@@ -1,3 +1,7 @@
+# 0.22.2
+
+- **Two runs with the same document grade at the same time.** Each grade judges in its own work folder; before, two runs that handed in the same document shared one folder, and the trial failed with "Run is locked". The cached verdicts are still kept once per document.
+
 # 0.22.1
 
 - **A teaching input can have its own folder.** As for a measured input, `inputs/ID/` beside `inputs/ID.json` (one subfolder per files connection) replaces the arm's folders of those names for that input's training runs, for Method arms and a plain arm's builder alike. A training run sees only its own input's folders.
