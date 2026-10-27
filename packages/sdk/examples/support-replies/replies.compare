@@ -2,7 +2,7 @@ question: After the support lead gives the same 20 corrections to both reply age
 arms:
   method: support-reply.method
   plain: {agent: claude, instructions: plain-instructions.md}
-difference: How a correction changes the agent. The Method agent gets each correction through method judge; plain Claude Code gets it through a builder that edits its instructions.
+difference: How a correction changes the agent.
 inputs: [tickets/t-201.json, tickets/t-202.json, tickets/t-203.json]
 teaching: [teach/t-101.json, teach/t-102.json, teach/t-103.json, teach/t-104.json]
 about_inputs:

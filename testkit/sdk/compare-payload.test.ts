@@ -5,14 +5,38 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 // What a comparison sends to the account: the spec of each version and each stage, captured in place of the account.
-const sent: { specs: any[]; stages: any[]; cells: any[] } = { specs: [], stages: [], cells: [] };
+const sent = vi.hoisted(() => ({ specs: [] as any[], stages: [] as any[], cells: [] as any[], plans: [] as any[][], linked: new Set<string>() }));
+// Saving a run to the account: refused (as a frozen copy's save was before SDK 0.22.3) while saving.fail is true.
+const saving = vi.hoisted(() => ({ fail: false }));
+vi.mock('../../packages/sdk/src/versions.js', async original => ({ ...(await original() as any),
+  prepareVersion: async (_client: unknown, _outbox: unknown, file: string) => {
+    if (saving.fail) throw Object.assign(Error(`This Method is saved from ${file}. Make the change in that file and run it there; this copy was not run or saved.`), { code: 'other_home' });
+    return { method_id: `wf_${'c'.repeat(32)}`, version_id: `v_${'d'.repeat(32)}`, url: '', unchanged: true, workflow: {} };
+  } }));
+vi.mock('../../packages/sdk/src/method-client.js', () => ({ MethodClient: class { constructor(readonly server: string) {} } }));
+vi.mock('../../packages/sdk/src/outbox.js', () => ({ Outbox: class { async drain() {} } }));
+vi.mock('../../packages/sdk/src/method-sync.js', async original => {
+  const { writeFileSync: write } = await import('node:fs'), { join: joined } = await import('node:path'), { randomUUID } = await import('node:crypto');
+  return { ...(await original() as any), MethodSync: class {
+    device = false; outbox = { drain: async () => {} };
+    constructor(_client: unknown, readonly dir: string) {}
+    async start() {} snapshot() {}
+    async finish() { write(joined(this.dir, 'method-sync.json'), JSON.stringify({ id: randomUUID() })); return 'saved'; }
+  } };
+});
 vi.mock('../../packages/sdk/src/compare-account.js', async original => {
   const real: any = await original();
   const hash = (text: string) => ({ sha256: createHash('sha256').update(text).digest('hex'), bytes: Buffer.byteLength(text) });
   return { ...real,
     saveComparison: async (_folder: string, _id: string, _name: string, spec: unknown) => { sent.specs.push(spec); return null; },
     sendStage: async (_folder: string, update: unknown) => { sent.stages.push(update); },
-    sendPlan: async () => null, linkCells: async (_folder: string, cells: unknown[]) => { sent.cells.push(...cells); },
+    // The account answers the keys that it has not linked yet.
+    sendPlan: async (folder: string, cells: any[]) => {
+      sent.plans.push(cells);
+      const { existsSync } = await import('node:fs'), { join: joined } = await import('node:path');
+      return existsSync(joined(folder, 'account.json')) ? new Set(cells.filter(c => !sent.linked.has(c.key)).map(c => c.key)) : null;
+    },
+    linkCells: async (_folder: string, cells: any[]) => { sent.cells.push(...cells); for (const cell of cells) sent.linked.add(cell.key); },
     uploadSignedIn: async (text: string) => hash(text), uploadText: async (_folder: string, text: string) => hash(text) };
 });
 const { compareStage, compileComparison, delivery } = await import('../../packages/sdk/src/compare.js');
@@ -51,7 +75,7 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   expect(spec.judge).toEqual({ agent: 'claude', model: 'Claude Code\'s default model' });
   expect(spec.learners).toBe(1);
   expect(spec.decisions).toEqual(expect.arrayContaining([{ part: 'rule', what: 'decision rule', value: expect.any(String), by: 'you' }, { part: 'treatment', what: 'note', value: 'Both corrections are about size.', by: 'writer' }]));
-  expect(spec.assumptions[0]).toEqual({ text: 'Each arm received its full treatment.', if_false: expect.any(String), check: expect.any(String), by: 'method', checked_by: 'treatment' });
+  expect(spec.assumptions[0]).toEqual({ text: 'Each agent received its full treatment.', if_false: expect.any(String), check: expect.any(String), by: 'method', checked_by: 'treatment' });
   expect(new Set(spec.method_rules.map((r: any) => r.part))).toEqual(new Set(['arms', 'same_for_both', 'treatment', 'runs_per_point', 'main_measure', 'other_measures', 'noise', 'run_rules']));
 
   // The trial: the first learner gets the corrections before the first checkpoint after 0; 2 learners run at the start.
@@ -75,4 +99,51 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
     { index: 1, input: 'inputs/teach.json', text: 'It needs to be bigger because small is wrong.', outcome: 'fixed', learner: 1 },
     { index: 2, input: 'inputs/teach.json', text: 'It needs a unit because readers ask.', outcome: 'no_change_needed', learner: 1 }]);
   expect(trial.trial.received.a.lines).toEqual([{ what: 'Inputs run', received: 2, planned: 2, missing: [] }, { what: 'Corrections received', received: 2, planned: 2, missing: [] }]);
+}, 600_000);
+
+it('saves a finished trial run that its cell could not save, and links every trial grade to the plan that the account has', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'method-compare-saving-'));
+  roots.push(root);
+  for (const [arm, factor] of [['a', 1], ['b', 2]] as const) {
+    mkdirSync(join(root, arm));
+    writeFileSync(join(root, arm, 'agent.method'), JSON.stringify({ format: 'method/3.4', name: `Agent ${arm}`, goal: 'Answer.', inputs: { n: { type: 'number' } },
+      steps: { answer: { in: { n: 'inputs.n' }, do: { kind: 'run', runtime: 'node', entrypoint: 'answer.mjs' }, out: { value: { type: 'number' } } } }, result: 'value' }));
+    writeFileSync(join(root, arm, 'answer.mjs'), `import{readFileSync}from'node:fs';const{n}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({value:n*${factor}}))`);
+  }
+  writeFileSync(join(root, 'size.mjs'), `import{readFileSync}from'node:fs';const{output}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({score:output/10}))`);
+  mkdirSync(join(root, 'inputs'));
+  for (const [id, n] of [['one', 1], ['two', 2]] as const) writeFileSync(join(root, 'inputs', `${id}.json`), JSON.stringify({ n }));
+  const file = join(root, 'numbers.compare');
+  writeFileSync(file, JSON.stringify({ question: 'Which agent gives the larger number?', arms: { a: 'a/agent.method', b: 'b/agent.method' }, difference: 'The factor.',
+    inputs: ['inputs/one.json', 'inputs/two.json'], measure: { name: 'size', code: 'size.mjs' }, rule: { margin: 0.1, min_runs: 1 }, runs: 1, trial: 1 }));
+  const { inputs, folder } = await compileComparison(file);
+  writeFileSync(join(folder, 'account.json'), JSON.stringify({ server: 'https://app.example.test', config_dir: root, cache_dir: root, comparison_id: `cmp_${'e'.repeat(32)}`, version_number: 1, stage: 'draft', url: '', spec_digest: '' }));
+  const comparison = JSON.parse(readFileSync(inputs, 'utf8')).comparison;
+  const trial = async () => {
+    const planned = await compareStage('trial_plan', { comparison });
+    const runs: string[] = [];
+    for (const cell of planned.trial_cells as string[]) runs.push((await compareStage('trial_cell', { cell })).trial_run as string);
+    const items = (await compareStage('trial_gather', { comparison, trial_runs: runs, trial_done: planned.trial_done })).trial_graded as string[];
+    for (const item of items) await compareStage('trial_grade', { item });
+  };
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    // The first trial: no run could be saved, so nothing links.
+    saving.fail = true;
+    await trial();
+    expect(sent.cells).toEqual([]);
+    expect(stderr.mock.calls.map(c => String(c[0])).join('')).toContain('This run is not saved to your Method account');
+    // The rerun saves each finished run from its folder, without running it again, and links it and its grade.
+    saving.fail = false;
+    await trial();
+    const plan = sent.plans.at(-1)!;
+    const runs = plan.filter(c => c.kind === 'run'), grades = plan.filter(c => c.kind === 'grade');
+    expect(runs).toHaveLength(4);
+    for (const cell of runs) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ run_id: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    for (const cell of grades) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ measures: { size: expect.any(Number) } });
+    // A kept grade that the account lacks links again.
+    sent.linked.clear(); sent.cells.length = 0;
+    await trial();
+    for (const cell of grades) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ measures: { size: expect.any(Number) } });
+  } finally { stderr.mockRestore(); }
 }, 600_000);

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { armLabels, armModels, checklistOf, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, fixOutcome, judging, noiseCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
+import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, fixOutcome, judging, noiseCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { baselineAnswer } from '../../packages/sdk/src/quality.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
@@ -284,7 +284,7 @@ it('a plain arm with corrections is a builder: after each correction a session g
   delivery.deliver = async () => ({ received: true, outcome: 'fixed' });
   // Method's rules name each arm as the page does.
   expect((await compileComparison(file)).spec.method_rules.filter((r: any) => r.part === 'arms').map((r: any) => r.text.split(':')[0])).toEqual([
-    'Plain Claude Code learns from corrections through a builder', 'Method agent learns from corrections through Method']);
+    'Plain Claude Code', 'Method agent']);
   const comparison = await stagePlan(file);
   const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
   const plain = treated.find((t: any) => t.arm === 'plain').learners[0];
@@ -305,7 +305,7 @@ it('a plain arm with corrections is a builder: after each correction a session g
   // Each run at a checkpoint runs the instructions as the builder left them, and says what it received.
   const cells = ((await compareStage('plan', { comparison, go: true, treated: JSON.stringify(treated) })).cells as string[]).map(c => JSON.parse(c)).filter((c: any) => c.arm === 'plain');
   expect(cells.find((c: any) => c.checkpoint === 3).plain.instructions).toContain('- Add one');
-  expect(cells.find((c: any) => c.checkpoint === 3).treatment_note).toBe('Learner 1. Given to a builder that edited the agent\'s instructions after each correction, one at a time, in this order:\n1. Correction on inputs/three.json: Add one, because the count starts at one. (edited)\n2. New input: inputs/three.json\n3. Correction on inputs/three.json: Keep it. [keep] (not edited)');
+  expect(cells.find((c: any) => c.checkpoint === 3).treatment_note).toBe('Copy 1. After each correction a Claude Code session edited the agent\'s instructions. The corrections, one at a time, in this order:\n1. Correction on three: Add one, because the count starts at one. (edited)\n2. New input: three\n3. Correction on three: Keep it. [keep] (not edited)');
 }, 600_000);
 
 it('a teaching input with its own folder gives its training runs that folder in place of the arms\' folders of that name, for a Method arm and a builder alike', async () => {
@@ -374,7 +374,7 @@ it('says what happened to each correction for each learner; could not test and a
     treatment: { events: [1, 2, 3, 4, 5].map(i => ({ correction: `Correction ${i}.`, input: 'inputs/three.json' })), checkpoints: [0, 5] } });
   // Every correction reaches arm a; the fifth one could not be tested for arm b.
   delivery.deliver = async (event: any, learner) => learner.dir.includes(join('arms', 'b')) && event.index === 5
-    ? { received: false, outcome: 'could_not_test', reason: 'the fix could not test a change: the case needs a file.' } : { received: true, outcome: event.index === 2 ? 'no_fix_found' : 'fixed' };
+    ? { received: false, outcome: 'could_not_test', reason: 'Method\'s fix could not test a change', detail: 'the case needs a file.' } : { received: true, outcome: event.index === 2 ? 'no_fix_found' : 'fixed' };
   const comparison = await stagePlan(file);
   const treated = (await compareStage('trial_treat', { comparison })).trial_treatment as string;
   const arms = JSON.parse(treated);
@@ -384,7 +384,7 @@ it('says what happened to each correction for each learner; could not test and a
   expect(Object.keys(arms[1].learners[0].snapshots)).toEqual(['0']);
   const runs = ['a', 'b'].flatMap(arm => [0, 1].map(repeat => JSON.stringify({ arm, input: 'inputs/one.json', repeat, checkpoint: 0, result: 1, run_dir: root, duration_ms: 10, cost_usd: null })));
   await expect(compareStage('check', { comparison, runs, treated, grades: [] })).rejects.toThrow(
-    /The trial stopped: an arm did not receive everything\.\nAgent b: Inputs run: 2 of 2\. Corrections received: 4 of 5 \(3 fixed, 1 no fix found, 1 could not test\)\. Missing: learner 1, event 5 \("Correction 5\."\): the fix could not test a change: the case needs a file\.\nFix the cause/);
+    /The trial stopped: an arm did not receive everything\.\nAgent b: Inputs run: 2 of 2\. Corrections received: 4 of 5 \(3 fixed, 1 no fix found, 1 could not test\)\. Missing: correction 5 \(“Correction 5\.”\) was not received: Method's fix could not test a change: the case needs a file\.\nFix the cause/);
   // A rerun gives only the missing correction again.
   let given = 0;
   delivery.deliver = async () => { given++; return { received: true, outcome: 'no_change_needed' }; };
@@ -398,9 +398,97 @@ it('says what happened to each correction for each learner; could not test and a
   expect(result.text).toMatch(/^Can't tell yet: Agent b did not receive its full treatment/);
   expect(result.text).toContain('SHORT Agent b: Inputs run: 4 of 4. Corrections received: 4 of 5');
   // Each correction of each learner, with its outcome, counted from 1.
-  expect(result.received.b.corrections[4]).toEqual({ index: 5, input: 'inputs/three.json', text: 'Correction 5.', outcome: 'could_not_test', received: false, learner: 1, reason: 'the fix could not test a change: the case needs a file.' });
+  expect(result.received.b.corrections[4]).toEqual({ index: 5, input: 'inputs/three.json', text: 'Correction 5.', outcome: 'could_not_test', received: false, learner: 1, reason: 'Method\'s fix could not test a change' });
+  // The page's line says what happened in plain words, without the cause's details.
+  expect(result.received.b.lines[1]!.missing).toEqual(['Correction 5 (“Correction 5.”) was not received: Method\'s fix could not test a change.']);
   expect(result.text).toContain('Each arm received its full treatment: checked by Method: no.');
 });
+
+/**
+ * A stand-in for the method CLI that a Method learner's correction uses: run completes a saved training run, judge
+ * starts judgment jdg_N, and wait answers from outcomes.json: the outcome of that judgment, else the default.
+ */
+function methodStub(root: string) {
+  writeFileSync(join(root, 'bin', 'method'), `#!/usr/bin/env node
+const fs = require('fs'), path = require('path');
+const argv = process.argv.slice(2), log = ${JSON.stringify(join(root, 'method-calls.jsonl'))};
+fs.appendFileSync(log, JSON.stringify(argv.slice(0, 2)) + '\\n');
+if (argv[0] === 'run') {
+  const runDir = argv[argv.indexOf('--run-dir') + 1];
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'summary.json'), JSON.stringify({ status: 'completed' }));
+  fs.writeFileSync(path.join(runDir, 'method-sync.json'), JSON.stringify({ dashboard_id: 'run_' + Date.now() }));
+} else if (argv[0] === 'judge') {
+  const n = fs.readFileSync(log, 'utf8').split('\\n').filter(l => l.startsWith('["judge"')).length;
+  console.log(JSON.stringify({ judgment: { id: 'jdg_' + n }, fix: { status: 'working' } }));
+} else if (argv[0] === 'wait') {
+  const outcomes = JSON.parse(fs.readFileSync(${JSON.stringify(join(root, 'outcomes.json'))}, 'utf8'));
+  console.log(JSON.stringify({ outcomes: [outcomes[argv[1]] ?? outcomes.default] }));
+}
+`, { mode: 0o700 });
+  const calls = () => lines(join(root, 'method-calls.jsonl')).map((c: string[]) => c[0]);
+  return { outcomes: (value: Record<string, unknown>) => writeFileSync(join(root, 'outcomes.json'), JSON.stringify(value)), calls };
+}
+
+it('a rerun gives a correction again when its fix stopped, but waits for the same judgment while the fix waits for an answer, and records each outcome once', async () => {
+  const { root, file } = fixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 1 },
+    treatment: { events: [{ correction: 'It needs to be bigger because small is wrong.', input: 'inputs/three.json' }], checkpoints: [0, 1] } });
+  claudeStub(root);
+  const method = methodStub(root);
+  const comparison = await stagePlan(file);
+  const treat = async () => JSON.parse((await compareStage('trial_treat', { comparison })).trial_treatment as string);
+  const record = (arm: string) => lines(join(JSON.parse(comparison).folder, 'arms', arm, readdirSync(join(JSON.parse(comparison).folder, 'arms', arm)).find(d => d.startsWith('treatment-'))!, 'learner-1', 'treatment.jsonl'));
+  // The fix stops in Method's own code: not received, said in plain words; the cause is kept for the CLI.
+  method.outcomes({ default: { status: 'stopped', error: 'In step "Find the step by trying" (task 1 of 1), the script steps/locate.mjs exited with code 1.' } });
+  const first = await treat();
+  expect(first[0].learners[0].events[0]).toMatchObject({ received: false, outcome: 'stopped', reason: 'Method\'s fix stopped before it finished', detail: expect.stringContaining('steps/locate.mjs') });
+  expect(method.calls().filter(c => c === 'judge')).toHaveLength(2);
+  // A rerun: the old fix is over, so each arm gets the correction again, with a new training run and a new judgment.
+  method.outcomes({ jdg_1: { status: 'stopped', error: 'x' }, jdg_2: { status: 'stopped', error: 'x' }, default: { status: 'done', outcome: { outcome: 'fixed' } } });
+  const second = await treat();
+  expect(second.map((t: any) => t.learners[0].events[0].outcome)).toEqual(['fixed', 'fixed']);
+  expect(method.calls().filter(c => c === 'judge')).toHaveLength(4);
+  expect(method.calls().filter(c => c === 'run')).toHaveLength(4);
+  expect(record('a').map((r: any) => r.outcome)).toEqual(['stopped', 'fixed']);
+
+  // A fix that asks a question waits for the person's answer: a rerun waits for the same judgment and judges nothing again.
+  const other = fixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 1 },
+    treatment: { events: [{ correction: 'It needs a unit because readers ask.', input: 'inputs/three.json' }], checkpoints: [0, 1] } });
+  claudeStub(other.root);
+  const asking = methodStub(other.root);
+  const plan = await stagePlan(other.file), folder = JSON.parse(plan).folder;
+  const records = () => readdirSync(join(folder, 'arms')).map(arm => lines(join(folder, 'arms', arm, readdirSync(join(folder, 'arms', arm)).find(d => d.startsWith('treatment-'))!, 'learner-1', 'treatment.jsonl')).map((r: any) => r.outcome));
+  asking.outcomes({ default: { status: 'done', outcome: { outcome: 'question', question: 'Which unit?' } } });
+  await compareStage('trial_treat', { comparison: plan });
+  await compareStage('trial_treat', { comparison: plan });
+  expect(asking.calls().filter(c => c === 'judge')).toHaveLength(2);
+  expect(asking.calls().filter(c => c === 'wait')).toHaveLength(4);
+  expect(records()).toEqual([['question'], ['question']]);
+  // After the answer the fix ends fixed: the same judgment, received.
+  asking.outcomes({ default: { status: 'done', outcome: { outcome: 'fixed' } } });
+  const answered = JSON.parse((await compareStage('trial_treat', { comparison: plan })).trial_treatment as string);
+  expect(answered.map((t: any) => t.learners[0].events[0].outcome)).toEqual(['fixed', 'fixed']);
+  expect(asking.calls().filter(c => c === 'judge')).toHaveLength(2);
+  expect(records()).toEqual([['question', 'fixed'], ['question', 'fixed']]);
+}, 600_000);
+
+it('says what an agent missed once, in plain words: the correction that was not received, cut at a word, and one line for the corrections after it', async () => {
+  const long = 'The video script to the general counsel should do this: uses the facts of the incident correctly and states no other facts.';
+  const { file } = fixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 4 },
+    treatment: { events: [long, 'Two.', 'Three.', 'Four.'].map(correction => ({ correction, input: 'inputs/three.json' })), checkpoints: [0, 4] } });
+  delivery.deliver = async (_event: any, learner) => learner.dir.includes(join('arms', 'b'))
+    ? { received: false, outcome: 'stopped', reason: 'Method\'s fix stopped before it finished', detail: 'In step "Find the step by trying", the script steps/locate.mjs exited with code 1.' } : { received: true, outcome: 'fixed' };
+  const comparison = await stagePlan(file);
+  const treated = JSON.parse((await compareStage('trial_treat', { comparison })).trial_treatment as string);
+  const result = decide(JSON.parse(comparison), [], treated);
+  // The trial teaches one copy, so no copy is named.
+  expect(result.received.b.lines[1]!.missing).toEqual([
+    'Correction 1 (“The video script to the general counsel should do this: uses…”) was not received: Method\'s fix stopped before it finished.',
+    'Corrections 2 to 4 were not given, because correction 1 did not arrive.']);
+  // The CLI keeps the cause, for the agent that fixes it.
+  expect(result.text).toContain('Missing: correction 1 (“The video script to the general counsel should do this: uses…”) was not received: Method\'s fix stopped before it finished: In step "Find the step by trying", the script steps/locate.mjs exited with code 1.');
+  expect(clipWords('one two three four', 9)).toBe('one two…');
+}, 600_000);
 
 it('measures the noise at the start with two learners per arm, and stops before approval when it is more than half the margin', async () => {
   const { file } = fixture({ rule: { margin: 0.1, min_runs: 1 }, trial: 2 });
@@ -507,11 +595,13 @@ it('estimates the full run as the page counts it: every graded run, the treatmen
   expect(estimate.account).toEqual({ minutes: 300 + 40, runs: 48, reused: 8, events: 90, event_minutes: { method: 10, plain: 2 }, usd: null });
   expect(estimate.text).toBe('The full run: 48 graded runs in all (8 done in the trial), and 90 treatment events to give over all learners, each a training run and a fix or edit. '
     + 'Time: about 340 minutes: about 240 s per run, 4 at a time; per event Method agent about 600 s, plain Claude Code about 120 s, the learners at the same time. Cost: not known: a fix or an edit reports no price.');
-  // A Method fix that stopped in the trial still counts its time; an arm with no event in the trial says that its time is not known.
-  treated[0].learners[0].events = [event(1, false, 30)];
-  expect(fullRunEstimate(plan, runs, treated).account).toMatchObject({ events: 105, event_minutes: { method: 30, plain: 2 }, minutes: 900 + 40 });
-  treated[0].learners[0].events = [];
-  expect(fullRunEstimate(plan, runs, treated).text).toContain('not counting the events of Method agent, which has no finished event in the trial');
+  // A Method fix that stopped in the trial says nothing about how long a fix takes: the Method agent's time per correction
+  // is not known yet, and no total is given as if it were known.
+  treated[0].learners[0].events = [event(1, false, 0), ...Array.from({ length: 14 }, (_, i) => event(i + 2, false, 0, 'not_given'))];
+  const stopped = fullRunEstimate(plan, runs, treated);
+  expect(stopped.account).toMatchObject({ events: 105, event_minutes: { method: null, plain: 2 } });
+  expect(stopped.text).toContain('Time: not known yet: about 240 s per run, 4 at a time; per event Method agent not known yet, because none was received in the trial, plain Claude Code about 120 s');
+  expect(stopped.text).not.toMatch(/about \d+ minutes/);
 });
 
 it('shows usage per correction for each arm, in tokens when every agent reports them, else minutes', () => {
@@ -534,7 +624,11 @@ it('marks who decided each value: you for what decided_by_you names, Method for 
   expect(decisions(doc).filter(d => d.what === 'note').map(d => [d.part, d.value])).toEqual([['inputs', 'Each input runs alone.'], ['main_measure', 'Bigger is better.']]);
   const { spec, plan } = await compileComparison(file);
   expect(spec.method_rules.map((r: any) => r.part)).toEqual(expect.arrayContaining(['same_for_both', 'main_measure', 'noise', 'run_rules', 'runs_per_point']));
-  expect(spec.method_rules.map((r: any) => r.text).join(' ')).toMatch(/No arm can use the web\..*Every arm hands in the file work\/answer\.txt/s);
+  // Method's rules in the person's words: agents and copies, a model as people say it, no path, command or internal name.
+  const rules = spec.method_rules.map((r: any) => r.text).join(' ');
+  expect(rules).toContain('No agent can use the web. Only the handed-in file is measured; a plain agent\'s last message is not its output.');
+  expect(rules).not.toMatch(/clean room|builder|learner|runner|method judge|\barm\b|answer\.txt|work\//);
+  expect(spec.decisions.find((d: any) => d.what === 'deliverable')).toEqual({ part: 'same_for_both', what: 'deliverable', value: 'Each agent hands in the file answer.txt.', by: 'writer' });
   expect(spec.assumptions).toEqual([{ text: 'The measure is fair.', check: null, by: 'writer' },
     { text: 'The judge agrees with the expert.', if_false: 'The scores show the judge\'s taste.', check: 'The expert marks 10 verdicts.', by: 'writer' },
     { text: 'The corrections and the checklist come from one source.', check: null, by: 'writer', limit: true }]);
@@ -550,7 +644,11 @@ it('marks who decided each value: you for what decided_by_you names, Method for 
   expect([marked(['arms']), marked(['arms.plain']), marked(['arms.plain.instructions'])]).toEqual(['writer', 'writer', 'you']);
   // A deliverable that takes a value of the input is said in words, without its placeholder.
   expect(methodRules({ ...doc, deliverable: 'work/{{name}}' }, { model: null, judge: { agent: 'claude', model: null }, labels: {} }).map(r => r.text))
-    .toContain('Every arm hands in the file that the number names; the runner reads that file. A plain agent\'s last message is not its output.');
+    .toContain('Only the handed-in file is measured; a plain agent\'s last message is not its output.');
+  expect(decisions({ ...doc, deliverable: 'work/{{name}}' }).find(d => d.what === 'deliverable')?.value).toBe('Each agent hands in the file that the number names.');
+  expect([modelName('claude-opus-5-5'), modelName('claude-sonnet-4-5-20250929'), modelName('gpt-5-codex')]).toEqual(['Claude Opus 5.5', 'Claude Sonnet 4.5', 'gpt-5-codex']);
+  expect(methodRules({ ...doc, measure: { name: 'items right', rubric: ['Names the cause.'] } }, { model: { agent: 'claude', model: 'claude-opus-5-5', effort: 'high' }, judge: { agent: 'claude', model: 'claude-opus-5-5' }, labels: {} }).map(r => r.text))
+    .toEqual(expect.arrayContaining(['Every agent runs on Claude Opus 5.5 at high effort.', 'One Claude judge (Claude Opus 5.5) marks each item met, partly or not met; partly counts as half.']));
   // Notes, descriptions, assumptions and decided_by_you change no run cell or grade.
   const keys = async () => ((await compareStage('trial_plan', { comparison: JSON.parse(readFileSync((await compileComparison(file)).inputs, 'utf8')).comparison })).trial_cells as string[]).map(c => JSON.parse(c).key);
   const before = await keys();

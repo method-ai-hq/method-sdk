@@ -370,20 +370,20 @@ When the user asks whether one agent is better than another, write a NAME.compar
 2. Mark \`decided_by_you\` only for a value the user stated. The question is the user's only when the file has it in the user's own words; when you rephrase it, it is the writer's. Everything else is the writer's choice, and the page asks the user to review it. Naming an arm (\`arms.plain\`) says which agent it is; a plain arm's starting instructions are the user's only as \`arms.plain.instructions\`.
 3. Write corrections as the expert would say them: "It needs to be X because Y". Use the expert's real corrections when you have them.
 4. One main measure, in plain words, scored on what each input has.
-5. Assumptions are only things that must be true for the answer to mean something. Each one has "if false" and "how to check". Notes go with their part.
+5. Assumptions are only things that must be true for the answer to mean something. Each one has "if false" and "how to check". Notes go with their part. The user reads the question, the difference, the notes and the assumptions on the page: write them in the user's words, name files and folders by what they are ("the 30 corrections", "the expected answers"), never by their path, and leave out how Method gives each arm its corrections, which the page says. The difference is one short phrase, such as "How a correction changes the agent."
 6. After the trial, read one run of each agent, and show the user the page before they approve.
 
 ## What Method decides
 
 Do not write these into the file; Method applies them to every comparison and shows them on the page.
 
-- Every arm runs on the same model and effort, in a clean room, with the same task prompt, tools and output file. A plain arm takes the Method arm's model. No arm uses the web unless \`tested: tools\`; arms differ in model only with \`tested: model\`.
+- Every arm runs on the same model and effort, with no personal instructions, memory, settings or plugins, and with the same task prompt, tools and output file. A plain arm takes the Method arm's model. No arm uses the web unless \`tested: tools\`; arms differ in model only with \`tested: model\`.
 - Every arm hands in the file \`deliverable\` names; a plain agent's last message is not its output.
-- With corrections, a plain arm is a builder: after each correction, a Claude Code (or Codex) session gets the correction and the wrong output of a training run, and edits the agent's instructions file. A Method arm gets each correction through \`method judge\`. Corrections arrive one at a time; each fix or edit has up to 2 hours.
-- \`runs\` counts separate learners. Each learner is its own copy of the arm and gets the full treatment; each checkpoint measures each learner once per input.
-- A correction is received when its fix found a change, found no change was needed, or found no fix, or when the builder finished. A fix that could not test or that stopped is not received, and the comparison stops.
+- With corrections, a plain arm learns from each correction this way: a Claude Code (or Codex) session gets the correction and the wrong output of a training run, and edits the agent's instructions file. A Method arm gets each correction through \`method judge\`. Corrections arrive one at a time; each fix or edit has up to 2 hours.
+- \`runs\` counts separate copies of each arm (learners). Each copy gets the full treatment; each checkpoint measures each copy once per input. The trial teaches one copy of each arm; the full run teaches every copy.
+- A correction is received when its fix found a change, found no change was needed, or found no fix, or when the session that edits the instructions finished. A fix that could not test or that stopped is not received, and the comparison stops.
 - One Claude judge marks each item met, partly or not met; partly counts as half. It reads every source the agent read in full.
-- The trial runs each trial input at the start with 2 learners per arm. If they differ by more than half the margin, the comparison stops before approval.
+- The trial runs each trial input at the start with 2 copies of each arm. If they differ by more than half the margin, the comparison stops before approval.
 - Usage per correction is shown for each arm and does not decide.
 
 ## The file
