@@ -1611,11 +1611,14 @@ async function judged(run: any, context: GradeContext, items: Array<{ id: string
   const key = sha({ judge: JUDGE_VERSION, model: context.judge?.model ?? null, document, items: items.map(i => i.text), expected: expectedText, read: read.map(p => { const [envName, ...rest] = p.split('/'); return [p, sha(readFileSync(join(folders[envName!]!, rest.join('/'))))]; }) });
   const cache = join(context.folder, 'judgments', `${key}.json`);
   if (existsSync(cache)) return { verdicts: JSON.parse(readFileSync(cache, 'utf8')) as Verdict[], read };
+  // Each grade judges in its own work folder: two runs that hand in the same document have the same key, and may be
+  // graded at the same time. The key names only the cached verdicts.
+  mkdirSync(join(context.folder, 'judge-work'), { recursive: true, mode: 0o700 });
+  const work = mkdtempSync(join(context.folder, 'judge-work', `${key.slice(0, 16)}-`));
   const verdicts = (await judging.judge({ method: context.judge_method, document, documentName: run.deliverable ? basename(run.deliverable) : 'output.md', items: items.map(i => ({ id: i.id, text: i.text })), expected: expectedText,
-    folders, read, work: join(context.folder, 'judge-work', key.slice(0, 16)) })).map(v => v.verdict !== 'not_met' && words(v.quote) && !quotedIn(v.quote, document) ? { ...v, verdict: 'not_met' as const, reason: `The quote is not in the document: "${v.quote.slice(0, 120)}"` } : v);
+    folders, read, work }).finally(() => rmSync(work, { recursive: true, force: true }))).map(v => v.verdict !== 'not_met' && words(v.quote) && !quotedIn(v.quote, document) ? { ...v, verdict: 'not_met' as const, reason: `The quote is not in the document: "${v.quote.slice(0, 120)}"` } : v);
   mkdirSync(dirname(cache), { recursive: true, mode: 0o700 });
   writeFileSync(cache, JSON.stringify(verdicts), { mode: 0o600 });
-  rmSync(join(context.folder, 'judge-work', key.slice(0, 16)), { recursive: true, force: true });
   return { verdicts, read };
 }
 

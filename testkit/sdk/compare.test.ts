@@ -416,6 +416,21 @@ it('measures the noise at the start with two learners per arm, and stops before 
   expect(await compareStage('check', { comparison, runs, grades: grades(0.52).map(g => JSON.stringify(g)) })).toMatchObject({ trial_summary: expect.stringContaining('differ by up to 0.02 on size') });
 }, 600_000);
 
+it('grades two runs that hand in the same document at the same time, each in its own work folder', async () => {
+  const { root, file } = fixture({ measure: { name: 'items right', rubric: ['Names the cause (met).', 'Gives a date (partly).'] } });
+  const claude = claudeStub(root);
+  const plan = JSON.parse(await stagePlan(file));
+  const grade = (n: number) => compareStage('grade', { item: JSON.stringify({ key: String(n).repeat(64), grader_version: 'v', folder: plan.folder,
+    context: { folder: plan.folder, judge: plan.judge, judge_method: plan.judge_method, checklist: [] }, measures: plan.measures, marks: {},
+    run: { key: String(n).repeat(64), arm: n === 1 ? 'a' : 'b', input: 'inputs/one.json', repeat: 0, checkpoint: null, result: 'The same reply.', folders: {}, run_dir: root } }) });
+  const graded = (await Promise.all([grade(1), grade(2)])).map(g => JSON.parse(g.grade as string));
+  expect(graded.map(g => g.scores['items right'])).toEqual([0.75, 0.75]);
+  // Both judged; the verdicts are kept once, by the document's content, and no work folder is left.
+  expect(claude.calls().filter(c => c.kind === 'judge').length).toBeGreaterThanOrEqual(1);
+  expect(readdirSync(join(plan.folder, 'judgments'))).toHaveLength(1);
+  expect(readdirSync(join(plan.folder, 'judge-work'))).toEqual([]);
+}, 600_000);
+
 it('one Claude judge reads every source the agent read in full, marks met, partly or not met, and partly counts as half', async () => {
   const { root, file } = fixture({ measure: { name: 'items right', rubric: ['Names the cause (met).', 'Gives a date (partly).', 'Says sorry (none).'] } });
   const claude = claudeStub(root);
