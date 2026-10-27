@@ -1,3 +1,10 @@
+# 0.22.4
+
+- **A stopped fix is given again.** A rerun of a comparison waits for an old judgment only while its fix is still working or waits for your answer. After a fix stopped or could not test a change, the rerun gives the correction again, with a new training run and a new judgment. The same outcome is not recorded twice.
+- **Every trial run has its grade on the page.** A trial run that its cell could not save to your account is saved from its run folder on the next run, without running again. The trial sends its plan with the finished runs' grade keys, so each trial grade links, and a kept grade that the account lacks links again.
+- **The estimate does not guess.** Time per correction comes only from corrections that were received; when an agent received none in the trial, its time and the total time are not known yet.
+- **What an agent missed, in plain words, once.** One line for the correction that was not received (its words cut at a word), one line for the corrections not given after it, and no step, script or command; the cause's details stay in the CLI output. Method's rules, the treatment note and the guide say agent, copy and correction, name models as people say them ("Claude Opus 5.5"), and show no paths. Each agent "hands in the file that the task names" is the writer's choice on the page.
+
 # 0.22.3
 
 Use runtime 0.16.6.
