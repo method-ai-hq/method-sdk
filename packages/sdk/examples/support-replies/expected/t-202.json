@@ -1,0 +1,7 @@
+[
+  {"text": "Says that a parcel with no movement for 7 days counts as lost.", "covered_by": [3]},
+  {"text": "Says that a replacement is sent, and does not ask the customer to wait longer.", "covered_by": [6, 15]},
+  {"text": "Apologizes once, in the first sentence, and not again.", "covered_by": [10]},
+  {"text": "Gives the replacement's shipping time as 3 to 5 business days.", "covered_by": [18]},
+  {"text": "Ends with one clear next step for the customer."}
+]

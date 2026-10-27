@@ -89,6 +89,18 @@ export async function uploadText(folder: string, text: string) {
   catch (error) { warn(error); return null; }
 }
 
+/**
+ * Upload a text with this computer's sign-in, before the comparison has an account record (its inputs, which the saved
+ * version names). Null when signed out or when the upload failed.
+ */
+export async function uploadSignedIn(text: string) {
+  let client: MethodClient;
+  try { client = new MethodClient(DEFAULT_SERVER); if (!client.token()) return null; } catch { return null; }
+  const bytes = new TextEncoder().encode(text), sha256 = createHash('sha256').update(bytes).digest('hex');
+  try { await client.transfer(`/api/cli/result-files/${sha256}`, bytes); return { sha256, bytes: bytes.byteLength }; }
+  catch (error) { warn(error); return null; }
+}
+
 /** Link finished cells: a run cell to its synced run, a grade cell with its numbers. */
 export async function linkCells(folder: string, cells: Array<Record<string, unknown>>) {
   if (cells.length) await report(folder, '/cells', { cells });

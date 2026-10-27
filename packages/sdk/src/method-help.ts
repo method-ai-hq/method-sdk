@@ -1,6 +1,8 @@
 import { authoringEntryRule, designProcedure, designExamples, checkRules, firstMethodRules, fieldReference, promptRules, watchRules, afterRules, costRules } from "./authoring-instructions.js";
 export { exampleSelection } from "./authoring-instructions.js";
-import { exampleCatalog, renderExample } from "./authoring-example.js";
+import { exampleCatalog, exampleDirectory, renderExample } from "./authoring-example.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 type Command = { usage: string; purpose: string; arguments: string; result: string; errors: string; example: string; remote?: boolean };
 const edited = "JSON {file, workflow}. The workflow field contains the method. Writes the local draft.";
@@ -19,7 +21,7 @@ export const commandHelp: Record<string, Command> = {
   'run-status': {usage:"method run-status RUN_DIRECTORY",purpose:"Read worker status without waiting.",arguments:"Local run directory.",result:"Worker status and whether its process is active.",errors:"Unreadable run directory.",example:"method run-status .runs/example"},
   cancel: {usage:"method cancel RUN_DIRECTORY",purpose:"Stop a local run process.",arguments:"Inspect uncertain external actions before any explicit retry.",result:"Cancellation request. The checkpoint remains available.",errors:"Unreadable run directory.",example:"method cancel .runs/example"},
   progress: { usage: "method progress --message TEXT [--completed N --total N --unit NAME] [--child NAME]\nmethod progress --codex --child NAME", purpose: "Report public progress from a running script or relay a child Codex JSON stream.", arguments: "METHOD_PROGRESS_FD is supplied by the executor. --codex reads JSON lines from stdin; --message sends one message. Do not include secrets or source contents.", result: "Writes to the separate progress pipe. No stdout output. No-op outside a Method process.", errors: "Invalid arguments. Malformed Codex events are ignored.", example: "method progress --message 'Rendered 12 of 40 pages' --completed 12 --total 40 --unit pages" },
-  authoring: { usage: "method authoring [start|concepts|execution|examples|recipes|recovery|commands|all]\nmethod authoring example EXAMPLE_ID", purpose: "Read the installed authoring guide. Available offline.", arguments: "Default topic: start, with the build steps, prompt rules, a complete example, the field reference, the step types, and the example catalog. concepts, execution, recipes, recovery, and commands hold the rest. Choose examples after choosing the design. A named example prints its complete lesson and installed file paths. all prints every topic except the example lessons.", result: "Markdown text on stdout. No changes.", errors: "Unknown topic: lists the valid topics; exit 1.", example: "method authoring all > method-guide.md" },
+  authoring: { usage: "method authoring [start|concepts|execution|examples|recipes|recovery|comparisons|commands|all]\nmethod authoring example EXAMPLE_ID", purpose: "Read the installed authoring guide. Available offline.", arguments: "Default topic: start, with the build steps, prompt rules, a complete example, the field reference, the step types, and the example catalog. concepts, execution, recipes, recovery, and commands hold the rest. Choose examples after choosing the design. A named example prints its complete lesson and installed file paths. all prints every topic except the example lessons.", result: "Markdown text on stdout. No changes.", errors: "Unknown topic: lists the valid topics; exit 1.", example: "method authoring all > method-guide.md" },
   init: { usage: "method init FILE --name NAME --goal TEXT", purpose: "Create a local YAML draft.", arguments: "File must be new. Name and goal are required. The draft starts with an empty steps map and result map.", result: edited, errors: "Missing name or goal; the file already exists.", example: "method init task.method --name 'Find leads' --goal 'Find qualified leads from the specified sources.'" },
   show: { usage: "method show FILE [--path POINTER]", purpose: "Read a draft or one field.", arguments: "Default: the full document. Pointer example: /steps/search/do.", result: "Selected value as JSON. No changes.", errors: "The selected field does not exist.", example: "method show task.method --path /steps/search" },
   set: { usage: "method set FILE POINTER (--json JSON|--value-file FILE|--text TEXT|--text-file FILE)", purpose: "Add or replace one draft field.", arguments: valueFlags + " Parents must exist. An empty pointer replaces the document. Escape / as ~1 and ~ as ~0. Nested values replace in full.", result: edited, errors: "Invalid pointer, missing parent field, or conflicting value flags.", example: "method set task.method /steps/search/do/prompt --text-file search.txt" },
@@ -67,8 +69,7 @@ export const commandHelp: Record<string, Command> = {
 
 ## Comparisons
 
-A NAME.compare file (YAML or JSON) asks one question about two or more agents and answers "ARM is better" or "Can't tell yet". Write it before anything runs. Required parts: question (one sentence); arms (a short name for each: a .method file, or {agent: claude|codex, instructions: FILE}); difference (the one thing that differs; other_differences lists the rest); inputs (case IDs, which are folders in cases/ beside the file, or JSON files of input values; the same for each arm); measure (the main measure: {name, and one of code: SCRIPT that prints {"score": N}, rubric: [sentences a model grader judges], person: QUESTION a person answers with a number}; higher is better); rule ({margin, min_runs, at?, guard?: {measure, max_drop}}; margin above 0); runs (runs per input at each point). Optional: trial (inputs in the trial, default 2); treatment ({events: [{correction: TEXT, input: ID} or {input: ID}], checkpoints: [N, ...]}, with rule.at); teaching (inputs that treatment events use, kept apart from inputs); other_measures (shown, not deciding); expected ({INPUT: FILE}, hidden from the arms); assumptions (shown as not checked). method schema compare prints the full form; method validate NAME.compare checks it.
-method run NAME.compare refuses a file with a missing part, arms that share a Method ID, or a rule that cannot say "can't tell yet". It runs a trial (each arm on the first inputs, and the treatment events before the first checkpoint), says what each arm received ("Corrections received: 5 of 5") and stops when an arm is short, naming each missing item. Then it asks to start the full run, with the time and cost estimated from the trial: pass the person's answer with method answer RUN_ID --answer '{"go": true}'. A later run of the same file does not ask again. The start line and the result link to the comparison's page on the dashboard: the answer, what each arm received, a chart whose points link to their runs, and each run as a conversation with the grader's verdicts at the lines they judged (for a Method whose run content stays on this computer, the page reads the transcripts and verdicts from this computer). The result names the answer and its reason, the rule as a sentence, what each arm received, and n per point. Each Method arm runs as a copy with its own Method ID and cache in .compare/NAME/ beside the file. A correction reaches a Method arm through method judge on a training run. A plain Claude Code or Codex arm runs each input as one session with only its instructions and the input, in a folder with the same files that the Method arms get and with the same tools as Method's own steps (web too), and is told each correction in its instructions. An input can have a folder of its own files (inputs/ID/ beside inputs/ID.json, or a case's snapshot/env/), with one folder per files connection: for that input every arm gets those folders in place of its own, and nothing of another input's folder. The guard compares the winning arm with the other arm (with more than two arms, the best other arm) on the guard measure at the checkpoint that decides. A grade holds the runs of its arm up to its checkpoint, so a measure may read earlier runs: when one of them runs again, the grades that could read it grade again. What each arm received names the models that its runs used. Every arm runs in a clean room: a fresh home with only the agents' sign-ins, so no arm sees your own instructions, memory or settings, and each run works on its own copy of the folders it reads. The trial lists each run's transcript. A failed run stops with a plain error; run the comparison again and finished runs are reused. A changed measure grades again without running the arms. Events that change the model cannot run yet.
+A NAME.compare file asks one question about two or more agents and answers "ARM is better" or "Can't tell yet". Read method authoring comparisons before writing one. method run NAME.compare checks the file, runs a trial (what each arm received, what happened to each correction, and the noise at the start with 2 learners per arm), and asks to start the full run: pass the person's answer with method answer RUN_ID --answer '{"go": true}'. A later run of the same file does not ask again. The start line and the result link to the comparison's page on the dashboard. A failed run stops with a plain error; run the comparison again and finished runs are reused. A changed measure grades again without running the arms. Events that change the model cannot run yet.
 --rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
 --fresh: run every step; reuse nothing.
 --verbose: print runtime events.
@@ -359,7 +360,50 @@ Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the
 After a failed action with effects, failure.next.text lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
 `;
 
-export const guideTopics = ["start", "concepts", "execution", "examples", "example", "recipes", "recovery", "commands"] as const;
+const comparisonsChapter = () => `# Comparisons
+
+When the user asks whether one agent is better than another, write a NAME.compare file (YAML or JSON) and run it with \`method run NAME.compare\`. Method checks the file, runs a trial, measures the noise, asks the user to approve, runs every cell, and answers "ARM is better" or "Can't tell yet" by a fixed rule. The comparison's page on the dashboard shows every value with who decided it: you (the user), the writer (you, the agent that wrote the file) or Method.
+
+## The six rules
+
+1. Write the question so that it names the treatment and the test.
+2. Mark \`decided_by_you\` only for what the user said. Everything else is the writer's choice, and the page asks the user to review it.
+3. Write corrections as the expert would say them: "It needs to be X because Y". Use the expert's real corrections when you have them.
+4. One main measure, in plain words, scored on what each input has.
+5. Assumptions are only things that must be true for the answer to mean something. Each one has "if false" and "how to check". Notes go with their part.
+6. After the trial, read one run of each agent, and show the user the page before they approve.
+
+## What Method decides
+
+Do not write these into the file; Method applies them to every comparison and shows them on the page.
+
+- Every arm runs on the same model and effort, in a clean room, with the same task prompt, tools and output file. A plain arm takes the Method arm's model. No arm uses the web unless \`tested: tools\`; arms differ in model only with \`tested: model\`.
+- Every arm hands in the file \`deliverable\` names; a plain agent's last message is not its output.
+- With corrections, a plain arm is a builder: after each correction, a Claude Code (or Codex) session gets the correction and the wrong output of a training run, and edits the agent's instructions file. A Method arm gets each correction through \`method judge\`. Corrections arrive one at a time; each fix or edit has up to 2 hours.
+- \`runs\` counts separate learners. Each learner is its own copy of the arm and gets the full treatment; each checkpoint measures each learner once per input.
+- A correction is received when its fix found a change, found no change was needed, or found no fix, or when the builder finished. A fix that could not test or that stopped is not received, and the comparison stops.
+- One Claude judge marks each item met, partly or not met; partly counts as half. It reads every source the agent read in full.
+- The trial runs each trial input at the start with 2 learners per arm. If they differ by more than half the margin, the comparison stops before approval.
+- Usage per correction is shown for each arm and does not decide.
+
+## The file
+
+Required: \`question\`; \`arms\` (a short name for each: a .method file, or {agent: claude|codex, instructions: FILE}); \`difference\`; \`inputs\` (JSON files of input values or case IDs, the same for each arm); \`measure\` ({name, description, and one of code: SCRIPT, rubric: [sentences], checklist: expected (each input's expected answer is its checklist; add covered: true to score only the items that corrections given so far cover), person: QUESTION}); \`rule\` ({margin, min_runs, at?, guard?: {measure, max_drop}}); \`runs\` (learners per arm).
+
+Optional: \`deliverable\` (the file each arm hands in, such as work/reply.md; needed with a plain arm); \`treatment\` ({events: [{correction, input} or {input}], checkpoints, seed?}); \`teaching\` (the inputs the events use); \`expected\` ({INPUT: FILE}; for a checklist, "- item" lines or JSON [{text, covered_by: [EVENT, ...]}], events by their place in the file); \`other_measures\`; \`trial\` (inputs in the trial, 2 by default); \`assumptions\` (text, or {text, if_false, check}, or {text, limit: true} for a known limit); \`notes\` ({PART: [text]}); \`about_inputs\` ({noun, description, teaching_description, names: {INPUT: NAME}}); \`tested\` (model or tools); \`decided_by_you\` ([PART or PART.FIELD, ...]). \`method validate NAME.compare\` checks the file and lists the writer's choices; \`method schema compare\` prints the full form.
+
+## Worked example: a support-reply agent with 20 corrections
+
+The support lead corrects a reply agent every week. The user asks whether the Method agent follows those corrections better than plain Claude Code. Both arms get the same 20 corrections on four past tickets, one at a time in one shuffled order, and are measured on three new tickets after every 5. Each new ticket's checklist is its expected answer, and each item names the corrections that cover it. The user stated the question and the arms, so only those are marked \`decided_by_you\`.
+
+\`\`\`yaml
+${readFileSync(join(exampleDirectory('support-replies').directory, 'replies.compare'), 'utf8').trimEnd()}
+\`\`\`
+
+The Method arm, its starting instructions, the tickets and the checklists are in \`method authoring example support-replies\`.
+`;
+
+export const guideTopics = ["start", "concepts", "execution", "examples", "example", "recipes", "recovery", "commands", "comparisons"] as const;
 export function authoringGuide(topic = "start", exampleId?: string): string {
   if (exampleId && topic !== 'example') throw Error('Use method authoring example EXAMPLE_ID.');
   const catalog = () => exampleCatalog();
@@ -367,10 +411,10 @@ export function authoringGuide(topic = "start", exampleId?: string): string {
     start: () => start + '\n' + catalog(), concepts: () => concepts,
     execution: () => execution, examples: catalog,
     example: () => exampleId ? renderExample(exampleId) : catalog(),
-    recipes: () => recipes, recovery: () => recovery,
+    recipes: () => recipes, recovery: () => recovery, comparisons: comparisonsChapter,
     commands: () => '# Command reference\n\nLocal authoring commands edit draft files. A signed-in run saves a version when the file changed. publish marks a version for sharing. run also executes a saved version by ID.\n\n' + serverHelp + '\n' + exitHelp + '\n\nCommon errors:\n' + commonErrors + '\n\n' + Object.keys(commandHelp).map(name => renderCommand(name, false)).join('\n'),
   };
-  if (topic === 'all') return ['start','concepts','execution','recipes','recovery','commands'].map(key => topics[key]!()).join('\n\n');
+  if (topic === 'all') return ['start','concepts','execution','recipes','recovery','comparisons','commands'].map(key => topics[key]!()).join('\n\n');
   if (!topics[topic]) throw Error(`Unknown authoring topic '${topic}'. Choose ${guideTopics.join(', ')}, or all.`);
   return topics[topic]!();
 }

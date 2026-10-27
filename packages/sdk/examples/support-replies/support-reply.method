@@ -1,0 +1,46 @@
+format: method/3.4
+name: Support reply
+goal: Write the first reply to a customer ticket from the help center articles, and save it to work/reply.md.
+inputs:
+  ticket: {type: text, description: The customer's message.}
+environment:
+  policy:
+    type: files
+    description: The help center articles that a reply may rely on.
+  work:
+    type: files
+    description: Where the reply is saved.
+steps:
+  read:
+    name: Read the articles
+    purpose: Reads every Markdown article in the policy folder and returns their text headed by the file name.
+    in: {policy: environment.policy}
+    do: {kind: run, runtime: node, entrypoint: read-policy.mjs}
+    out:
+      articles: {type: text, description: "Every article, headed by its file name."}
+  draft:
+    name: Write the reply
+    in: {ticket: inputs.ticket, articles: articles}
+    do:
+      kind: call
+      model: default
+      prompt: |
+        Write the first reply to this customer. Answer what they ask, using only
+        the articles below. Say what happens next and when.
+
+        Ticket:
+        {{ticket}}
+
+        Articles:
+        {{articles}}
+    out:
+      reply: {type: text, description: The reply in Markdown.}
+  save:
+    name: Save the reply
+    purpose: Writes the reply to work/reply.md and returns it.
+    in: {reply: reply, work: environment.work}
+    do: {kind: run, runtime: node, entrypoint: save-reply.mjs}
+    changes: [environment.work]
+    out:
+      saved: {type: text, description: The reply as saved.}
+result: saved

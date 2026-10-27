@@ -213,6 +213,7 @@ Use method schema for field definitions, method authoring concepts for the forma
 - `method authoring example outbound-management`: Reads email and prospect sources, updates persistent CRM state, and saves daily tasks and outreach drafts for review. Teaches: state across runs, script checks, examples of good output, accept, fixtures.
 - `method authoring example social-briefing`: Researches a topic through Grok, alphaXiv, and LinkedIn in the browser, then writes a briefing with quotes and source links. Teaches: browser agent, call, no_effect_reason, accept.
 - `method authoring example daily-briefing`: Turns prepared records of one fictional day into a cited briefing website, using an approved writing example, a source check, and rendering scripts. Teaches: approved example as an input, script tool, source check, website result.
+- `method authoring example support-replies`: A comparison: is a Method reply agent better than plain Claude Code at following a support lead's 20 corrections? Both get the same corrections one at a time and are measured on new tickets after every 5. Teaches: a .compare file: question, arms, deliverable, treatment with checkpoints and a seed, a checklist from each expected answer with covered items, the rule with a guard, learners, assumptions, notes, decided_by_you.
 
 After choosing the step types, read the examples that fit the design. Use their syntax; choose the steps for this task yourself.
 
@@ -409,6 +410,117 @@ State commits after checks. A local checkpoint cannot roll back an external writ
 Two computers can save different content of one Method; each becomes a version with its parent. Going back to earlier content finds its existing version. The id: line keeps a renamed or moved file on its Method; method new-id FILE makes a copy a new Method. On one computer a Method is saved from one file (every checkout of one Git repository counts as one): a copy in another folder or a temporary folder does not run while that file exists, and the error names the file to change. Before a run, a fix or a publish, the file takes the newest version of its Method: an unchanged file takes it, a changed file combines it step by step and file by file, and a step or a script file that you and a teammate changed in different ways stops the command with both texts, until you combine them in the file. A save that a teammate's newer save overtook is kept beside it, and the next run combines the two.
 Use method sync RUN_DIRECTORY to repair a dashboard upload without executing the method again.
 After a failed action with effects, failure.next.text lists what the observers saw. A confirmed effect means the change happened: do not retry the action. A run that is unconfirmed finished all its steps; inspect effects.jsonl and the external system before relying on its result.
+
+
+# Comparisons
+
+When the user asks whether one agent is better than another, write a NAME.compare file (YAML or JSON) and run it with `method run NAME.compare`. Method checks the file, runs a trial, measures the noise, asks the user to approve, runs every cell, and answers "ARM is better" or "Can't tell yet" by a fixed rule. The comparison's page on the dashboard shows every value with who decided it: you (the user), the writer (you, the agent that wrote the file) or Method.
+
+## The six rules
+
+1. Write the question so that it names the treatment and the test.
+2. Mark `decided_by_you` only for what the user said. Everything else is the writer's choice, and the page asks the user to review it.
+3. Write corrections as the expert would say them: "It needs to be X because Y". Use the expert's real corrections when you have them.
+4. One main measure, in plain words, scored on what each input has.
+5. Assumptions are only things that must be true for the answer to mean something. Each one has "if false" and "how to check". Notes go with their part.
+6. After the trial, read one run of each agent, and show the user the page before they approve.
+
+## What Method decides
+
+Do not write these into the file; Method applies them to every comparison and shows them on the page.
+
+- Every arm runs on the same model and effort, in a clean room, with the same task prompt, tools and output file. A plain arm takes the Method arm's model. No arm uses the web unless `tested: tools`; arms differ in model only with `tested: model`.
+- Every arm hands in the file `deliverable` names; a plain agent's last message is not its output.
+- With corrections, a plain arm is a builder: after each correction, a Claude Code (or Codex) session gets the correction and the wrong output of a training run, and edits the agent's instructions file. A Method arm gets each correction through `method judge`. Corrections arrive one at a time; each fix or edit has up to 2 hours.
+- `runs` counts separate learners. Each learner is its own copy of the arm and gets the full treatment; each checkpoint measures each learner once per input.
+- A correction is received when its fix found a change, found no change was needed, or found no fix, or when the builder finished. A fix that could not test or that stopped is not received, and the comparison stops.
+- One Claude judge marks each item met, partly or not met; partly counts as half. It reads every source the agent read in full.
+- The trial runs each trial input at the start with 2 learners per arm. If they differ by more than half the margin, the comparison stops before approval.
+- Usage per correction is shown for each arm and does not decide.
+
+## The file
+
+Required: `question`; `arms` (a short name for each: a .method file, or {agent: claude|codex, instructions: FILE}); `difference`; `inputs` (JSON files of input values or case IDs, the same for each arm); `measure` ({name, description, and one of code: SCRIPT, rubric: [sentences], checklist: expected (each input's expected answer is its checklist; add covered: true to score only the items that corrections given so far cover), person: QUESTION}); `rule` ({margin, min_runs, at?, guard?: {measure, max_drop}}); `runs` (learners per arm).
+
+Optional: `deliverable` (the file each arm hands in, such as work/reply.md; needed with a plain arm); `treatment` ({events: [{correction, input} or {input}], checkpoints, seed?}); `teaching` (the inputs the events use); `expected` ({INPUT: FILE}; for a checklist, "- item" lines or JSON [{text, covered_by: [EVENT, ...]}], events by their place in the file); `other_measures`; `trial` (inputs in the trial, 2 by default); `assumptions` (text, or {text, if_false, check}, or {text, limit: true} for a known limit); `notes` ({PART: [text]}); `about_inputs` ({noun, description, teaching_description, names: {INPUT: NAME}}); `tested` (model or tools); `decided_by_you` ([PART or PART.FIELD, ...]). `method validate NAME.compare` checks the file and lists the writer's choices; `method schema compare` prints the full form.
+
+## Worked example: a support-reply agent with 20 corrections
+
+The support lead corrects a reply agent every week. The user asks whether the Method agent follows those corrections better than plain Claude Code. Both arms get the same 20 corrections on four past tickets, one at a time in one shuffled order, and are measured on three new tickets after every 5. Each new ticket's checklist is its expected answer, and each item names the corrections that cover it. The user stated the question and the arms, so only those are marked `decided_by_you`.
+
+```yaml
+question: After the support lead gives the same 20 corrections to both reply agents, which one follows them better on new tickets?
+arms:
+  method: support-reply.method
+  plain: {agent: claude, instructions: plain-instructions.md}
+difference: How a correction changes the agent. The Method agent gets each correction through method judge; plain Claude Code gets it through a builder that edits its instructions.
+inputs: [tickets/t-201.json, tickets/t-202.json, tickets/t-203.json]
+teaching: [teach/t-101.json, teach/t-102.json, teach/t-103.json, teach/t-104.json]
+about_inputs:
+  noun: ticket
+  description: Three new tickets that the corrections never saw.
+  teaching_description: Four past tickets that the support lead corrected.
+  names: {tickets/t-201.json: Cracked lamp, tickets/t-202.json: Parcel not moving, tickets/t-203.json: Late return}
+deliverable: work/reply.md
+treatment:
+  seed: 7
+  checkpoints: [0, 5, 10, 15, 20]
+  events:
+    - {input: teach/t-101.json, correction: "It needs to ask for one photo of the damage first, because we approve a damaged-item refund only with a photo."}
+    - {input: teach/t-101.json, correction: "It needs to say the money goes back to the card that paid, because customers ask where the refund goes."}
+    - {input: teach/t-102.json, correction: "It needs to say that 7 days with no movement counts as lost, because that is our rule and it ends the waiting."}
+    - {input: teach/t-102.json, correction: "It needs to leave out the carrier's phone number, because we handle the carrier ourselves."}
+    - {input: teach/t-101.json, correction: "It needs to leave out store credit, because we offer it only when the customer asks for it."}
+    - {input: teach/t-102.json, correction: "It needs to say we send a replacement now, because a lost parcel is replaced without more waiting."}
+    - {input: teach/t-104.json, correction: "It needs to check the date against the 30-day limit, because refunds stop 30 days after delivery."}
+    - {input: teach/t-103.json, correction: "It needs to say the address can change only until the label is printed, because after that we cannot stop it."}
+    - {input: teach/t-101.json, correction: "It needs to call the item what the customer called it, because our product codes mean nothing to them."}
+    - {input: teach/t-102.json, correction: "It needs to apologize once, in the first sentence, because repeated apologies read as a script."}
+    - {input: teach/t-104.json, correction: "It needs to promise only what the articles allow, because an exception we cannot keep makes a second complaint."}
+    - {input: teach/t-103.json, correction: "It needs to ask for the new address in full, because a partial address delays the change."}
+    - {input: teach/t-104.json, correction: "It needs to stay under 120 words, because customers read replies on their phones."}
+    - {input: teach/t-104.json, correction: "It needs to give the refund time as 5 business days after approval, because that is when the bank shows it."}
+    - {input: teach/t-102.json, correction: "It needs to stop asking the customer to wait longer, because 7 days is already the limit."}
+    - {input: teach/t-103.json, correction: "It needs to say express shipping takes 1 to 2 business days, because the customer asked how fast it can be."}
+    - {input: teach/t-104.json, correction: "It needs to name the order number the customer gave, because it shows we found the right order."}
+    - {input: teach/t-102.json, correction: "It needs to give the replacement's shipping time as 3 to 5 business days, because customers plan around it."}
+    - {input: teach/t-104.json, correction: "It needs to say no when the articles say no, because a vague maybe makes the customer write again."}
+    - {input: teach/t-101.json, correction: "It needs to end with one clear next step, because a reply without one gets a follow-up question."}
+expected:
+  tickets/t-201.json: expected/t-201.json
+  tickets/t-202.json: expected/t-202.json
+  tickets/t-203.json: expected/t-203.json
+measure:
+  name: corrected items right
+  description: For each new ticket, the share of its checklist items, already covered by a correction, that the reply meets.
+  checklist: expected
+  covered: true
+other_measures:
+  - name: all items right
+    description: For each new ticket, the share of all its checklist items that the reply meets.
+    checklist: expected
+rule:
+  margin: 0.1
+  min_runs: 2
+  at: 20
+  guard: {measure: all items right, max_drop: 0.05}
+runs: 2
+assumptions:
+  - text: The judge marks the checklist the way the support lead would.
+    if_false: The scores show the judge's taste, not the support lead's.
+    check: The support lead marks 10 verdicts on the run pages.
+  - text: The checklist items are what the support lead requires.
+    if_false: An agent can win by following the wrong rules.
+    check: The support lead reviews the 14 corrected items before the full run.
+  - text: The corrections and the checklist come from the same support lead, so both agents are told what the test checks.
+    limit: true
+notes:
+  inputs: [Each ticket runs alone with an empty work folder.]
+  treatment: [The corrections come from the support lead's notes on four past tickets.]
+decided_by_you: [question, arms]
+```
+
+The Method arm, its starting instructions, the tickets and the checklists are in `method authoring example support-replies`.
 
 
 # Command reference
@@ -733,7 +845,7 @@ Read the installed authoring guide. Available offline.
 Usage:
 
 ```sh
-method authoring [start|concepts|execution|examples|recipes|recovery|commands|all]
+method authoring [start|concepts|execution|examples|recipes|recovery|comparisons|commands|all]
 method authoring example EXAMPLE_ID
 ```
 
@@ -1728,8 +1840,7 @@ Models come from the Method's models: (or the account default). --workspace sele
 
 ## Comparisons
 
-A NAME.compare file (YAML or JSON) asks one question about two or more agents and answers "ARM is better" or "Can't tell yet". Write it before anything runs. Required parts: question (one sentence); arms (a short name for each: a .method file, or {agent: claude|codex, instructions: FILE}); difference (the one thing that differs; other_differences lists the rest); inputs (case IDs, which are folders in cases/ beside the file, or JSON files of input values; the same for each arm); measure (the main measure: {name, and one of code: SCRIPT that prints {"score": N}, rubric: [sentences a model grader judges], person: QUESTION a person answers with a number}; higher is better); rule ({margin, min_runs, at?, guard?: {measure, max_drop}}; margin above 0); runs (runs per input at each point). Optional: trial (inputs in the trial, default 2); treatment ({events: [{correction: TEXT, input: ID} or {input: ID}], checkpoints: [N, ...]}, with rule.at); teaching (inputs that treatment events use, kept apart from inputs); other_measures (shown, not deciding); expected ({INPUT: FILE}, hidden from the arms); assumptions (shown as not checked). method schema compare prints the full form; method validate NAME.compare checks it.
-method run NAME.compare refuses a file with a missing part, arms that share a Method ID, or a rule that cannot say "can't tell yet". It runs a trial (each arm on the first inputs, and the treatment events before the first checkpoint), says what each arm received ("Corrections received: 5 of 5") and stops when an arm is short, naming each missing item. Then it asks to start the full run, with the time and cost estimated from the trial: pass the person's answer with method answer RUN_ID --answer '{"go": true}'. A later run of the same file does not ask again. The start line and the result link to the comparison's page on the dashboard: the answer, what each arm received, a chart whose points link to their runs, and each run as a conversation with the grader's verdicts at the lines they judged (for a Method whose run content stays on this computer, the page reads the transcripts and verdicts from this computer). The result names the answer and its reason, the rule as a sentence, what each arm received, and n per point. Each Method arm runs as a copy with its own Method ID and cache in .compare/NAME/ beside the file. A correction reaches a Method arm through method judge on a training run. A plain Claude Code or Codex arm runs each input as one session with only its instructions and the input, in a folder with the same files that the Method arms get and with the same tools as Method's own steps (web too), and is told each correction in its instructions. An input can have a folder of its own files (inputs/ID/ beside inputs/ID.json, or a case's snapshot/env/), with one folder per files connection: for that input every arm gets those folders in place of its own, and nothing of another input's folder. The guard compares the winning arm with the other arm (with more than two arms, the best other arm) on the guard measure at the checkpoint that decides. A grade holds the runs of its arm up to its checkpoint, so a measure may read earlier runs: when one of them runs again, the grades that could read it grade again. What each arm received names the models that its runs used. Every arm runs in a clean room: a fresh home with only the agents' sign-ins, so no arm sees your own instructions, memory or settings, and each run works on its own copy of the folders it reads. The trial lists each run's transcript. A failed run stops with a plain error; run the comparison again and finished runs are reused. A changed measure grades again without running the arms. Events that change the model cannot run yet.
+A NAME.compare file asks one question about two or more agents and answers "ARM is better" or "Can't tell yet". Read method authoring comparisons before writing one. method run NAME.compare checks the file, runs a trial (what each arm received, what happened to each correction, and the noise at the start with 2 learners per arm), and asks to start the full run: pass the person's answer with method answer RUN_ID --answer '{"go": true}'. A later run of the same file does not ask again. The start line and the result link to the comparison's page on the dashboard. A failed run stops with a plain error; run the comparison again and finished runs are reused. A changed measure grades again without running the arms. Events that change the model cannot run yet.
 --rerun STEP: run this step again even when an earlier run can be reused. Repeat for more steps.
 --fresh: run every step; reuse nothing.
 --verbose: print runtime events.

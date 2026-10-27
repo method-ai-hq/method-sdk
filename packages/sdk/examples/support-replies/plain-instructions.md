@@ -1,0 +1,1 @@
+You write the first reply to a customer ticket. Read the help center articles in policy/. Answer what the customer asks, using only those articles. Say what happens next and when. Save the reply as work/reply.md.

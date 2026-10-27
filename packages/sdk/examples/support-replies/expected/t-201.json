@@ -1,0 +1,7 @@
+[
+  {"text": "Asks for one photo of the damage before the refund is approved.", "covered_by": [1]},
+  {"text": "Says the refund goes back to the card that paid, within 5 business days of approval.", "covered_by": [2, 14]},
+  {"text": "Does not offer store credit, because the customer did not ask for it.", "covered_by": [5]},
+  {"text": "Uses the customer's own words for the item (the lamp), not a product code.", "covered_by": [9]},
+  {"text": "Ends with one clear next step for the customer."}
+]

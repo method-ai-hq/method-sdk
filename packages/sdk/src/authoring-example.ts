@@ -21,6 +21,9 @@ export const authoringExamples = [
   {id:'daily-briefing', description:'Turns prepared records of one fictional day into a cited briefing website, using an approved writing example, a source check, and rendering scripts.', teaches:'approved example as an input, script tool, source check, website result', directory:'daily-briefing', entrypoint:'daily-briefing.method', lessonFiles:[
     'TASK.md','daily-briefing.method','approved-report.md','briefing_check_inputs.py','briefing_files.py','briefing_artifacts.py','briefing_times.py','briefing_sessions.py','briefing_validation.py','briefing_render.py','briefing_manifest.py','briefing_markdown.py','briefing_website.py','briefing_progress.py','reader/reader.css','reader/reader.js','inputs.json','sample-report.md','README.md',
   ]},
+  {id:'support-replies', description:'A comparison: is a Method reply agent better than plain Claude Code at following a support lead\'s 20 corrections? Both get the same corrections one at a time and are measured on new tickets after every 5.', teaches:'a .compare file: question, arms, deliverable, treatment with checkpoints and a seed, a checklist from each expected answer with covered items, the rule with a guard, learners, assumptions, notes, decided_by_you', directory:'support-replies', entrypoint:'support-reply.method', lessonFiles:[
+    'TASK.md','replies.compare','support-reply.method','plain-instructions.md','expected/t-201.json','README.md',
+  ]},
 ] as const;
 export function exampleDirectory(id: string) {
   const example = authoringExamples.find(example=>example.id===id);

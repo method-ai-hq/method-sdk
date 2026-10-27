@@ -1,0 +1,7 @@
+[
+  {"text": "Says that orders can be refunded up to 30 days after delivery, so this one cannot.", "covered_by": [7]},
+  {"text": "Does not promise an exception that the articles do not allow.", "covered_by": [11, 19]},
+  {"text": "Offers no store credit, because the customer did not ask for it.", "covered_by": [5]},
+  {"text": "Keeps the reply under 120 words.", "covered_by": [13]},
+  {"text": "Ends with one clear next step for the customer."}
+]

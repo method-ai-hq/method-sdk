@@ -99,7 +99,12 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
   }
   if (command === "validate" && /\.compare$/i.test(file)) {
     // A comparison file: its parts, checked as method run checks them before anything runs.
-    try { const doc = (await import("./compare.js")).readComparison(file); print({ valid: true, executed: false, arms: Object.keys(doc.arms), inputs: doc.inputs.length, rule: (await import("./compare.js")).ruleSentence(doc) }); }
+    try {
+      const compare = await import("./compare.js"), doc = compare.readComparison(file);
+      await compare.armModels(doc, dirname(authoringPath(file)));
+      const review = compare.decisions(doc).filter(d => d.by === "writer").map(d => d.part === "assumptions" ? `assumption: ${d.value}` : `${d.what}: ${d.value}`);
+      print({ valid: true, executed: false, arms: Object.keys(doc.arms), inputs: doc.inputs.length, rule: compare.ruleSentence(doc), writer_choices: review });
+    }
     catch (error) { print({ valid: false, executed: false, error: (error as Error).message }); process.exitCode = 1; }
     return true;
   }
