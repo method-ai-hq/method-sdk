@@ -1,3 +1,17 @@
+# 0.22.0
+
+Use runtime 0.16.5.
+
+- **Method decides the rules of a comparison that a writer could get wrong.** Every arm runs on the same model and effort (a plain arm takes the Method arm's model; arms that differ are refused unless `tested: model`), in a clean room, with the same task prompt and no web unless `tested: tools`. Every arm hands in the file that `deliverable` names; a plain agent's last message is no output.
+- **A plain arm with corrections is a builder.** After each correction, a Claude Code (or Codex) session gets the correction, the task and the wrong output of a training run, and edits the agent's instructions file; the edited file is the arm's state. Appending the correction's words is gone. The builder and Method's fixer each have up to 2 hours per correction.
+- **`runs` counts separate learners.** Each learner is its own copy of the arm (a Method learner has its own Method ID, folder and cache) and gets every correction, one at a time. Each checkpoint measures each learner once per input.
+- **What happened to each correction, per learner:** fixed, no change needed or no fix found (received), could not test or stopped (not received: the comparison stops), edited or not edited for a builder.
+- **One Claude judge** marks each item met, partly or not met, and partly counts as half. It reads every source the agent read in full, in a read-only room. A measure can take its checklist from each input's expected answer (`checklist: expected`), and score only the items that corrections given so far cover (`covered: true`).
+- **Noise check:** the trial runs each trial input at the start with 2 learners per arm, and stops before approval when they differ by more than half the margin.
+- **Usage per correction** for each arm is shown and does not decide.
+- **Who decided each value:** the page shows each value as yours (`decided_by_you`), the writer's, or Method's rule. New optional parts: a measure's `description`, `notes` by part, assumptions with `if_false`, `check` or `limit`, `about_inputs`, and a treatment `seed` for one shuffled order. None of them changes a run.
+- **`method authoring comparisons`** teaches the six rules for writing a comparison, with the `support-replies` example. `method validate NAME.compare` lists the writer's choices.
+
 # 0.21.1
 
 - **A comparison's guard compares the winner with the other arm.** At the checkpoint that decides, the winning arm's guard measure must not be more than `max_drop` below the other arm's (with more than two arms, the best other arm's); otherwise the answer is "can't tell yet". Before, the guard compared an arm with its own score at the first checkpoint. The rule sentence says this.
