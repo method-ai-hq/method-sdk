@@ -15,6 +15,7 @@ import type { parse } from './local-cli.js';
 import { readDocument } from './authoring.js';
 import { withInputsFrom } from './inputs-from.js';
 import { setupFailure } from './failure.js';
+import { currentRuntimeConfig } from './legacy.js';
 
 /** How often a run that waits for the shared state checks again. Tests make it short. */
 export const stateWait={pollMs:10_000};
@@ -101,7 +102,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     await restorePackage(saved,root,client);
     const file=join(directory,'saved.method');writePrivateJson(file,saved.workflow);
     // An older saved version may carry runtime.json in its package; it is part of that version, not a file on this computer.
-    let config=existsSync(join(root,'runtime.json'))?readDocument(join(root,'runtime.json')):{allow_local_processes:true};
+    let config=existsSync(join(root,'runtime.json'))?currentRuntimeConfig(readDocument(join(root,'runtime.json'))):{allow_local_processes:true};
     config=await resolveBindings(client,saved.workflow_id,saved.workflow,config,root,directory);
     const missing=Object.entries(saved.workflow.inputs??{}).filter(([key,def]:any)=>!Object.hasOwn(inputs,key)&&!Object.hasOwn(def,'default'));
     if(missing.length&&!existsSync(join(directory,'checkpoint.json')))throw Object.assign(new Error('Supply the required Method inputs with --inputs FILE.'),{code:'needs_input',missing:Object.fromEntries(missing)});

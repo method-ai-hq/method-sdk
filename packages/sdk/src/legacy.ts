@@ -58,6 +58,12 @@ export function convertLegacy(file: string): boolean {
   return true;
 }
 
+/** An older saved version's runtime.json as the runtime reads it now. Scripts always get HOME, USER and TMPDIR, so a runtime lists no env names. */
+export function currentRuntimeConfig(config: any) {
+  if (!config.runtimes) return config;
+  return { ...config, runtimes: Object.fromEntries(Object.entries(config.runtimes).map(([name, { env: _env, ...runtime }]: [string, any]) => [name, runtime])) };
+}
+
 /** Convert before a command reads the file. A folder that cannot be converted is a plain error for the agent to fix. */
 export function convertLegacyOrThrow(file: string) {
   try { return convertLegacy(file); }

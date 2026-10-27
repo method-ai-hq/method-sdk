@@ -1,6 +1,7 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {runSaved,finishedRun} from '../../packages/sdk/src/run-saved.js';
 import {runCurrentFile} from '../../packages/sdk/src/current-runtime.js';
@@ -45,6 +46,16 @@ for(const version of ['0.7.0','0.8.2'])it(`runs a package collected by the publi
 for(const runtime of ['0.9.3'])it(`runs a package saved with runtime ${runtime}`,async()=>{
  const f=fixture();f.saved.package.runtime=runtime;f.saved.package.digest=packageDigest(f.saved.workflow,f.saved.package);
  expect(await runSaved(f.saved,f.flags,f.client)).toMatchObject({status:'completed'});
+});
+// An older saved version carries runtime.json, and its runtimes may list env names.
+it('runs a package whose runtime.json lists environment names for a runtime',async()=>{
+ const f=fixture();
+ const text=Buffer.from(JSON.stringify({allow_local_processes:true,runtimes:{node:{command:process.execPath,version:process.version,env:['HOME']}}}));
+ const sha=createHash('sha256').update(text).digest('hex');
+ f.saved.package.files.push({path:'runtime.json',sha256:sha,size:text.length});f.saved.package.digest=packageDigest(f.saved.workflow,f.saved.package);
+ const transfer=f.client.transfer.getMockImplementation();f.client.transfer.mockImplementation(async(path:string)=>path.includes(sha)?text:transfer(path));
+ expect(await runSaved(f.saved,f.flags,f.client)).toMatchObject({status:'completed'});
+ expect(JSON.parse(readFileSync(join(f.flags['run-dir'],'runtime.json'),'utf8')).runtimes.node).toEqual({command:process.execPath,version:process.version});
 });
 it('rejects an unsupported package before restoring files, resolving connections, or acquiring state',async()=>{
  const f=fixture();f.saved.package.runtime='99.0.0';f.saved.package.digest=packageDigest(f.saved.workflow,f.saved.package);
