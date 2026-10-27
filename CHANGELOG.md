@@ -1,3 +1,8 @@
+# 0.22.1
+
+- **A teaching input can have its own folder.** As for a measured input, `inputs/ID/` beside `inputs/ID.json` (one subfolder per files connection) replaces the arm's folders of those names for that input's training runs, for Method arms and a plain arm's builder alike. A training run sees only its own input's folders.
+- **`decided_by_you` marks only what the user stated.** The question is the user's only in the user's own words; a rephrased question is the writer's. The comparisons chapter, the field text and `method validate`'s `writer_choices` (now `{reminder, values}`) say so, and the `support-replies` example marks only its arms.
+
 # 0.22.0
 
 Use runtime 0.16.5.
