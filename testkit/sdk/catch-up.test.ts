@@ -265,6 +265,25 @@ it('a file that came without method get combines with an empty base', async () =
   expect(fileHash(readFileSync(join(s.grainne.folder, 'third.mjs')))).toBe(fileHash(readFileSync(join(s.ryan.folder, 'third.mjs'))));
 }, 60_000);
 
+it('a version saved in an older format combines with a file in the current format: the format is not a change', async () => {
+  const s = await shared();
+  // An older CLI saved the newest version: format 3.2, a runtime.json in its files, and a new purpose for step first.
+  const first = s.server.current.get(s.id)!, v1 = s.server.versions.get(first)!;
+  const runtime = new TextEncoder().encode(JSON.stringify({ allow_local_processes: true, runtimes: { node: { command: 'node', version: '20', env: ['HOME'] } } }));
+  s.server.blobs.set(fileHash(runtime), runtime);
+  const workflow = { ...structuredClone(v1.workflow), format: 'method/3.2', files: ['runtime.json'] };
+  workflow.steps.first.purpose = 'Older CLI: returns the first text.';
+  s.server.versions.set('version_older', { ...v1, number: 2, parent: first, workflow, package: { ...v1.package, files: [...v1.package.files, { path: 'runtime.json', sha256: fileHash(runtime), size: runtime.length }] } });
+  s.server.current.set(s.id, 'version_older');
+  // Gráinne's copy has no record of a version, so the base is empty; she already has the same purpose for step first.
+  s.grainne.use(); rmSync(join(s.root, 'gráinne', 'cache', 'versions'), { recursive: true, force: true });
+  s.grainne.edit(doc => { doc.steps.first.purpose = 'Older CLI: returns the first text.'; });
+  const { summary } = await s.grainne.run();
+  expect(summary).toMatchObject({ status: 'completed' });
+  const doc = readDocument(s.grainne.file);
+  expect([doc.format, doc.files, existsSync(join(s.grainne.folder, 'runtime.json'))]).toEqual(['method/3.4', undefined, false]);
+}, 60_000);
+
 // ---------- A teammate's first runs: the same run going, a Method by its name, missing keys and files ----------
 
 it('says when the same run is already going, never for other inputs, and sends no inputs hash for a device run', async () => {

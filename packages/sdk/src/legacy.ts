@@ -64,6 +64,18 @@ export function currentRuntimeConfig(config: any) {
   return { ...config, runtimes: Object.fromEntries(Object.entries(config.runtimes).map(([name, { env: _env, ...runtime }]: [string, any]) => [name, runtime])) };
 }
 
+/**
+ * A saved version of an older format as the current format shows it, for a combine: the format line and a runtime.json
+ * in its files list are not a person's change. The runtime.json file itself still comes with the version, and
+ * convertLegacy moves it into the Method.
+ */
+export function currentFormat(workflow: any) {
+  if (typeof workflow?.format !== 'string' || !/^method\/3\.[0-3]$/.test(workflow.format)) return workflow;
+  const { files, ...content } = workflow;
+  const kept = (files ?? []).filter((name: string) => name !== 'runtime.json');
+  return { ...content, format: 'method/3.4', ...(kept.length ? { files: kept } : {}) };
+}
+
 /** Convert before a command reads the file. A folder that cannot be converted is a plain error for the agent to fix. */
 export function convertLegacyOrThrow(file: string) {
   try { return convertLegacy(file); }

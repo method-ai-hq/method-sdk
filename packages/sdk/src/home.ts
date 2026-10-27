@@ -116,8 +116,9 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
     catch (error) { if (unreachable(error)) return { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` }; base = { workflow: record.workflow ?? {}, files: [] }; }
   }
   const { mergeMethod, mergeFiles, changedSteps } = await import('./merge.js');
+  const { currentFormat } = await import('./legacy.js');
   const theirFiles = theirs.package?.files ?? [];
-  const steps = mergeMethod(base.workflow, ours.workflow, theirs.workflow), files = mergeFiles(base.files, ours.files, theirFiles);
+  const steps = mergeMethod(currentFormat(base.workflow), ours.workflow, currentFormat(theirs.workflow)), files = mergeFiles(base.files, ours.files, theirFiles);
   const ourHashes = new Map(ours.files.map(f => [f.path, f.sha256]));
   // Files that come from theirs. A file here that no save wrote and that differs is the person's own: a conflict too.
   const incoming = files.files.filter(f => ourHashes.get(f.path) !== f.sha256);
