@@ -257,13 +257,15 @@ it('runs a plain arm as one session in a clean room with the same task prompt an
   const tasks = claude.calls().filter(c => c.kind === 'task');
   // The trial runs each arm at the start with 2 learners on every checking input; the full run reuses learner 1.
   expect(tasks).toHaveLength(4);
-  expect(tasks[0].prompt).toBe('Answer with three times n.\n\nInput:\n{\n  "n": 1\n}\n\nHand in your work as the file work/answer.txt in your working folder.');
+  // The cells run 4 at a time, so the calls come in any order: read the one on input one.
+  const first = tasks.find(c => c.prompt.includes('"n": 1'));
+  expect(first.prompt).toBe('Answer with three times n.\n\nInput:\n{\n  "n": 1\n}\n\nHand in your work as the file work/answer.txt in your working folder.');
   // Its room holds the input's own docs and the Method arm's work folder; its tools are the file tools, without the web.
-  expect(tasks[0].files).toEqual(['docs', 'docs/brief-one.md', 'work', 'work/.keep']);
+  expect(first.files).toEqual(['docs', 'docs/brief-one.md', 'work', 'work/.keep']);
   // A clean room: a fresh home, not the user's.
-  expect(tasks[0].home).not.toBe(process.env.HOME);
-  expect(tasks[0].home).toMatch(/\/mr-[^/]+\/home$/);
-  expect(tasks[0].args[tasks[0].args.indexOf('--tools') + 1]).toBe('Read,Write,Edit,Glob,Grep');
+  expect(first.home).not.toBe(process.env.HOME);
+  expect(first.home).toMatch(/\/mr-[^/]+\/home$/);
+  expect(first.args[first.args.indexOf('--tools') + 1]).toBe('Read,Write,Edit,Glob,Grep');
   // The Method arm's Claude Code step ran without web search and fetch.
   const step = claude.calls().find(c => c.kind === 'step');
   expect(step.args[step.args.indexOf('--disallowedTools') + 1]).toBe('WebSearch,WebFetch');
