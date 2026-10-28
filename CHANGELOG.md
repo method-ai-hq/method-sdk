@@ -1,3 +1,7 @@
+# 0.24.3
+
+- **A Claude Code project chat cannot find other chats.** The folder that holds the project folders, and each chat's room, can be entered but not listed. A chat with the Method plugin keeps its Method cache beside its folder, so no path that it sees names the comparison's folder.
+
 # 0.24.2
 
 - **A Claude Code project arm works outside the comparison's folder.** Each chat works in a copy of the project in a folder of its own outside every repository, so it reads no instructions of the folders around it and finds no hidden answers beside it. Its memory is the folder Claude Code names for it, so a memory saved in a project inside a repository is no longer lost. The account's cloud plugins and skills are not synced into the chat.
