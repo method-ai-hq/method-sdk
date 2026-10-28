@@ -4,12 +4,16 @@
  * and a second message in the same chat may correct it. When the chat ends, only the project folder carries over.
  *
  * Every chat runs in a clean room: a fresh HOME with only the Claude Code sign-in and the learner's Claude Code memory, the same model, effort and tools for
- * every arm, and no web unless the comparison tests the tools. A project with the Method plugin also gets the plugin
+ * every arm, and no web unless the comparison tests the tools. The chat works in a copy of the project in a folder of
+ * its own outside every repository and the comparison's folder, as a person's own project is: Claude Code reads no
+ * instructions of the folders around the comparison (CLAUDE.md, AGENTS.md), keys its memory by that folder, and the
+ * agent finds no hidden answers beside it. The account's cloud plugins and skills are not synced into the room. A project with the Method plugin also gets the plugin
  * (loaded with --plugin-dir, as Claude Code loads a plugin for one session) and the method CLI on PATH, signed in to the
  * comparison's Method account. A project without it has no plugin and no method command on PATH.
  */
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, join, relative, sep } from 'node:path';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -96,6 +100,14 @@ export type Turn = { message: string; reply: string; model: string | null; entri
 /** Claude Code's folder for a project in HOME/.claude/projects: the project's path with every other character than a letter or digit as -. */
 const projectSlug = (path: string) => path.replace(/[^a-zA-Z0-9]/g, '-');
 /**
+ * Where a project's chats work: a folder of its own under the system's temporary folder, the same for every chat of the
+ * project (so paths that the agent writes down still hold), outside every repository and the comparison's folder.
+ */
+export function projectDesk(project: string) {
+  const root = realpathSync(process.platform === 'win32' ? tmpdir() : '/tmp');
+  return join(root, 'method-projects', createHash('sha256').update(resolve(project)).digest('hex').slice(0, 16), 'project');
+}
+/**
  * Open one chat in a project folder. Each send is one message of the same chat (the first starts it, the next resume
  * it). close() waits for every Method fix that the chat started to end, puts Claude Code's memory back, and removes the
  * room. artifacts: where each message keeps its prompt, events and transcript (session/attempt-N), as a Method session
@@ -108,11 +120,18 @@ export async function openChat(project: string, settings: ChatSettings, artifact
   const { claudeTranscript } = await import('@withmethod/runtime/transcript.js');
   const room = await cleanRoomEnv('claude', process.env);
   const claude = findProgram('claude', process.env.PATH ?? '');
-  const env: NodeJS.ProcessEnv = { ...room.env, PATH: pathWithoutMethod(process.env.PATH ?? '', room.root) };
+  // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the account's cloud plugins and skills are not synced into the room.
+  const env: NodeJS.ProcessEnv = { ...room.env, PATH: pathWithoutMethod(process.env.PATH ?? '', room.root), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
+  // The chat works in the project's desk; after each message the desk is copied back to the project.
+  const desk = projectDesk(project);
+  copyTree(project, desk);
+  const keep = () => copyTree(desk, project);
   // The memory folder of this project (by its path, and by its real path when they differ).
-  let real = project;
-  try { real = realpathSync(project); } catch { /* the path itself */ }
-  const memoryFolders = [...new Set([real, project].map(path => join(env.HOME!, '.claude', 'projects', projectSlug(path), 'memory')))];
+  let real = desk;
+  try { real = realpathSync(desk); } catch { /* the path itself */ }
+  const memoryFolders = [...new Set([real, desk].map(path => join(env.HOME!, '.claude', 'projects', projectSlug(path), 'memory')))];
+  // The memory folder that Claude Code says it uses for this chat (memory_paths.auto of its start event).
+  let autoMemory: string | null = null;
   if (memory && existsSync(memory)) for (const folder of memoryFolders) copyTree(memory, folder);
   const pluginArgs: string[] = [];
   if (settings.plugins.includes('method')) {
@@ -140,7 +159,7 @@ export async function openChat(project: string, settings: ChatSettings, artifact
       ...(settings.model ? ['--model', settings.model] : []), ...(settings.effort ? ['--effort', settings.effort] : []), ...pluginArgs];
     const started = new Date().toISOString();
     const result = await new Promise<{ code: number; stdout: string; stderr: string }>(done => {
-      const child = spawn(claude, args, { cwd: project, env, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(claude, args, { cwd: desk, env, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '', stderr = '';
       const timer = setTimeout(() => child.kill('SIGTERM'), MESSAGE_LIMIT_MS);
       child.stdout.on('data', c => { stdout += c; }); child.stderr.on('data', c => { stderr += c; });
@@ -152,7 +171,10 @@ export async function openChat(project: string, settings: ChatSettings, artifact
     writeFileSync(join(attempt, 'stderr.log'), result.stderr, { mode: 0o600 });
     const entries = claudeTranscript(message, result.stdout, { started, times: [] });
     writeFileSync(join(attempt, 'transcript.jsonl'), entries.map((e: any) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
+    keep();
     const events = result.stdout.split('\n').flatMap(line => { try { return line ? [JSON.parse(line)] : []; } catch { return []; } });
+    const auto = events.find(e => e?.type === 'system' && e.subtype === 'init')?.memory_paths?.auto;
+    if (typeof auto === 'string' && auto) autoMemory = auto.replace(/[\\/]+$/, '');
     const last = events.filter(e => e?.type === 'result').at(-1);
     if (!last || last.is_error || last.subtype !== 'success') {
       const limit = events.some(e => e?.type === 'rate_limit_event' && e.rate_limit_info?.status === 'rejected');
@@ -166,16 +188,21 @@ export async function openChat(project: string, settings: ChatSettings, artifact
   const close = async () => {
     try {
       if (settings.method) await waitForFixes(settings.method.cache);
+      keep();
       if (memory) {
-        // The memory that Claude Code kept for this project: its own folder, or else the only project folder it wrote.
+        // The memory that Claude Code kept for this project: the folder it named, else its folder for the desk (of
+        // the two, the one with the latest change).
         const projects = join(env.HOME!, '.claude', 'projects');
-        // With two copies (the path and the real path), the one with the latest change.
         const newest = (dir: string) => Math.max(0, ...Object.keys(projectFiles(dir)).map(p => statSync(join(dir, p)).mtimeMs));
-        const own = memoryFolders.filter(existsSync).sort((a, b) => newest(b) - newest(a))[0];
-        const written = own ?? (existsSync(projects) ? readdirSync(projects).map(name => join(projects, name, 'memory')).find(existsSync) : undefined);
-        if (written) copyTree(written, memory);
+        const own = autoMemory && existsSync(autoMemory) ? autoMemory : memoryFolders.filter(existsSync).sort((a, b) => newest(b) - newest(a))[0];
+        if (own) copyTree(own, memory);
+        // Memory that Claude Code wrote for any other folder is kept too, so nothing it saved is lost; what the
+        // learner's memory has already wins.
+        const others = existsSync(projects) ? readdirSync(projects).map(name => join(projects, name, 'memory'))
+          .filter(dir => existsSync(dir) && ![own, ...memoryFolders].some(o => o && resolve(o) === resolve(dir)) && Object.keys(projectFiles(dir)).length) : [];
+        for (const dir of others) cpSync(dir, memory, { recursive: true, force: false, errorOnExist: false });
       }
-    } finally { await room.remove(); }
+    } finally { await room.remove(); removeTree(dirname(desk)); }
   };
   return { send, close };
 }

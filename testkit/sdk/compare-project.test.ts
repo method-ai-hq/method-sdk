@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { compareStage, compileComparison, decide, readComparison } from '../../packages/sdk/src/compare.js';
@@ -24,6 +24,9 @@ const lines = (file: string) => existsSync(file) ? readFileSync(file, 'utf8').sp
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'method-project-'));
   roots.push(root);
+  // The comparison's folder is in a repository, with instructions, as a person's study folder can be.
+  mkdirSync(join(root, '.git'));
+  writeFileSync(join(root, 'AGENTS.md'), 'Use Method for everything.');
   for (const [dir, id, n] of [['inputs', 'one', 1], ['inputs', 'two', 2], ['teaching', 't1', 5], ['teaching', 't2', 6]] as const) {
     mkdirSync(join(root, dir, id, 'docs'), { recursive: true });
     writeFileSync(join(root, dir, `${id}.json`), JSON.stringify({ n }));
@@ -52,8 +55,9 @@ function fixture() {
 }
 
 /**
- * A stand-in for Claude Code on PATH, as a project chat runs it. A task message: it reads NOTES.md and its Claude Code
- * memory (HOME/.claude/projects/SLUG/memory/MEMORY.md) and answers n plus the number of "add one" lines in them, in the
+ * A stand-in for Claude Code on PATH, as a project chat runs it. As Claude Code does, it keys its memory by the
+ * repository that holds the folder (else the folder), names that memory folder in its start event, and reads the
+ * AGENTS.md of the folders above. A task message: it reads NOTES.md and its Claude Code memory (HOME/.claude/projects/SLUG/memory/MEMORY.md) and answers n plus the number of "add one" lines in them, in the
  * file the message names. A second message (a resumed chat): without method on its PATH it saves the words in its
  * memory; with method it saves them in NOTES.md, builds a Method and runs method judge (as a Bash call it does not run).
  * The probe: it answers with what it saved. Each call is logged with its arguments, prompt and environment.
@@ -66,13 +70,17 @@ const fs = require('fs'), path = require('path');
 const argv = process.argv.slice(2);
 let prompt = '';
 const out = event => console.log(JSON.stringify(event));
+const above = dir => dir === path.dirname(dir) ? [dir] : [dir, ...above(path.dirname(dir))];
 process.stdin.on('data', d => prompt += d).on('end', () => {
   const cwd = process.cwd();
   const hasMethod = (process.env.PATH || '').split(':').some(dir => fs.existsSync(path.join(dir, 'method')));
   fs.appendFileSync(${JSON.stringify(join(root, 'claude-calls.jsonl'))}, JSON.stringify({ args: argv, prompt, cwd, files: fs.readdirSync(cwd, { recursive: true }).sort(), home: process.env.HOME,
-    hasMethod, config: process.env.METHOD_CONFIG_DIR || null, memory: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY || null }) + '\\n');
-  out({ type: 'system', subtype: 'init', model: argv[argv.indexOf('--model') + 1] });
-  const memory = path.join(process.env.HOME, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), 'memory', 'MEMORY.md');
+    hasMethod, config: process.env.METHOD_CONFIG_DIR || null, memory: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY || null,
+    traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC || null, instructions: above(cwd).filter(d => fs.existsSync(path.join(d, 'AGENTS.md'))) }) + '\\n');
+  const repo = above(cwd).find(d => fs.existsSync(path.join(d, '.git'))) || cwd;
+  const memoryDir = path.join(process.env.HOME, '.claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'), 'memory');
+  out({ type: 'system', subtype: 'init', model: argv[argv.indexOf('--model') + 1], memory_paths: { auto: memoryDir + '/' } });
+  const memory = path.join(memoryDir, 'MEMORY.md');
   const notes = hasMethod ? path.join(cwd, 'NOTES.md') : memory, known = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : '';
   let result = 'Done.';
   const task = /task (\\d+)\\. Save your answer as (\\S+)\\./.exec(prompt);
@@ -120,7 +128,7 @@ it('each event is a new chat in the project folder: the task, then the correctio
   const chats = calls();
   // Two events per arm: each a task message and a second message in the same chat (resumed by its session ID).
   for (const arm of ['plain', 'method']) {
-    const own = chats.filter(c => c.cwd.includes(`/arms/${arm}/`));
+    const own = chats.filter(c => c.hasMethod === (arm === 'method'));
     expect(own).toHaveLength(2 * 2 + 1); // and the probe at checkpoint 2
     const [first, second, third, fourth] = own;
     expect(first.prompt).toBe('Our guide: answer with the number.\n\nHere is task 5. Save your answer as answer.txt.');
@@ -133,6 +141,11 @@ it('each event is a new chat in the project folder: the task, then the correctio
     expect(first.files).toContain('docs/brief.md');
     expect(first.home).not.toBe(process.env.HOME);
     expect(first.memory).toBeNull();
+    // The chat works outside the comparison's folder and its repository: no instructions from the folders above, no
+    // hidden answers beside it, and the account's cloud plugins are not synced in.
+    expect([root, realpathSync(root)].some(r => first.cwd.startsWith(r))).toBe(false);
+    expect(first.instructions).toEqual([]);
+    expect(first.traffic).toBe('1');
     expect(first.args[first.args.indexOf('--model') + 1]).toBe('claude-opus-5-5');
     expect(first.args[first.args.indexOf('--disallowedTools') + 1]).toBe('WebSearch,WebFetch');
     expect(first.args[first.args.indexOf('--allowedTools') + 1]).toContain('Bash');
