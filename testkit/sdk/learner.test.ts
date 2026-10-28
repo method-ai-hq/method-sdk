@@ -279,7 +279,11 @@ function fakeClient(judgments: any[]) {
         for (const j of judgments) if (changed.includes(j.id)) j.pending = !body.handled;
         return { changed };
       }
-      if (verb === 'POST' && path === `/api/cli/methods/${METHOD_ID}/judgments/outcomes`) { this.outcomes.push(...body.outcomes); return { changed: [] }; }
+      if (verb === 'POST' && path === `/api/cli/methods/${METHOD_ID}/judgments/outcomes`) {
+        this.outcomes.push(...body.outcomes);
+        for (const o of body.outcomes) { const j = judgments.find(j => j.id === o.id); if (j) j.outcome = o.outcome; }
+        return { changed: [] };
+      }
       if (verb === 'POST' && path === '/api/cli/files/check') return { present: body.hashes };
       const saved = /^\/api\/cli\/methods\/[^/]+\/versions\/([^/]+)$/.exec(path);
       if (verb === 'PUT' && saved) return { version_id: saved[1], version_number: ++version };
@@ -332,6 +336,36 @@ it('the loop gives the correction back when the agent hits a usage limit, and me
   await backgroundFix(client, file, [JUDGMENT], { runCases: runCases as any });
   expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'stopped', error: 'Claude Code reached the usage limit of your plan. It resets at 4pm.' });
 });
+
+it('a give-back or a report that does not reach the account is sent by the next fix, so no correction is lost', async () => {
+  const root = setup();
+  const { file } = await project(root);
+  const judgments = [{ id: JUDGMENT, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: '2026-10-28T10:00:00Z', pending: true, outcome: null as string | null }];
+  const client = fakeClient(judgments), request = client.request;
+  // The connection drops after the fix took the correction: the agent stops, and the give-back and the report fail.
+  let down = false;
+  client.request = async function (path: string, verb = 'GET', body?: any) {
+    if (down && verb === 'POST' && /judgments\/(handled|outcomes)$/.test(path)) throw Object.assign(Error('fetch failed: read ECONNRESET'), { code: 'network' });
+    return request.call(this, path, verb, body);
+  };
+  stub(async () => { down = true; throw Error('fetch failed: read ECONNRESET'); });
+  await backgroundFix(client, file, [JUDGMENT], { runCases: runCases as any });
+  expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'stopped' });
+  expect(judgments[0]).toMatchObject({ pending: false, outcome: null });
+  // The next fix takes it again and fixes it, though the account still shows it as taken.
+  down = false;
+  stub(codeStep);
+  await backgroundFix(client, file, [JUDGMENT], { runCases: runCases as any });
+  expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed' } });
+  expect(judgments[0]!.outcome).toBe('fixed');
+  // A report that fails is sent by the next fix, and the correction is not fixed twice.
+  judgments[0]!.outcome = null;
+  writeFileSync(join(root, 'cache', 'fixes', METHOD_ID, 'taken.json'), JSON.stringify({ [JUDGMENT]: { id: JUDGMENT, outcome: 'fixed', summary: 'Replies now send non-compete clauses to Legal.' } }));
+  stub(async () => { throw Error('the learner ran again'); });
+  expect(await fixCorrections(client, file, { runCases: runCases as any })).toBeUndefined();
+  expect(judgments[0]!.outcome).toBe('fixed');
+  expect(existsSync(join(root, 'cache', 'fixes', METHOD_ID, 'taken.json'))).toBe(false);
+}, 60_000);
 
 // ---------- The parts ----------
 

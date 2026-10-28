@@ -74,12 +74,34 @@ export async function fixCorrections(client: MethodClient, file: string, options
   const methodId = typeof document.id === 'string' && methodIdPattern.test(document.id) ? document.id : undefined;
   if (!methodId || !client.token()) return undefined;
   const all = await methodJudgments(client, file, methodId, options.waitMs);
+  // What an earlier fix here took and could not give back or report: the report is sent now, and a correction that it
+  // did not decide is this fix's again. The account shows each as taken, with no outcome.
+  const left = takenHere(methodId), mine = all.filter(j => j.id in left && j.verdict === 'wrong' && !j.pending && !j.outcome);
+  const unsent = mine.flatMap(j => left[j.id] ? [left[j.id]!] : []), kept = mine.filter(j => !left[j.id]);
+  saveTaken(methodId, Object.fromEntries(mine.map(j => [j.id, left[j.id] ?? null])));
+  if (unsent.length && await reportOutcomes(client, methodId, unsent)) saveTaken(methodId, Object.fromEntries(kept.map(j => [j.id, null])));
   const waiting = all.filter(j => j.pending && j.verdict === 'wrong');
-  if (!waiting.length) return undefined;
+  if (!waiting.length && !kept.length) return undefined;
   const handled = (ids: string[], value: boolean) => client.request<{ changed: string[] }>(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/handled`, 'POST', { ids, handled: value });
-  const taken = new Set((await handled(waiting.map(j => j.id), true)).changed);
-  const claimed = waiting.filter(j => taken.has(j.id)).sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const taken = new Set([...kept.map(j => j.id), ...waiting.length ? (await handled(waiting.map(j => j.id), true)).changed : []]);
+  const claimed = [...kept, ...waiting].filter(j => taken.has(j.id)).sort((a, b) => a.created_at.localeCompare(b.created_at));
   if (!claimed.length) return undefined;
+  // Until the account has each one back or has its outcome, this computer keeps it.
+  saveTaken(methodId, { ...takenHere(methodId), ...Object.fromEntries([...taken].map(id => [id, null])) });
+  // Give corrections back to the account; those it did not get stay taken here, and the next fix takes them again.
+  const giveBack = async (ids: string[]) => {
+    if (!ids.length) return;
+    try { await handled(ids, false); } catch { return; }
+    saveTaken(methodId, Object.fromEntries(Object.entries(takenHere(methodId)).filter(([id]) => !ids.includes(id))));
+  };
+  // Send outcomes to the account; those it did not get are sent by the next fix.
+  const report = async (decided: CorrectionOutcome[]) => {
+    const sent = await reportOutcomes(client, methodId, decided);
+    saveTaken(methodId, Object.fromEntries(Object.entries(takenHere(methodId)).flatMap(([id, o]) => {
+      const outcome = decided.find(d => d.id === id);
+      return !outcome ? [[id, o]] : sent ? [] : [[id, outcome]];
+    })));
+  };
   const outcomes: CorrectionOutcome[] = [];
   let applied = 0, log = '';
   try {
@@ -105,18 +127,32 @@ export async function fixCorrections(client: MethodClient, file: string, options
       outcomes.push(learned.outcome);
       cleanRoom(learned);
     }
-    const retry = outcomes.filter(o => o.outcome === 'retry').map(o => o.id);
-    if (retry.length) await handled(retry, false).catch(() => undefined);
-    await reportOutcomes(client, methodId, outcomes.filter(o => o.outcome !== 'retry' && o.outcome !== 'elsewhere'));
+    await giveBack(outcomes.filter(o => o.outcome === 'retry').map(o => o.id));
+    await report(outcomes.filter(o => o.outcome !== 'retry' && o.outcome !== 'elsewhere'));
     return { file, judgments: claimed.map(j => j.id), outcomes, applied, log };
   } catch (error) {
-    // Stopped before it decided them: those corrections wait for the next loop; the decided ones keep their outcome.
-    const undecided = [...taken].filter(id => !outcomes.some(o => o.id === id));
-    await handled(undecided, false).catch(() => undefined);
-    await reportOutcomes(client, methodId, outcomes.filter(o => o.outcome !== 'retry'));
-    for (const outcome of outcomes) saveOutcome(methodId, file, outcome, log);
+    // Stopped before it decided them (or with one to fix again): those corrections wait for the next loop; the decided
+    // ones keep their outcome.
+    const undecided = [...taken].filter(id => !outcomes.some(o => o.id === id && o.outcome !== 'retry'));
+    await giveBack(undecided);
+    await report(outcomes.filter(o => o.outcome !== 'retry'));
+    for (const outcome of outcomes) if (outcome.outcome !== 'retry') saveOutcome(methodId, file, outcome, log);
     throw Object.assign(error instanceof Error ? error : Error(String(error)), { judgments: undecided, ...(log ? { log } : {}) });
   }
+}
+
+/**
+ * The corrections that this computer took from the account and has not given back or reported yet: null for one it
+ * has not decided, else its outcome. fixes/<methodId>/taken.json.
+ */
+function takenHere(methodId: string): Record<string, CorrectionOutcome | null> {
+  try { return JSON.parse(readFileSync(join(fixFolder(methodId), 'taken.json'), 'utf8')); } catch { return {}; }
+}
+function saveTaken(methodId: string, taken: Record<string, CorrectionOutcome | null>) {
+  const path = join(fixFolder(methodId), 'taken.json');
+  if (!Object.keys(taken).length) { rmSync(path, { force: true }); return; }
+  mkdirSync(fixFolder(methodId), { recursive: true, mode: 0o700 });
+  writePrivateJson(path, taken);
 }
 
 /** Remove the learner's copies of the Method; its tries (sessions, transcripts and gate failures) stay for the log. */
@@ -239,16 +275,17 @@ export async function backgroundFix(client: MethodClient, file: string, ids: str
   }
 }
 
-/** Send what the loop did with each correction, with the reason or the question. */
+/** Send what the loop did with each correction, with the reason or the question. Returns whether the account got it. */
 async function reportOutcomes(client: MethodClient, methodId: string, outcomes: CorrectionOutcome[]) {
-  if (!outcomes.length) return;
+  if (!outcomes.length) return true;
   try {
     await client.request(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/outcomes`, 'POST', { outcomes: outcomes.map(o => {
       const detail = o.outcome === 'held' ? [o.by ?? 'Someone', o.detail].filter(Boolean).join(': ') : o.outcome === 'already_changed' ? (o.by ? `${o.by} changed it after this run.` : undefined) : o.summary ?? o.detail;
       return { id: o.id, outcome: o.outcome, ...(o.outcome === 'could_not_test' && o.reason ? { reason: o.reason } : {}), ...(o.outcome === 'question' && o.question ? { question: o.question.slice(0, 1000) } : {}),
         ...(detail?.trim() ? { detail: detail.trim().slice(0, 500) } : {}) };
     }) });
-  } catch (error: any) { process.stderr.write(`The account did not record what happened to the corrections: ${error.message}\n`); }
+    return true;
+  } catch (error: any) { process.stderr.write(`The account did not record what happened to the corrections: ${error.message}. The next fix sends it again.\n`); return false; }
 }
 
 /** The version that a judged run ran: from its run folder here, else from its account record. */

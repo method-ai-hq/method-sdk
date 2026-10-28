@@ -7,6 +7,7 @@
 - **Outcomes.** fixed, no change needed (the run, or the Method as it is now, already does what the correction asks; its check stays), no fix found, could not test, question, held. not_reproduced and not_fixable_here are gone.
 - **Removed:** improve.method and its download (`METHOD_IMPROVE_METHOD`), the case writer (`caseFromCorrection`), correction kinds and candidate kinds, finding the step by trying, ranking by fewest words, the pruning sweep, the later check of other cases, `method __model`, and a learned rule added without a test.
 - **Corrections are fixed on a computer.** Method no longer fixes corrections in the cloud. `method judge` and `method wait` say that a correction that no computer here takes will be fixed the next time the Method runs on a computer with Claude Code or Codex.
+- **A network failure loses no correction.** When the account does not get a correction back, or does not get its outcome (no connection, a reset), this computer keeps it, and the next fix sends the outcome or fixes the correction again. Before, the correction stayed taken in the account and no fix took it again.
 - **The authoring guide** starts with the principles of a Method that just works.
 - **Comparisons:** the Method arm's learner is this session; it and the plain builder have the same model and the same 2 hours for each correction, and the page shows what each correction changed.
 
