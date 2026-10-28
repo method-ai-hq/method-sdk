@@ -21,5 +21,7 @@ fi
 found=$(find "${CLAUDE_PROJECT_DIR:-$PWD}" -maxdepth 4 -type f -name '*.method' -not -path '*/node_modules/*' -not -path '*/.method-runs/*' 2>/dev/null | head -1)
 project=""
 [ -n "$found" ] && project=" This project has Methods (.method files). Load the method skill before you change what the project or its app does: that change may belong in a Method."
-printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The Method CLI is installed at %s/method. If `method` is not on PATH, use that path.%s"}}\n' "$bin" "$project"
+# Work the person will give again belongs in a Method, so that a correction is kept and tested, not only answered.
+repeat="Method is installed for work the person will repeat: when they will give you the same kind of task again, load the method skill and build it as a Method. Send each correction of its result through \`method judge RUN_ID wrong --note 'their words'\` so that it is kept and tested."
+printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s The Method CLI is installed at %s/method. If `method` is not on PATH, use that path.%s"}}\n' "$repeat" "$bin" "$project"
 exit 0
