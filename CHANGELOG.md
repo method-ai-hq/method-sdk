@@ -1,3 +1,7 @@
+# 0.24.4
+
+- **Claude Code uses Method for work the person will repeat.** The Method plugin's skill applies when the person says they will give the same kind of task again, when the work follows a written guide or rules for a recurring task, and when they correct a result and expect it to stay corrected. At the start of each chat the plugin says so in one line, with `method judge` for corrections. A correction of repeated work that no Method does yet: Claude Code builds a Method from the work it just did, runs it, and judges that run. It tells the person what was kept and where, and never says a correction is kept when nothing was saved.
+
 # 0.24.3
 
 - **A Claude Code project chat cannot find other chats.** The folder that holds the project folders, and each chat's room, can be entered but not listed. A chat with the Method plugin keeps its Method cache beside its folder, so no path that it sees names the comparison's folder.
