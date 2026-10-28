@@ -37,8 +37,9 @@ function fixture(extra: Record<string, unknown> = {}) {
   const file = join(root, 'numbers.compare');
   writeFileSync(file, JSON.stringify({
     question: 'Which agent gives the larger number?', arms: { a: 'a/agent.method', b: 'b/agent.method' }, difference: 'The factor in the answer script.',
-    inputs: ['inputs/one.json', 'inputs/two.json'], measure: { name: 'size', code: 'size.mjs' }, rule: { margin: 0.1, min_runs: 1 }, runs: 1, ...extra,
+    inputs: ['inputs/one.json', 'inputs/two.json'], measure: { name: 'size', code: 'size.mjs' }, rule: { margin: 0.1, min_runs: 1 }, runs: 1, samples: { 'inputs/one.json': 'sample.txt' }, ...extra,
   }));
+  writeFileSync(join(root, 'sample.txt'), '1');
   return { root, file };
 }
 const answer = (root: string, arm: string, factor: number) => writeFileSync(join(root, arm, 'answer.mjs'),
@@ -1174,11 +1175,12 @@ it('method test --baseline answers which version is better', () => {
   expect(baselineAnswer(counts(1, 0, 1)).answer).toBe("Can't tell yet");
 });
 
-it('method authoring comparisons teaches the seven rules with a support-reply example, and its example comparison is valid', async () => {
+it('method authoring comparisons teaches the eight rules with a support-reply example, and its example comparison is valid', async () => {
   const { authoringGuide } = await import('../../packages/sdk/src/method-help.js');
   const { exampleDirectory } = await import('../../packages/sdk/src/authoring-example.js');
   const guide = authoringGuide('comparisons');
-  expect(guide.match(/^\d\. /gm)).toHaveLength(7);
+  expect(guide.match(/^\d\. /gm)).toHaveLength(8);
+  expect(guide).toContain('Show, do not explain: every word on the page is backed by the literal thing the agent sees or the grader checks.');
   expect(guide).toContain('Publish the draft with `method publish NAME.compare` and give the user the link before any run, so they can review every part.');
   expect(guide).toContain('Write the question so that it names the treatment and the test.');
   expect(guide).toContain('"It needs to be X because Y"');
@@ -1187,4 +1189,22 @@ it('method authoring comparisons teaches the seven rules with a support-reply ex
   const doc = readComparison(join(exampleDirectory('support-replies').directory, 'replies.compare'));
   expect(doc.treatment!.events.filter(e => e.correction)).toHaveLength(20);
   expect(authoringGuide('all')).toContain('# Comparisons');
+});
+
+it('shows the literal things first: each agent\'s prompt and files as the run builds them, and a measure without its exhibit is an error', async () => {
+  const { comparisonExhibits, armSources } = await import('../../packages/sdk/src/compare-exhibits.js');
+  const { taskPrompt } = await import('../../packages/sdk/src/compare.js');
+  const { root, file } = plainFixture({ labels: { brief: 'docs/brief-one.md' }, notes: { arms: ['Each “brief” and the "secret sauce" are read; see WIDGET and notes.md.'] } });
+  const doc = readComparison(file), shown = await comparisonExhibits(doc, root, await armSources(doc, root));
+  expect(shown.errors).toEqual([]);
+  const prompt = shown.exhibits.see.find(e => e.id === 'prompt-plain')!;
+  expect(prompt.blocks).toEqual([{ name: 'The session prompt on one (a checking input)', text: `Answer with three times n.\n\n${taskPrompt({ n: 1 }, 'work/answer.txt')}` }]);
+  // Both arms get the same folders for an input (cellFolders, as the run): the input's own docs in place of the arm's.
+  expect(shown.exhibits.see.find(e => e.id === 'files-checking')!.blocks.map(b => [b.name, b.text])).toEqual([['docs/brief-one.md', 'brief one'], ['work/.keep', '']]);
+  expect(shown.exhibits.labels).toMatchObject({ brief: 'file-docs-brief-one-md', size: 'scoring-size', 'answer.txt': 'output' });
+  expect(shown.review).toEqual(['WIDGET', 'notes.md', 'secret sauce']);
+  // Without a sample output, the code measure's scoring cannot be shown: an error, and method validate says so.
+  const bare = fixture();
+  const plainDoc = { ...readComparison(bare.file), samples: undefined };
+  expect((await comparisonExhibits(plainDoc, bare.root, await armSources(plainDoc, bare.root))).errors).toEqual([expect.stringContaining('The measure size has no exhibit')]);
 });

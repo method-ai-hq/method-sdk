@@ -63,11 +63,21 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
     inputs: ['inputs/one.json', 'inputs/two.json'], teaching: ['inputs/teach.json'], about_inputs: { noun: 'number', description: 'Two small numbers.', names: { 'inputs/one.json': 'One' } },
     measure: { name: 'size', code: 'size.mjs', description: 'The number over ten.' }, rule: { margin: 0.1, min_runs: 1, at: 2 }, runs: 1,
     treatment: { events: [{ correction: 'It needs to be bigger because small is wrong.', input: 'inputs/teach.json' }, { correction: 'It needs a unit because readers ask.', input: 'inputs/teach.json' }], checkpoints: [0, 2] },
-    assumptions: [{ text: 'The measure is fair.', if_false: 'The sizes say nothing.', check: 'Read 5 runs.' }], decided_by_you: ['question', 'rule'], notes: { treatment: ['Both corrections are about size.'] } }));
+    assumptions: [{ text: 'The measure is fair.', if_false: 'The sizes say nothing.', check: 'Read 5 runs.' }], decided_by_you: ['question', 'rule'], notes: { treatment: ['Both corrections are about size.'] },
+    samples: { 'inputs/one.json': 'samples/one.txt' }, labels: { 'small number': 'size' } }));
+  mkdirSync(join(root, 'samples'));
+  writeFileSync(join(root, 'samples', 'one.txt'), '4');
   delivery.deliver = async (event: any) => ({ received: true, outcome: event.index === 1 ? 'fixed' : 'no_change_needed' });
   const { inputs } = await compileComparison(file);
   const spec = sent.specs.at(-1);
-  expect(Object.keys(spec).sort()).toEqual(['arms', 'assumptions', 'decisions', 'difference', 'inputs', 'judge', 'learners', 'main_measure', 'method_rules', 'notes', 'other_measures', 'question', 'rule', 'runs_per_point', 'treatment']);
+  expect(Object.keys(spec).sort()).toEqual(['arms', 'assumptions', 'decisions', 'difference', 'exhibits', 'inputs', 'judge', 'learners', 'main_measure', 'method_rules', 'notes', 'other_measures', 'question', 'rule', 'runs_per_point', 'treatment']);
+  // The exhibits: the literal correction each arm gets, the sample output, and the measure's code run on it, with the labels that link to them.
+  expect(spec.exhibits.see.map((e: any) => e.id)).toEqual(['correction', 'output']);
+  expect(spec.exhibits.see[0].blocks.map((b: any) => b.text)).toEqual(['It needs to be bigger because small is wrong.', 'It needs to be bigger because small is wrong.']);
+  expect(spec.exhibits.see[1].blocks).toEqual([{ name: 'output', text: '4' }]);
+  expect(spec.exhibits.scored).toEqual([{ id: 'scoring-size', title: 'How “size” scores one output', caption: expect.stringContaining('size.mjs run on the sample output for One'),
+    blocks: [{ name: 'What size.mjs reads', text: JSON.stringify({ input: 'inputs/one.json', output: '4', expected: null, run_dir: '', artifacts: '', probe: null }, null, 2) }, { name: 'What size.mjs printed', text: '{"score":0.4}\n' }] }]);
+  expect(spec.exhibits.labels).toEqual({ correction: 'correction', 'feedback writer': 'correction', size: 'scoring-size', 'small number': 'scoring-size' });
   expect(spec.inputs).toMatchObject({ checking: ['inputs/one.json', 'inputs/two.json'], teaching: ['inputs/teach.json'], noun: 'number', description: 'Two small numbers.',
     details: { 'inputs/one.json': { name: 'One', file: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/), bytes: 12 } }, 'inputs/teach.json': { name: 'teach' } } });
   expect(spec.treatment).toEqual({ kind: 'Corrections', items: 2, checkpoints: [0, 2], order: 'given', list: [{ input: 'inputs/teach.json', text: 'It needs to be bigger because small is wrong.' }, { input: 'inputs/teach.json', text: 'It needs a unit because readers ask.' }] });
@@ -92,6 +102,9 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   await compareStage('check', { comparison, runs, grades, treated });
   const trial = sent.stages.find(s => s.stage === 'trial');
   expect(Object.keys(trial).sort()).toEqual(['cost_estimate', 'stage', 'trial']);
+  // The trial's worked example from each arm's real runs: the words it received, what it handed in, and what the measure printed.
+  expect(trial.trial.examples.filter((e: any) => e.arm === 'a').map((e: any) => [e.id, e.replaces ?? null, e.blocks.map((b: any) => b.text)])).toEqual([
+    ['correction-a', 'correction', ['It needs to be bigger because small is wrong.']], ['output-a', 'output', ['1']], ['scoring-a', null, ['{"score":0.1}\n']]]);
   // The noise names each arm's start value per learner, and the estimate counts the runs as the page does (2 arms × 2 inputs × 1 learner × 2 checkpoints).
   expect(trial.trial.noise).toEqual({ spread: 0, margin: 0.1, start: { a: [0.15, 0.15], b: [0.15, 0.15] } });
   // The one learner got both corrections in the trial, so none is left to give.

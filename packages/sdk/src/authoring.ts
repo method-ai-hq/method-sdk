@@ -103,7 +103,13 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
       const compare = await import("./compare.js"), doc = compare.readComparison(file);
       await compare.armModels(doc, dirname(authoringPath(file)));
       const review = compare.decisions(doc).filter(d => d.by === "writer").map(d => d.part === "assumptions" ? `assumption: ${d.value}` : `${d.what}: ${d.value}`);
-      print({ valid: true, executed: false, arms: Object.keys(doc.arms), inputs: doc.inputs.length, rule: compare.ruleSentence(doc), writer_choices: { reminder: "Mark a value as yours only when the user said it.", values: review } });
+      // The exhibits that the page shows first, made with the run's code; a measure or a correction without one is an error.
+      const { armSources, comparisonExhibits } = await import("./compare-exhibits.js");
+      const root = dirname(authoringPath(file)), shown = await comparisonExhibits(doc, root, await armSources(doc, root));
+      const exhibits = [...shown.exhibits.see, ...shown.exhibits.scored].map(e => `${e.title}: ${e.blocks.map(b => b.name).join("; ")}`);
+      const labels = { reminder: "Each word that the page uses as a label links to the exhibit that shows it. Link these in labels, or review them.", linked: shown.exhibits.labels, not_linked: shown.review };
+      if (shown.errors.length) { print({ valid: false, executed: false, error: `${file} shows a label without its exhibit. ${shown.errors.join(" ")}`, exhibits, labels }); process.exitCode = 1; return true; }
+      print({ valid: true, executed: false, arms: Object.keys(doc.arms), inputs: doc.inputs.length, rule: compare.ruleSentence(doc), exhibits, labels, writer_choices: { reminder: "Mark a value as yours only when the user said it.", values: review } });
     }
     catch (error) { print({ valid: false, executed: false, error: (error as Error).message }); process.exitCode = 1; }
     return true;

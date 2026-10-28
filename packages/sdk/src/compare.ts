@@ -30,6 +30,7 @@ import { FIX_LIMIT_MS } from './learner.js';
 import { textDiff } from './text-diff.js';
 import { RIGHT_MESSAGE, copyTree, didSummary, fillMessage, handedIn as handedInFile, keptSomething, methodPluginFolder, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
+import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
@@ -120,6 +121,8 @@ export const comparisonSchema = z.strictObject({
   assumptions: z.array(assumptionSchema).optional().describe('Statements that must be true for the answer to mean something: text, or {text, if_false, check}. Method shows its own checks as checked by Method; these are not checked.'),
   notes: z.strictObject(Object.fromEntries(noteParts.map(part => [part, z.array(text).min(1).optional()])) as Record<(typeof noteParts)[number], z.ZodOptional<z.ZodArray<typeof text>>>)
     .optional().describe(`Notes that the page shows with their part: ${noteParts.join(', ')}.`),
+  samples: z.record(text, text).optional().describe('Outputs made by code, not by an agent, by input ID: a file in the form of the deliverable, such as the decision that keeps every draft. Before the trial, Method runs the feedback writer and each code measure on them, and the page shows exactly what an arm gets back and how a run is scored. Give one for a teaching input (with a code feedback writer) and one for a measured input (with a code measure).'),
+  labels: z.record(text, text).optional().describe('Words that the page uses as labels, each with the exhibit that shows the literal thing: prompt (what each agent receives), files (the files in its folder), correction, hidden answer, output, a measure\'s name, or the path of a file that the files exhibit shows (such as matter/email/request.txt). Method links each measure\'s name, correction, hidden answer, the handed-in file and the input noun itself.'),
   decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin, arms.plain (which agent the arm is), arms.plain.instructions (its starting instructions) or notes.PART (the notes of a part). Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
 }).describe('A comparison: one question about two or more agents.');
 export type Comparison = z.infer<typeof comparisonSchema>;
@@ -139,7 +142,7 @@ const requiredParts: Record<string, string> = {
 
 const sha = (value: unknown) => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const isFileInput = (id: string) => /\.json$/i.test(id);
+export const isFileInput = (id: string) => /\.json$/i.test(id);
 /** Remove a folder that may hold read-only folders (an agent may make the files it got read-only): make it writable first. */
 export function removeFolder(path: string) {
   const writable = (dir: string) => {
@@ -156,7 +159,7 @@ export { FIX_LIMIT_MS };
 export const NOISE_LEARNERS = 2;
 
 /** An input: a JSON file of input values, or a case ID (cases/ID/recording.json beside the comparison file). */
-function inputValue(root: string, id: string): unknown {
+export function inputValue(root: string, id: string): unknown {
   const path = isFileInput(id) ? resolve(root, id) : join(root, 'cases', id, 'recording.json');
   if (!existsSync(path)) throw Error(isFileInput(id) ? `The input file ${id} is not there.` : `The input ${id} is not a file and has no case folder cases/${id}/ beside the comparison.`);
   const value = JSON.parse(readFileSync(path, 'utf8'));
@@ -164,17 +167,17 @@ function inputValue(root: string, id: string): unknown {
 }
 /** A treatment event that corrects the arm: fixed words, or the words that a feedback writer writes from the arm's own output. */
 const isCorrection = (event: { correction?: string | undefined; feedback?: string | undefined }) => event.correction !== undefined || event.feedback !== undefined;
-const armIsMethod = (arm: Comparison['arms'][string]): arm is string => typeof arm === 'string';
-type ProjectArm = Extract<Comparison['arms'][string], { project: string }>;
+export const armIsMethod = (arm: Comparison['arms'][string]): arm is string => typeof arm === 'string';
+export type ProjectArm = Extract<Comparison['arms'][string], { project: string }>;
 type PlainArm = Extract<Comparison['arms'][string], { agent: string }>;
-const armIsProject = (arm: Comparison['arms'][string]): arm is ProjectArm => typeof arm === 'object' && 'project' in arm;
-const armIsPlain = (arm: Comparison['arms'][string]): arm is PlainArm => typeof arm === 'object' && 'agent' in arm;
+export const armIsProject = (arm: Comparison['arms'][string]): arm is ProjectArm => typeof arm === 'object' && 'project' in arm;
+export const armIsPlain = (arm: Comparison['arms'][string]): arm is PlainArm => typeof arm === 'object' && 'agent' in arm;
 /**
  * The folder of an input's own files, or null: inputs/ID/ beside the file inputs/ID.json, or a case's recorded copy of
  * the folders its run read (cases/ID/snapshot/env/). Each folder in it is named after a files connection. Every arm gets
  * these folders for this input, in place of its own folders of those names.
  */
-function inputRoom(root: string, id: string): string | null {
+export function inputRoom(root: string, id: string): string | null {
   const path = isFileInput(id) ? resolve(root, id).replace(/\.json$/i, '') : join(root, 'cases', id, 'snapshot', 'env');
   return existsSync(path) && statSync(path).isDirectory() ? path : null;
 }
@@ -205,7 +208,7 @@ export function checklistOf(value: unknown): ChecklistItem[] {
     return [{ id: `i${i + 1}`, text: words.trim(), covered_by: covered.filter((n: unknown) => Number.isInteger(n)) }];
   });
 }
-const expectedValue = (root: string, p: string) => { const raw = readFileSync(resolve(root, p), 'utf8'); try { return JSON.parse(raw); } catch { return raw; } };
+export const expectedValue = (root: string, p: string) => { const raw = readFileSync(resolve(root, p), 'utf8'); try { return JSON.parse(raw); } catch { return raw; } };
 
 /** The files connections of a Method arm. */
 function connectionsOf(document: any) {
@@ -360,6 +363,11 @@ export function readComparison(file: string): Comparison {
     if (doc.rule.at !== undefined) problems.push('The rule has at, but there is no treatment over time to have checkpoints.');
     if (teaching.length) problems.push('Teaching inputs are what the arms learn from in a treatment over time. Add the treatment, or remove teaching.');
   }
+  for (const [id, sample] of Object.entries(doc.samples ?? {})) {
+    if (!inputs.includes(id) && !teaching.includes(id)) problems.push(`samples names ${id}, which is not an input.`);
+    if (!existsSync(resolve(root, sample))) problems.push(`The sample output for ${id} (${sample}) is not there.`);
+    for (const room of [...inputs, ...teaching].map(other => inputRoom(root, other)).filter(Boolean)) if (`${resolve(root, sample)}/`.startsWith(`${room}/`)) problems.push(`The sample output ${sample} is in the folder of an input, which the arms get. Keep it outside.`);
+  }
   for (const id of Object.keys(doc.about_inputs?.names ?? {})) if (!inputs.includes(id) && !teaching.includes(id)) problems.push(`about_inputs names ${id}, which is not an input.`);
   for (const entry of doc.decided_by_you ?? []) {
     const [part, field] = entry.split('.');
@@ -479,7 +487,7 @@ export function armLabels(doc: Comparison, root: string) {
 /** A project arm as people say it: "Claude Code project", "Claude Code project with the Method plugin". */
 const projectWords = (arm: ProjectArm) => `Claude Code project${arm.plugins?.length ? ` with the ${arm.plugins.map(p => p === 'method' ? 'Method' : p).join(' and ')} plugin${arm.plugins.length === 1 ? '' : 's'}` : ''}`;
 /** What a project arm starts with, in words, for the page (its starting instructions). */
-const projectStart = (arm: ProjectArm) => `A Claude Code project folder that starts ${arm.files ? `with the files of ${arm.files}` : 'empty'}. ${arm.plugins?.includes('method') ? 'It has the Method plugin: its skill and hooks, and the method command, signed in to your Method account.' : 'It has no plugin and no method command.'} Each piece of work is a new chat in the folder; only the folder and Claude Code\'s memory carry over.`;
+export const projectStart = (arm: ProjectArm) => `A Claude Code project folder that starts ${arm.files ? `with the files of ${arm.files}` : 'empty'}. ${arm.plugins?.includes('method') ? 'It has the Method plugin: its skill and hooks, and the method command, signed in to your Method account.' : 'It has no plugin and no method command.'} Each piece of work is a new chat in the folder; only the folder and Claude Code\'s memory carry over.`;
 /** The file that each arm hands in, by its name: "the file reply.md", or "the file that the task names" when the path takes a value of the input. */
 export function deliverableWords(doc: Comparison) {
   if (!doc.deliverable) return null;
@@ -767,7 +775,7 @@ function assumptionsOf(doc: Comparison) {
  * upload: puts a text in the account and returns its reference (null when signed out).
  */
 async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain; project?: Project }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string }; source?: string }>,
-  checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>) {
+  checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>, exhibits: Exhibits | null = null) {
   const measure = async (m: Measure) => ({ name: m.name, how: m.code ? 'code' : m.rubric || m.checklist ? 'model' : 'person', ...(m.description ? { description: m.description } : {}),
     ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}),
     ...(m.checklist ? { checklists: Object.fromEntries(doc.inputs.map(id => [id, (checklists[id] ?? []).map(item => short(item.text, 2000))])) } : {}) });
@@ -802,6 +810,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     ...(Object.keys(notes).length ? { notes } : {}),
     decisions: decisions(doc),
     method_rules: methodRules(doc, { ...settings, labels: Object.fromEntries(arms.map(arm => [arm.name, arm.label])) }),
+    ...(exhibits && (exhibits.see.length || exhibits.scored.length) ? { exhibits } : {}),
   };
 }
 
@@ -843,22 +852,24 @@ function sessionMethod(title: string, goal: string, agent: 'claude' | 'codex', m
   };
 }
 /** The task prompt that every plain agent gets for an input: the input, and the file to hand in. */
+/** The prompt of a plain arm's session: its instructions, then the task. */
+export const PLAIN_PROMPT = '{{instructions}}\n\n{{task}}';
 export function taskPrompt(value: unknown, deliverable: string | null) {
   const input = typeof value === 'string' ? value : `Input:\n${JSON.stringify(value, null, 2)}`;
   return deliverable ? `${input}\n\nHand in your work as the file ${deliverable} in your working folder.` : input;
 }
-const builderPrompt = `You maintain the instructions of an agent. Its instructions are in instructions.md.
+export const builderPrompt = `You maintain the instructions of an agent. Its instructions are in instructions.md.
 The agent did the task in task.md, with the files in task-files/ (as the agent got them), and handed in the file in wrong-output/. A person corrected that work, or said that it is right; their words are in correction.md. The earlier corrections, in order, are in corrections-log.md.
 Edit instructions.md so that the agent follows this correction on later tasks and still follows everything the instructions already say. The agent reads only instructions.md and each new task: it never sees this correction or this task again.
 Read the task's files and the earlier corrections as you need them, and do not change them. Change only instructions.md. When the instructions already make the agent do what the correction asks, leave the file as it is.`;
 /** What the plain arm's builder reads when the feedback writer found nothing wrong. */
-const RIGHT_WORDS = 'Right: the person checked this work and found nothing wrong.';
+export const RIGHT_WORDS = 'Right: the person checked this work and found nothing wrong.';
 /** The version of the feedback writer's judge: a new prompt writes every feedback again. */
 const FEEDBACK_VERSION = 'feedback-writer/2';
-const feedbackPrompt = `You write an expert's feedback on one piece of work. The task is in task.md. The work that the agent handed in is in output/. The correct answer, which the agent never sees, is in expected-answer.md. How to write the feedback is in instruction.md.
+export const feedbackPrompt = `You write an expert's feedback on one piece of work. The task is in task.md. The work that the agent handed in is in output/. The correct answer, which the agent never sees, is in expected-answer.md. How to write the feedback is in instruction.md.
 Read each file in full. Then write the feedback that instruction.md asks for, about this work only.
 Answer with one JSON object and nothing else: {"correction": "THE FEEDBACK" or null, "checked": WHAT YOU CHECKED}. correction is null when nothing that you checked is wrong. checked is "all" when you checked the whole work against the correct answer, else the part that you checked, in a few words.`;
-const judgePrompt = `You are the judge of one handed-in document. Mark each item of checklist.json for the document in document/.
+export const judgePrompt = `You are the judge of one handed-in document. Mark each item of checklist.json for the document in document/.
 First read, in full, every file that read-files.txt lists (the sources the agent read; they are in sources/), the document, and expected-answer.md when it is there. Read each file to its end: use more than one read for a long file.
 For each item, decide whether the document meets it: met, partly, or not_met. Judge only the document; the sources and the expected answer are for checking it.
 Answer with one JSON object and nothing else: {"verdicts": [{"id": ITEM_ID, "verdict": "met" | "partly" | "not_met", "quote": WORDS COPIED EXACTLY FROM THE DOCUMENT THAT DECIDE IT (or "" when no passage decides it), "reason": ONE SHORT SENTENCE}]}, with one verdict for each item.`;
@@ -866,7 +877,7 @@ Answer with one JSON object and nothing else: {"verdicts": [{"id": ITEM_ID, "ver
 /** A feedback writer as the plan keeps it: a script, or one Claude judge with the writer's instruction. hash: what it is. */
 type Writer = { name: string; hash: string; code?: string; judge?: string; method?: string };
 /** Run a script (.py with python3, else Node) with a JSON value on stdin, in its own folder. */
-function runScript(path: string, input: unknown) {
+export function runScript(path: string, input: unknown) {
   return new Promise<{ code: number; stdout: string; stderr: string }>(done => {
     const child = spawn(extname(path) === '.py' ? 'python3' : process.execPath, [path], { cwd: dirname(path), stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
@@ -894,7 +905,7 @@ function feedbackOf(answer: string): Feedback | undefined {
   return typeof value.correction === 'string' ? { correction: value.correction.trim(), checked } : undefined;
 }
 /** Whether a writer checked the whole output, so that "nothing wrong" means the work is right. */
-const checkedAll = (feedback: Feedback) => /^all$/i.test(feedback.checked);
+export const checkedAll = (feedback: Feedback) => /^all$/i.test(feedback.checked);
 export const feedbackWriting = {
   /**
    * Write the correction for one training run: the writer reads the input, the arm's own output (null when it handed in
@@ -985,7 +996,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
   for (const arm of arms.filter(a => a.plain)) {
     arm.folders = shared;
     const tools = plainTools(arm.plain.agent, web), model = arm.models[0];
-    arm.method = generated(arm.name, 'plain.method', sessionMethod(`Plain ${arm.plain.agent === 'claude' ? 'Claude Code' : 'Codex'}`, 'Do the task in the instructions for the input, as a plain agent.', arm.plain.agent, model, tools, '{{instructions}}\n\n{{task}}', ['instructions', 'task'], 3_600_000));
+    arm.method = generated(arm.name, 'plain.method', sessionMethod(`Plain ${arm.plain.agent === 'claude' ? 'Claude Code' : 'Codex'}`, 'Do the task in the instructions for the input, as a plain agent.', arm.plain.agent, model, tools, PLAIN_PROMPT, ['instructions', 'task'], 3_600_000));
     arm.builder = generated(arm.name, 'builder.method', sessionMethod('Instructions builder', 'Edit a plain agent\'s instructions after a correction.', arm.plain.agent, model, plainTools(arm.plain.agent, false), builderPrompt, [], FIX_LIMIT_MS));
     arm.id = readDocument(arm.method).id;
     arm.hash = sha({ ...arm.plain, tools, deliverable: doc.deliverable ?? null, prompt: 'task/1', folders: Object.fromEntries(Object.entries(shared).map(([envName, dir]) => [envName, folderHash(dir)])) });
@@ -1036,7 +1047,18 @@ export async function compileComparison(file: string, options: { strict?: boolea
   const checklists = Object.fromEntries(Object.entries(expected).map(([inputId, value]) => [inputId, checklistOf(value).map(item => ({ ...item, covered_by: item.covered_by.map(n => place.get(n) ?? n) }))]));
   // The page shows where each correction's words come from; the run's plan does not need it.
   const sourced = events.map(e => { const source = doc.treatment?.events[e.file_index - 1]?.source; return source ? { ...e, source } : e; });
-  const spec = await accountSpec(doc, root, arms, sourced, checklists, { model: models.shared, judge, device }, uploadSignedIn);
+  // The literal things that the page shows first, made with the run's own code from the compiled arms.
+  // A run goes on without them when they cannot be made (method validate and method publish say why).
+  let shown: Awaited<ReturnType<typeof comparisonExhibits>> | null = null;
+  try {
+    shown = await comparisonExhibits(doc, root, arms.map(arm => ({ name: arm.name, label: arm.label, folders: arm.folders ?? {},
+      ...(arm.plain ? { plain: { agent: arm.plain.agent, instructions: arm.plain.instructions } } : arm.project ? { project: { message: arm.project.message, first_message: arm.project.first_message, start: arm.project.start } } : { file: join(arm.dir, arm.file) }) })));
+  } catch (error) {
+    if (options.strict) throw Error(`${basename(path)} cannot be published: Method could not make its exhibits. ${(error as Error).message}`);
+    process.stderr.write(`The comparison page shows no exhibits: ${(error as Error).message}\n`);
+  }
+  if (options.strict && shown?.errors.length) throw Error(`${basename(path)} cannot be published. ${shown.errors.join(' ')}`);
+  const spec = await accountSpec(doc, root, arms, sourced, checklists, { model: models.shared, judge, device }, uploadSignedIn, shown?.exhibits ?? null);
   // The approval holds for the definition, whether or not the inputs' content went up.
   const digest = sha({ ...spec, inputs: { ...spec.inputs, details: Object.fromEntries(Object.entries(spec.inputs.details).map(([key, d]) => [key, d.name])) } });
   writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
@@ -1142,7 +1164,7 @@ export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' 
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
   question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
-type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; change?: ChangeRecord; did?: Did;
+type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; reason?: string; detail?: string; change?: ChangeRecord; did?: Did;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
 type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot> };
@@ -1172,8 +1194,8 @@ type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[]
  * method judge RUN right and the builder reads that the work is right; the event is received as was_right. Each
  * delivery keeps the words the arm received (text).
  */
-type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null; change?: ChangeRecord };
-type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; instructions?: string; tokens?: number | null; change?: ChangeRecord; did?: Did };
+type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null; change?: ChangeRecord };
+type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; reason?: string; detail?: string; instructions?: string; tokens?: number | null; change?: ChangeRecord; did?: Did };
 export const delivery = {
   async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered, settings: { web: boolean; folders?: Record<string, string> } = { web: false }): Promise<Delivered> {
     // The training run and its fix run in a clean room, as the arm's cells do: they see none of the user's
@@ -1232,21 +1254,22 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   try { runId = JSON.parse(readFileSync(join(runDir, 'method-sync.json'), 'utf8')).dashboard_id; } catch { /* not saved */ }
   if (!runId) return { received: false, outcome: 'not_run', reason: 'the training run is not in your Method account, so Method cannot take the correction', detail: 'Sign in with method login, then run the comparison again' };
   let text: string = event.text;
+  // The arm's own output of this training run: the file it handed in beside its Method, or its result. The record keeps it.
+  let output: string | null = null;
+  try { output = event.input.deliverable ? readFileSync(join(learner.dir, event.input.deliverable), 'utf8') : outputText(JSON.parse(readFileSync(join(runDir, 'result.json'), 'utf8'))); } catch { /* handed in nothing */ }
+  const kept = keptOutput(output);
   if (event.feedback) {
-    // The arm's own output of this training run: the file it handed in beside its Method, or its result.
-    let output: string | null = null;
-    try { output = event.input.deliverable ? readFileSync(join(learner.dir, event.input.deliverable), 'utf8') : outputText(JSON.parse(readFileSync(join(runDir, 'result.json'), 'utf8'))); } catch { /* handed in nothing */ }
     let written: Feedback;
     try { written = await feedbackWriting.write(event.feedback, { input: event.input, task: taskPrompt(event.input.value, event.input.deliverable), output, outputName: event.input.deliverable ? basename(event.input.deliverable) : 'output.md' }); }
     catch (error) { return { received: false, outcome: 'stopped', run_id: runId, reason: 'the feedback writer gave no correction', detail: (error as Error).message }; }
     // Nothing wrong in one part says nothing about the rest: the arm gets no feedback, and Method keeps no approved run.
-    if (written.correction === null && !checkedAll(written)) return { received: true, outcome: 'no_feedback', run_id: runId, text: `No feedback (the writer checked ${written.checked} and found nothing wrong).`, tokens: null };
+    if (written.correction === null && !checkedAll(written)) return { received: true, outcome: 'no_feedback', run_id: runId, text: `No feedback (the writer checked ${written.checked} and found nothing wrong).`, output: kept, tokens: null };
     if (written.correction === null) {
       const right = await command(['judge', runId, 'right', '--json'], env);
       let id: string | undefined;
       try { id = JSON.parse(right.stdout)?.judgment?.id; } catch { /* below */ }
       if (!id) return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method could not take the verdict right', detail: `method judge failed: ${right.stderr.trim() || right.stdout.trim()}` };
-      return { received: true, outcome: 'was_right', run_id: runId, judgment_id: id, text: 'right', tokens: null };
+      return { received: true, outcome: 'was_right', run_id: runId, judgment_id: id, text: 'right', output: kept, tokens: null };
     }
     text = written.correction;
   }
@@ -1255,8 +1278,10 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   try { judgment = JSON.parse(judged.stdout); } catch { return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method could not take the correction', detail: `method judge failed: ${judged.stderr.trim() || judged.stdout.trim()}` }; }
   const id = judgment?.judgment?.id;
   if (!id || !judgment.fix) return { received: false, outcome: 'stopped', run_id: runId, text, reason: 'Method started no fix for this correction', ...(judgment?.stopped?.failure?.headline ? { detail: judgment.stopped.failure.headline } : {}) };
-  return { ...await waitForFix(runId, id, env, file), text };
+  return { ...await waitForFix(runId, id, env, file), text, output: kept };
 }
+/** The most of a handed-in output that a treatment record keeps, for the trial's worked example. */
+const keptOutput = (output: string | null) => output === null ? null : output.slice(0, 20_000);
 
 /** Why a fix ended without an outcome for this correction, in words, by the loop's outcome. */
 const stoppedWhy: Record<string, string> = {
@@ -1402,7 +1427,7 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
     try { written = await feedbackWriting.write(event.feedback, { input: event.input, task: taskPrompt(event.input.value, event.input.deliverable), output: wrong, outputName: event.input.deliverable ? basename(event.input.deliverable) : 'output.md' }); }
     catch (error) { return { received: false, outcome: 'stopped', reason: 'the feedback writer gave no correction', detail: (error as Error).message }; }
     // Nothing wrong in one part: the builder gets nothing, as the Method arm does.
-    if (written.correction === null && !checkedAll(written)) return { received: true, outcome: 'no_feedback', text: `No feedback (the writer checked ${written.checked} and found nothing wrong).`, instructions, tokens: tokensOfRun(train) };
+    if (written.correction === null && !checkedAll(written)) return { received: true, outcome: 'no_feedback', text: `No feedback (the writer checked ${written.checked} and found nothing wrong).`, output: keptOutput(wrong), instructions, tokens: tokensOfRun(train) };
     right = written.correction === null;
     text = written.correction ?? RIGHT_WORDS;
   }
@@ -1423,7 +1448,7 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
   if (built.status !== 'completed') return { received: false, outcome: 'stopped', text, reason: `the ${arm.plain?.agent === 'codex' ? 'Codex' : 'Claude Code'} session that edits the instructions did not finish`, detail: `the builder ended ${built.status}${built.failure?.headline ? `: ${built.failure.headline}` : ''}`, tokens: used };
   const edited = sessionFile(build, built.result, 'instructions.md');
   const next = edited !== null && edited !== instructions ? edited : instructions;
-  return { received: true, outcome: next !== instructions ? 'edited' : right ? 'was_right' : 'not_edited', text, instructions: next, tokens: used,
+  return { received: true, outcome: next !== instructions ? 'edited' : right ? 'was_right' : 'not_edited', text, output: keptOutput(wrong), instructions: next, tokens: used,
     ...(next !== instructions ? { change: { diff: textDiff(instructions, next, 'instructions.md', 'instructions.md') } } : {}) };
 }
 
@@ -1457,13 +1482,13 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   const message = projectMessage(project, event.input.value, first);
   const chat = await openChat(learner.project, chatSettings(project, learner.cache, plan.folder), join(workDir, 'artifacts'), learner.memory);
   const turns = [];
-  let text: string | undefined, right = false, none: string | null = null;
+  let text: string | undefined, right = false, none: string | null = null, output: string | null = null;
   try {
     turns.push(await chat.send(message));
     if (event.kind === 'correction') {
       text = event.text;
+      output = handedInFile(learner.project, event.input.deliverable);
       if (event.feedback) {
-        const output = handedInFile(learner.project, event.input.deliverable);
         const written = await feedbackWriting.write(event.feedback, { input: event.input, task: message, output, outputName: basename(event.input.deliverable) });
         if (written.correction === null && !checkedAll(written)) none = `No feedback (the writer checked ${written.checked} and found nothing wrong).`;
         else { right = written.correction === null; text = written.correction ?? RIGHT_MESSAGE; }
@@ -1478,7 +1503,7 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   const tokens = did.judged.includes('wrong') ? null : sumTokens(turns.map(t => t.tokens));
   if (event.kind !== 'correction') return { received: true, outcome: 'given', did, tokens };
   const outcome: CorrectionOutcome = none !== null ? 'no_feedback' : keptSomething(did) ? 'edited' : right ? 'was_right' : 'not_edited';
-  return { received: true, outcome, text: none ?? text ?? '', did, tokens, change: { summary: didSummary(did), diff } };
+  return { received: true, outcome, text: none ?? text ?? '', output: keptOutput(output), did, tokens, change: { summary: didSummary(did), diff } };
 }
 
 /**
@@ -1584,7 +1609,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       }
     }
     const record = records.get(key);
-    done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(typeof record.text === 'string' ? { text: record.text } : {}), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
+    done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(typeof record.text === 'string' ? { text: record.text } : {}), ...(typeof record.output === 'string' ? { output: record.output } : {}), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
       ...(record.change ? { change: record.change } : {}), ...(record.did ? { did: record.did } : {}), ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
     if (!record.received) { missing.push({ index: event.index, reason: record.reason ?? 'not received', ...(record.detail ? { detail: record.detail } : {}) }); stopped = true; continue; }
     if (arm.plain && typeof record.instructions === 'string') instructions = record.instructions;
@@ -1764,7 +1789,7 @@ function gradeKeys(plan: Plan, list: Array<{ key: string; arm: string; checkpoin
  * Method arms), with each folder of the input's own folder in place of the one of its name. Both kinds of arm get the
  * same folders for an input, and nothing of another input's folder: in a cell and in a training run on a teaching input.
  */
-function cellFolders(arm: any, input: { room: string | null }): Record<string, string> {
+export function cellFolders(arm: any, input: { room: string | null }): Record<string, string> {
   const own = input.room ? Object.fromEntries(readdirSync(input.room, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => [e.name, join(input.room!, e.name)])) : {};
   return { ...arm.folders, ...own };
 }
@@ -2126,7 +2151,8 @@ async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTr
   const noise = noiseCheck(plan, grades), easy = tooEasyCheck(plan, noise);
   const usage = usagePerCorrection(plan, treated);
   const estimate = fullRunEstimate(plan, runs, treated);
-  await sendStage(plan.folder, { stage: 'trial', trial: { inputs: trialInputs, received: accountReceived(received),
+  const examples = trialExamples(plan, runs, grades, treated);
+  await sendStage(plan.folder, { stage: 'trial', trial: { inputs: trialInputs, received: accountReceived(received), ...(examples.length ? { examples } : {}),
     ...(noise.spread !== null ? { noise: { spread: noise.spread, margin: noise.margin, start: noise.start } } : {}),
     ...(easy ? { too_easy: { start: easy.start, margin: easy.margin, passes: easy.passes } } : {}) },
     cost_estimate: { ...estimate.account, ...(usage ? { usage: { unit: usage.unit, values: Object.fromEntries(Object.entries(usage.values).map(([arm, v]) => [arm, v.value])) } } : {}) } });
@@ -2197,7 +2223,7 @@ async function recordApproval(plan: Plan) {
 
 /** The key of a person's mark: the measure's question and the output it marks. */
 const markKey = (measure: any, run: any) => sha({ question: measure.person, output: run.result });
-const outputText = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+export const outputText = (value: unknown) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 const words = (text: string) => text.replace(/^\s*\d+[.)]\s+/gm, ' ').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 /** Whether a quote is in a text: each passage of the quote, in order. A quote may join passages with an ellipsis. */
 const quotedIn = (quote: string, text: string) => {
@@ -2337,14 +2363,14 @@ async function grade(item: any) {
     return record;
   }
   const context: GradeContext = item.context;
-  const scores: Record<string, number | null> = {}, noise: Record<string, number> = {}, verdicts: any[] = [];
+  const scores: Record<string, number | null> = {}, noise: Record<string, number> = {}, verdicts: any[] = [], printed: Record<string, string> = {};
   const entries = run.transcript_jsonl && existsSync(run.transcript_jsonl)
     ? readFileSync(run.transcript_jsonl, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
   let read: string[] | null = null;
   const mean = (list: number[]) => list.length ? list.reduce((a, b) => a + b, 0) / list.length : null;
   for (const m of measures) {
     if (m.person !== undefined) { scores[m.name] = marks[m.name]; continue; }
-    if (m.code) { scores[m.name] = await codeScore(m, run, expected); continue; }
+    if (m.code) { const scored = await codeScore(m, run, expected); scores[m.name] = scored.score; printed[m.name] = scored.printed.slice(0, 20_000); continue; }
     const checklist: ChecklistItem[] = m.checklist ? context.checklist : m.rubric.map((text: string, i: number) => ({ id: `c${i + 1}`, text, covered_by: [] }));
     // A checklist is the expected answer itself; a rubric's judge also reads the expected answer.
     const result = await judged(run, context, checklist, m.checklist ? undefined : expected, entries);
@@ -2364,7 +2390,7 @@ async function grade(item: any) {
     `The judge (${context.judge?.model ?? 'Claude Code\'s default model'}) read in full: ${read.length ? read.join(', ') : 'no source files (the agent read none)'}.`,
     `The document that the judge marked${run.deliverable ? ` (${run.deliverable})` : ''}:\n${run.result === null || run.result === undefined ? '(not handed in)' : outputText(run.result)}`].join('\n\n');
   const record = { key: item.key, target: run.key, grader_version: item.grader_version, arm: run.arm, input: run.input, repeat: run.repeat, checkpoint: run.checkpoint,
-    run_dir: run.run_dir, scores, usage: item.usage ?? null, ...(Object.keys(noise).length ? { noise_scores: noise } : {}), verdicts, seen, run_id: run.run_id, device: run.device };
+    run_dir: run.run_dir, scores, usage: item.usage ?? null, ...(Object.keys(noise).length ? { noise_scores: noise } : {}), verdicts, ...(Object.keys(printed).length ? { printed } : {}), seen, run_id: run.run_id, device: run.device };
   writeRecord(item.folder, item.key, record);
   await linkGrade(item.folder, record);
   return record;
@@ -2386,13 +2412,17 @@ async function linkGrade(folder: string, record: any) {
   const seen = record.seen === null ? null : await uploadText(folder, record.seen);
   await linkCells(folder, [{ key: record.key, measures, ...(record.verdicts.length ? { verdicts: record.verdicts } : {}), ...(seen ? { seen } : {}) }]);
 }
+/** What a code measure reads on stdin for one run. */
+export const measureStdin = (run: { input: string; result: unknown; run_dir?: string; artifacts?: string; probe?: string | null }, expected: unknown) =>
+  ({ input: run.input, output: run.result, expected: expected ?? null, run_dir: run.run_dir, artifacts: run.artifacts, probe: run.probe ?? null });
+/** A code measure's score of one run, and what it printed (its whole stdout). */
 async function codeScore(m: any, run: any, expected: unknown) {
-  const result = await runScript(m.code.path, { input: run.input, output: run.result, expected: expected ?? null, run_dir: run.run_dir, artifacts: run.artifacts, probe: run.probe ?? null });
+  const result = await runScript(m.code.path, measureStdin(run, expected));
   let score: unknown;
   try { const value = JSON.parse(result.stdout); score = typeof value === 'number' ? value : value?.score; } catch { /* below */ }
   if (result.code !== 0 || typeof score !== 'number' || !Number.isFinite(score))
     throw Error(`The measure ${m.name} (${basename(m.code.path)}) gave no score for ${run.arm} on ${run.input}${result.stderr.trim() ? `: ${result.stderr.trim().split('\n').at(-1)}` : `; it must print {"score": NUMBER}`}.`);
-  return score;
+  return { score, printed: result.stdout };
 }
 
 /**
