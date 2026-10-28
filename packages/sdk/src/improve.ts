@@ -16,7 +16,7 @@ import { localRuns, saveLocalProposal, writeMethodFile } from './proposals.js';
 import { changedSteps } from './merge.js';
 import { localJudgments, runFolderIndex, type LocalJudgment } from './local-judgments.js';
 import type { CorrectionOutcome, OutcomeKind } from './fix-lines.js';
-import { fixFolder, readFixState, saveError, saveNotice, saveOutcome, setWorker, storedOutcome, writeFixState } from './fix-outcomes.js';
+import { fixFolder, markWorking, readFixState, saveError, saveNotice, saveOutcome, storedOutcome, writeFixState } from './fix-outcomes.js';
 import { recordChange, saveVersion, snapshot, undoLast, undoRecords } from './undo.js';
 import { fixUndoneLine, ruleBackLine } from './fix-lines.js';
 
@@ -38,7 +38,7 @@ type AccountJudgment = { id: string; run_id: string; step_id: string | null; ver
 export type { CorrectionOutcome };
 type SavedImprove = { workflow_id: string; version_id: string; workflow: any; package?: unknown };
 /** Runs a local Method file; the default is the runtime that `method run FILE` uses. */
-export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory: undefined, onEvent: undefined, client: MethodClient, baseConfig: undefined, secrets: Record<string, string>) => Promise<{ status: string; result?: unknown; failure?: any }>;
+export type RunFile = (file: string, flags: Record<string, unknown>, syncFactory: undefined, onEvent: undefined, client: MethodClient, baseConfig: any, secrets: Record<string, string>) => Promise<{ status: string; result?: unknown; failure?: any }>;
 /** The SubmitProposal that improve.method returns, read from its result. */
 export type ImproveProposal = { cause: string; workflow: unknown | null; files: { path: string; sha256: string; content_base64: string }[]; evidence: { kind: 'change' | 'none'; steps?: string[]; [key: string]: unknown } };
 export type ImproveResult = ImproveProposal & { capped: string; outcomes: CorrectionOutcome[]; background_cases: string[]; summary: string };
@@ -140,8 +140,29 @@ export async function cachedImproveMethod(client: MethodClient) {
 }
 
 /**
- * Run improve.method on this computer (mode prune: the pruning pass). Its model steps and its scripts' model requests follow the rule of every run:
- * the user's own Claude Code or Codex first, hosted models only without one. The run gets the signed-in key and server
+ * The model that the Method's own agent steps run on, as a default model profile for its fix: the one Claude Code or
+ * Codex model and effort that all of its call, agent and session steps name. Undefined when its steps name none, or
+ * more than one; then the fix runs on the user's own agent with its default model.
+ */
+export async function ownAgentModel(document: any): Promise<{ backend: 'claude' | 'codex'; model: string; reasoning_effort?: string } | undefined> {
+  const { methodProfiles } = await import('@withmethod/runtime/agents.js');
+  const profiles: Record<string, any> = methodProfiles(document);
+  const found = new Map<string, { backend: 'claude' | 'codex'; model: string; reasoning_effort?: string }>();
+  for (const step of Object.values(document.steps ?? {}) as any[]) for (const exec of [step.do, step.check]) {
+    if (!exec || !['call', 'agent', 'session'].includes(exec.kind)) continue;
+    const profile = exec.kind === 'session' ? { backend: exec.agent, model: exec.model, reasoning_effort: exec.reasoning_effort } : profiles[exec.model ?? 'default'] ?? {};
+    if (!['claude', 'codex'].includes(profile.backend) || typeof profile.model !== 'string') return undefined;
+    const effort = profile.reasoning_effort ?? profile.effort;
+    const value = { backend: profile.backend, model: profile.model, ...(typeof effort === 'string' ? { reasoning_effort: effort } : {}) };
+    found.set(JSON.stringify(value), value);
+  }
+  return found.size === 1 ? [...found.values()][0] : undefined;
+}
+
+/**
+ * Run improve.method on this computer (mode prune: the pruning pass). Its model steps run on the model of the Method's
+ * own agent steps (ownAgentModel), on the user's own Claude Code or Codex; without one model, they follow the rule of
+ * every run: the user's own Claude Code or Codex first, hosted models only without one. The run gets the signed-in key and server
  * as its IMPROVE_API_KEY and IMPROVE_SERVER secrets, for this run only. Its output goes to a log file.
  */
 export async function runImprovement(client: MethodClient, file: string, judgments: ImproveJudgment[], runFolders: string[], run?: RunFile, mode?: 'prune') {
@@ -160,7 +181,10 @@ export async function runImprovement(client: MethodClient, file: string, judgmen
   const toLog = ((chunk: any, ...rest: any[]) => { try { appendFileSync(log, typeof chunk === 'string' ? chunk : Buffer.from(chunk)); } catch { /* the log is best effort */ } const done = rest.find(r => typeof r === 'function'); done?.(); return true; }) as typeof process.stdout.write;
   process.stdout.write = toLog; process.stderr.write = toLog;
   let result: Awaited<ReturnType<RunFile>>;
-  try { result = await runFile(improve.file, { inputs, 'run-dir': join(runDir, 'run'), workspace: improve.root, server: client.server }, undefined, undefined, client, undefined, { IMPROVE_API_KEY: token, IMPROVE_SERVER: client.server }); }
+  // The fix's own model steps run on the model of the Method's own agent steps, so a fix thinks as well as the agent.
+  const own = await ownAgentModel(readDocument(file));
+  const config = own ? { allow_local_processes: true, models: { default: own } } : undefined;
+  try { result = await runFile(improve.file, { inputs, 'run-dir': join(runDir, 'run'), workspace: improve.root, server: client.server }, undefined, undefined, client, config, { IMPROVE_API_KEY: token, IMPROVE_SERVER: client.server }); }
   finally { process.stdout.write = out; process.stderr.write = err; }
   if (result.status !== 'completed') throw Object.assign(Error(stopCause(result)), { log });
   return { ...readImproveResult(result.result, { prune: mode === 'prune' }), log };
@@ -261,7 +285,7 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
     'A right result must be able to meet each sentence and the check script with the information the run had: do not require a detail, such as a telephone number, an address, a name or a date, that neither the correction nor what the person saw gives. Where such a detail is not known, a clear placeholder for it is right.',
     'When the correction is about form or a missing action (a document with no tracked changes, a message with no attachment, a message that was not sent, a missing field), also write check_script: a Node.js ES module that reads JSON from standard input with result, outputs, tool_calls (a list of {tool, arguments, standin}), effect_inputs (a list of {effect, inputs}) and files (an object: each file the run wrote, by the name in brackets after file:, mapped to an absolute path the script can read, for example a .docx to unzip), and prints {"pass": true or false, "reason": "one sentence"}. It must fail on this result, pass on a right one, and fail when the thing it checks is missing. In check_says, say in one plain sentence what it checks. Otherwise leave both empty.',
   ].join(' ');
-  let reason = '';
+  let reason = '', met = 0;
   for (let attempt = 0; attempt < 2; attempt++) {
     const answer = await callModel({ schema: caseSchema, system, user: reason ? `${user}\n\nYour last answer could not be used: ${reason}` : user });
     const written = (Array.isArray(answer.value?.criteria) ? answer.value.criteria : [])
@@ -281,7 +305,7 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
     try {
       const context = { caseDir: folder, config: prepared.config, options: { runOptions } };
       const kept = await keptExpectations(expect, outcome, approved, context, profiles, evaluateWithJudges);
-      if (!kept.expect.length) { reason = kept.reason; continue; }
+      if (!kept.expect.length) { reason = kept.reason; if (kept.met) met++; continue; }
       await createCase({ methodFile: file, runDir, id, note, author: judgment.noted_by ?? null, expect: kept.expect, acceptConflict: note, config: prepared.config, options: { runOptions } });
       return { id, made: true };
     } catch (error: any) {
@@ -289,6 +313,8 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
       reason = error.message;
     } finally { rmSync(scriptPath, { force: true }); }
   }
+  // Every sentence of both tries holds on the corrected run: the run already does what the correction asks.
+  if (met === 2) throw Object.assign(Error('No change needed: the run already does what the correction asks.'), { code: 'case_met' });
   throw Object.assign(Error(reason), { code: 'case_not_made' });
 }
 const clip = (text: string, max: number) => text.length > max ? `${text.slice(0, max)}…` : text;
@@ -318,7 +344,10 @@ async function keptExpectations(expect: any[], bad: any, approved: any[], contex
     });
     return criteria.length ? [{ ...item, criteria }] : [];
   });
-  return { expect: kept, reason: reasons.join(' ') || 'Nothing could be checked.' };
+  // met: the judges found every sentence (and the check script) met by the corrected run itself.
+  const met = expect.length > 0 && expect.every((item, i) => item.kind === 'predicate' ? onBad.results[i]?.status === 'pass'
+    : item.criteria.every((c: any) => { const x = onBad.results[i]?.criteria?.find((y: any) => y.id === c.id); return x?.pass === true && !x.unsure; }));
+  return { expect: kept, reason: reasons.join(' ') || 'Nothing could be checked.', met };
 }
 
 /** The Method's judgments: the account's, with the notes and answers that stay on this computer for a device Method. */
@@ -344,13 +373,12 @@ export async function waitingCorrections(client: MethodClient, file: string, met
  * gives them back when the loop stops before it decides. Each correction gets its own outcome. A subscription limit or
  * another failure of the model service is a plain error.
  */
-export async function fixCorrections(client: MethodClient, file: string, options: { run?: RunFile; waitMs?: number; skip?: Set<string> } = {}): Promise<FixOutcome | undefined> {
+export async function fixCorrections(client: MethodClient, file: string, options: { run?: RunFile; waitMs?: number } = {}): Promise<FixOutcome | undefined> {
   const document = readDocument(file) as any;
   const methodId = typeof document.id === 'string' && methodIdPattern.test(document.id) ? document.id : undefined;
   if (!methodId || !client.token()) return undefined;
   const all = await methodJudgments(client, file, methodId, options.waitMs);
-  // skip: corrections that this process opened again after a later check undid their fix; the next method run takes them.
-  const waiting = all.filter(j => j.pending && j.verdict === 'wrong' && !options.skip?.has(j.id));
+  const waiting = all.filter(j => j.pending && j.verdict === 'wrong');
   if (!waiting.length) return undefined;
   const handled = (ids: string[], value: boolean) => client.request<{ changed: string[] }>(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/handled`, 'POST', { ids, handled: value });
   const taken = new Set((await handled(waiting.map(j => j.id), true)).changed);
@@ -363,7 +391,7 @@ export async function fixCorrections(client: MethodClient, file: string, options
   try {
     // A correction of a step whose text changed since its run is not fixed: the change may already answer it.
     outcomes.push(...await changedSinceRun(client, methodId, claimed, base));
-    const fresh = claimed.filter(j => !outcomes.some(c => c.id === j.id));
+    let fresh = claimed.filter(j => !outcomes.some(c => c.id === j.id));
     if (!fresh.length) { decided = true; await reportOutcomes(client, methodId, outcomes); return { ...empty, kind: 'none', applied: false }; }
     process.stderr.write(`Testing fixes for ${fresh.length} correction${fresh.length === 1 ? '' : 's'} of ${file}.\n`);
     // A regression case per correction, so every later change is checked against it; approved runs of the same step must still pass it.
@@ -373,8 +401,16 @@ export async function fixCorrections(client: MethodClient, file: string, options
       if (!j.run_dir) { cases.not_made.push({ id: j.id, reason: 'The run is not on this computer.' }); continue; }
       const approvedRuns = approved.filter(a => !j.step_id || !a.step_id || a.step_id === j.step_id).map(a => a.run_dir!);
       try { const made = await caseFromCorrection(file, j, j.run_dir, { approvedRuns }); if (made.made) cases.made.push(made.id); }
-      catch (error: any) { if (error.code !== 'case_not_made' && error.owner !== 'agent_work') throw error; cases.not_made.push({ id: j.id, reason: error.message }); }
+      catch (error: any) {
+        if (error.code === 'case_met') { outcomes.push({ id: j.id, outcome: 'not_reproduced', detail: error.message }); continue; }
+        if (error.code !== 'case_not_made' && error.owner !== 'agent_work') throw error;
+        cases.not_made.push({ id: j.id, reason: error.message });
+      }
     }
+    // A correction that the run already meets needs no change: it is decided now, and the loop fixes the others.
+    const toFix = fresh.filter(j => !outcomes.some(o => o.id === j.id));
+    if (!toFix.length) { decided = true; await reportOutcomes(client, methodId, outcomes); return { ...empty, cases, kind: 'none', applied: false }; }
+    fresh = toFix;
     // A judged run with no folder here (a cloud run) comes as its account record.
     const freshIds = new Set(fresh.map(j => j.id));
     const judgments: ImproveJudgment[] = [];
@@ -462,18 +498,19 @@ const pruneEvery = 5;
  * Fix the waiting corrections of a Method file while holding its lock, pass after pass until none waits, so the
  * corrections that arrive during a pass join the next. Each correction's outcome is saved for method wait. After a pass
  * that changed the file, the other cases run (improve.method's background_cases): a failure undoes that change. Then a
- * pruning pass runs when it is due. Returns undefined when another fix of the Method holds the lock.
+ * pruning pass runs when it is due. Returns undefined when another fix of the Method holds the lock. A correction whose
+ * change the later check undid is fixed once more in a later pass; after a second undo it ends with no fix found.
  */
 export async function fixWaiting(client: MethodClient, file: string, options: { run?: RunFile; waitMs?: number; runCases?: RunCases } = {}): Promise<FixOutcome[] | undefined> {
   const methodId = fileMethodId(file);
   if (!methodId || !client.token()) return [];
   const lock = join(fixFolder(methodId), 'lock');
   if (!takeLock(lock)) return undefined;
-  const fixes: FixOutcome[] = [], skip = new Set<string>();
+  const fixes: FixOutcome[] = [], undoneOnce = new Set<string>();
   try {
     for (;;) {
       let fix: FixOutcome | undefined;
-      try { fix = await fixCorrections(client, file, { ...options, skip }); }
+      try { fix = await fixCorrections(client, file, options); }
       catch (error: any) {
         for (const id of error.judgments ?? []) saveError(methodId, file, id, error.message, error.log);
         throw error;
@@ -483,8 +520,17 @@ export async function fixWaiting(client: MethodClient, file: string, options: { 
       for (const outcome of fix.outcomes) if (!outcome.again) saveOutcome(methodId, file, outcome, fix.log);
       fixes.push(fix);
       if (fix.applied && fix.background_cases.length) {
-        const checked = await checkBackground(client, file, fix, options).catch(error => { process.stderr.write(`The later check stopped: ${error.message}\n`); return undefined; });
-        for (const id of checked?.reopened ?? []) skip.add(id);
+        // A correction whose fix the later check undid is fixed once more in this process, on the restored file; after
+        // a second undo it ends with no fix found.
+        const again = fix.fixed.map(f => f.id).filter(id => !undoneOnce.has(id));
+        let checked;
+        try { checked = await checkBackground(client, file, fix, { ...options, reopen: again }); }
+        catch (error: any) {
+          // The change stays, but the later check did not finish (a usage limit too): its corrections say so.
+          for (const f of fix.fixed) saveError(methodId, file, f.id, `The later check of the fix stopped: ${error.message}`, fix.log);
+          throw error;
+        }
+        for (const id of checked.reopened) undoneOnce.add(id);
       }
     }
     const { localAgent } = await import('@withmethod/runtime/agents.js');
@@ -529,7 +575,7 @@ async function passedBefore(file: string, undoId: string | undefined, ids: strin
  * fails now and passed before the change (a correction that no fix answered yet fails on both) undoes the change, saves the restored file as a new version, and opens the corrections it answered again, so the next
  * method run fixes them anew. Each of these says one line on the next method run or method wait.
  */
-export async function checkBackground(client: MethodClient, file: string, fix: Pick<FixOutcome, 'background_cases' | 'undo_id' | 'fixed' | 'cause'>, options: { runCases?: RunCases } = {}) {
+export async function checkBackground(client: MethodClient, file: string, fix: Pick<FixOutcome, 'background_cases' | 'undo_id' | 'fixed' | 'cause'>, options: { runCases?: RunCases; reopen?: string[] } = {}) {
   const methodId = fileMethodId(file)!;
   const { listCases } = await import('@withmethod/runtime/cases.js');
   const active = new Set((await listCases(file)).filter((c: any) => c.status === 'active').map((c: any) => c.id as string));
@@ -551,11 +597,17 @@ export async function checkBackground(client: MethodClient, file: string, fix: P
     catch (error: any) { process.stderr.write(`The fix broke an earlier result, but it could not be undone: ${error.message}\n`); }
     if (done.undone) {
       await saveVersion(client, file, `Undid a fix that broke an earlier result: ${fix.cause}`.slice(0, 500));
-      const answered = fix.fixed.map(f => f.id);
-      if (answered.length) {
-        try { done.reopened = (await client.request<{ changed: string[] }>(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/reopen`, 'POST', { ids: answered, detail: 'The fix changed a result that was right before, so it was undone. Method will fix it again.' })).changed; }
+      // The corrections that this change answered: each is fixed again (reopen), or ends with no fix found. The stored
+      // outcome says so at once, so nobody reads "fixed" for a change that is gone.
+      const answered = fix.fixed.map(f => f.id), reopen = answered.filter(id => options.reopen?.includes(id) ?? true);
+      if (reopen.length) {
+        try { done.reopened = (await client.request<{ changed: string[] }>(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/reopen`, 'POST', { ids: reopen, detail: 'The fix changed a result that was right before, so it was undone. Method will fix it again.' })).changed; }
         catch (error: any) { process.stderr.write(`The account did not open the corrections again: ${error.message}\n`); }
       }
+      const ended = answered.filter(id => !done.reopened.includes(id)).map(id => ({ id, outcome: 'no_fix_found' as const, detail: 'Method found a fix, but it changed a result that was right before, so Method undid it.' }));
+      if (ended.length) await reportOutcomes(client, methodId, ended);
+      for (const outcome of ended) saveOutcome(methodId, file, outcome);
+      for (const id of done.reopened) markWorking(methodId, file, [id], process.pid);
       for (const f of fix.fixed) saveNotice(methodId, file, 'came_back', fixUndoneLine(f.note ?? undefined));
     }
   }
@@ -632,7 +684,8 @@ export async function fixCorrection(client: MethodClient, file: string, judgment
 export async function backgroundFix(client: MethodClient, file: string, ids: string[], options: { run?: RunFile; prune?: boolean; pollMs?: number } = {}) {
   const methodId = fileMethodId(file);
   if (!methodId) return;
-  setWorker(methodId, ids, process.pid);
+  // The corrections it was started for wait for it, also when it is started again for a correction that stopped.
+  markWorking(methodId, file, ids, process.pid);
   if (options.prune) {
     const lock = join(fixFolder(methodId), 'lock');
     while (!takeLock(lock)) await new Promise(wait => setTimeout(wait, options.pollMs ?? 500));

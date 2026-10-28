@@ -12,7 +12,7 @@
  * instructions; runs count separate learners; corrections arrive one at a time; one Claude judge that reads every
  * source in full and scores "partly" as half; a noise check before approval; usage per correction.
  */
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -25,6 +25,7 @@ import { writePrivateJson } from './files.js';
 import { configRoot } from './computer-settings.js';
 import { linkCells, readAccount, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PlannedCell } from './compare-account.js';
 import { ensureLocalServer, registerLocalRun } from './local-server.js';
+import { correctionCaseId } from './improve.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
@@ -86,7 +87,6 @@ export const comparisonSchema = z.strictObject({
     guard: z.strictObject({ measure: text, max_drop: z.number().min(0) }).optional().describe('Another measure on which the winning arm must not be more than max_drop below the other arm (with more than two arms, the best other arm), at the checkpoint that decides.'),
   }).describe('The decision rule. Anything that does not pass is "can\'t tell yet".'),
   runs: z.number().int().min(1).describe('How many separate learners each arm has. Each learner is its own copy of the arm and gets the full treatment; each point measures each learner once per input.'),
-  trial: z.number().int().min(1).optional().describe('How many inputs each arm runs in the trial before the full run. 2 when not given.'),
   treatment: z.strictObject({
     events: z.array(eventSchema).min(1).describe('What each arm gets, in order, one at a time.'),
     feedback_writers: z.record(name, feedbackWriterSchema).optional().describe('Feedback writers by name, for events with feedback: each writes the correction from the arm\'s own output and the hidden expected answer. Use one when the expert\'s feedback depends on what the agent did.'),
@@ -125,6 +125,16 @@ const requiredParts: Record<string, string> = {
 const sha = (value: unknown) => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const isFileInput = (id: string) => /\.json$/i.test(id);
+/** Remove a folder that may hold read-only folders (an agent may make the files it got read-only): make it writable first. */
+export function removeFolder(path: string) {
+  const writable = (dir: string) => {
+    let entries: import('node:fs').Dirent[];
+    try { chmodSync(dir, 0o700); entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) if (entry.isDirectory() && !entry.isSymbolicLink()) writable(join(dir, entry.name));
+  };
+  writable(path);
+  rmSync(path, { recursive: true, force: true });
+}
 /** The time that a fix or a builder has for one correction: the run limit of Method's fixer (improve.method), 2 hours. */
 export const FIX_LIMIT_MS = 7_200_000;
 /** How many learners of each arm the trial runs at the start, for the noise check. */
@@ -395,7 +405,7 @@ export function ruleSentence(doc: Comparison) {
   const point = at !== undefined ? ` after ${plural(at, 'treatment event')}` : '';
   const other = Object.keys(doc.arms).length > 2 ? 'the best other arm\'s' : 'the other arm\'s';
   const guardText = guard ? `, and its ${guard.measure}${at !== undefined ? ' at that point' : ''} is not more than ${guard.max_drop} below ${other}` : '';
-  return `An arm is better when its mean ${doc.measure.name}${point} is at least ${margin} above every other arm's${guardText}, with at least ${plural(min_runs, 'learner')} behind each point. Otherwise: can't tell yet.`;
+  return `An arm is better when its mean ${doc.measure.name}${point} is at least ${margin} above every other arm's, its lead is larger than the spread between two copies of the same agent${at !== undefined ? ' at that point' : ''}${guardText}, with at least ${plural(min_runs, 'learner')} behind each point. Otherwise: can't tell yet.`;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -470,7 +480,6 @@ export function decisions(doc: Comparison): Decision[] {
   add('runs_per_point', 'learners', String(doc.runs), all(['runs']));
   const ruleFields = ['margin', 'min_runs', ...(doc.rule.at !== undefined ? ['at'] : []), ...(doc.rule.guard ? ['guard'] : [])].map(f => `rule.${f}`);
   add('rule', 'decision rule', ruleSentence(doc), all(ruleFields));
-  add('trial', 'trial size', plural(doc.trial ?? 2, 'input'), doc.trial === undefined ? 'method' : all(['trial']));
   (doc.assumptions ?? []).forEach((a, i) => add('assumptions', short(typeof a === 'string' ? a : a.text, 200), typeof a === 'string' ? a : a.text, all([`assumptions.${i + 1}`])));
   for (const [part, list] of Object.entries(doc.notes ?? {})) {
     const page = notePart(part);
@@ -508,8 +517,10 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   if (plain.length) add('same_for_both', 'A plain agent gets its starting instructions and the same task as the Method agent, with the same files.');
   if (corrections) {
     add('treatment', 'Corrections arrive one at a time: an agent finishes learning from one correction before it gets the next.');
+    add('trial', `Before approval, the trial gives one copy of each agent its first ${TRIAL_EVENTS} corrections, to show what it received and what changed it, and how long one takes. The full run gives every copy the rest.`);
     add('treatment', `An agent has up to ${FIX_LIMIT_MS / 3_600_000} hours to learn from each correction.`);
-    add('treatment', 'A correction counts as received when Method\'s fix found a change, found that no change was needed, or found no fix, or when the session that edits the instructions finished, edited or not. When Method\'s fix could not test a change or stopped, the correction is not received, and the comparison stops there.');
+    add('treatment', 'A correction counts as received when Method\'s fix ended: it applied a tested change, found that the run already does what the correction asks, or found no fix. For a plain agent it counts as received when the session that edits the instructions finished, edited or not. When Method\'s fix could not test a change or stopped (a usage limit too), the correction is not received, and the comparison stops there.');
+    add('treatment', 'Each agent\'s page counts both: the corrections it received, and those that changed the agent (a tested change applied, or the instructions edited).');
   }
   if (feedback) {
     add('treatment', 'A feedback writer reads each agent\'s own output of its training run and the hidden expected answer, and writes the correction that this agent gets. So each agent\'s corrections are about its own work, and their words differ by design. Each agent\'s page lists the words it received.');
@@ -525,8 +536,9 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   if ([doc.measure, ...(doc.other_measures ?? [])].some(m => m.checklist)) add('main_measure', 'A checklist comes from each input\'s expected answer: each item counts for that input only, and nothing is added to it.');
   if (doc.measure.covered) add('main_measure', 'At each checkpoint only the items that a correction given so far covers count.');
   if (corrections) add('other_measures', 'Usage per correction for each agent is shown and does not decide: tokens when every agent reports them, else minutes.');
-  if (doc.measure.rubric || doc.measure.checklist) add('rule', `If every agent already scores more than ${fixed(1 - doc.rule.margin)} (1 minus the margin) at the start, no agent can lead by the margin, so the comparison stops before approval.`);
-  add('noise', `The trial runs each trial input at the start with ${NOISE_LEARNERS} copies of each agent. If two copies of the same agent differ by more than half the margin, the comparison stops before approval.${doc.measure.covered ? ' No item is covered at the start, so the noise is measured on all items of the same checklist.' : ''}`);
+  if (!doc.measure.person) add('rule', `If the main measure is a share from 0 to 1 and every agent already scores more than ${fixed(1 - doc.rule.margin)} (1 minus the margin) at the start, no agent can lead by the margin, so the comparison stops before approval.`);
+  add('rule', 'An agent is not better when two copies of the same agent differ at the point that decides by as much as its lead: the lead could come from which copies learned what.');
+  add('noise', `The trial runs every checking input at the start with ${NOISE_LEARNERS} copies of each agent, and shows how much two copies differ. It does not stop the comparison: the spread between copies at the point that decides is part of the decision.${doc.measure.covered ? ' No item is covered at the start, so the start is measured on all items of the same checklist.' : ''}`);
   // Where run content goes, with the workspace's name, is the page's own line.
   add('run_rules', 'A failed run stops the comparison until you run it again. Runs that did not change are reused.');
   return rules;
@@ -601,7 +613,7 @@ async function copyArm(source: string, target: string) {
   const { localSetup } = await import('./local-setup.js');
   const environment = (await localSetup(source, {})).config.environment ?? {};
   const env = join(target, 'environment');
-  rmSync(env, { recursive: true, force: true });
+  removeFolder(env);
   const folders: Record<string, string> = {};
   for (const [envName, definition] of Object.entries(workflow.environment ?? {}) as Array<[string, any]>) {
     const bound = environment[envName];
@@ -628,7 +640,7 @@ function generatedMethod(doc: Comparison, previousId: string | undefined, counts
   const treated = treatment ? { treated: 'treatment' } : {};
   const reports = ['state.reported'];
   const steps: Record<string, any> = {};
-  if (treatment) steps.trial_treat = { name: 'Trial treatment', purpose: 'Gives the first learner of each arm the treatment events before the first checkpoint, one at a time, and records what it received and what happened to each.', in: { comparison: 'inputs.comparison' }, do: stage('trial_treat'), changes: ['state.treatment'], out: { trial_treatment: { type: 'text' } } };
+  if (treatment) steps.trial_treat = { name: 'Trial treatment', purpose: `Gives the first learner of each arm the first ${TRIAL_EVENTS} treatment events, one at a time, and records what it received and what happened to each.`, in: { comparison: 'inputs.comparison' }, do: stage('trial_treat'), changes: ['state.treatment'], out: { trial_treatment: { type: 'text' } } };
   steps.trial_plan = { name: 'Trial plan', purpose: `Lists the trial runs (each arm at the start on the first inputs, with ${NOISE_LEARNERS} learners) that have not finished yet, and reports them to the comparison page.`, in: { comparison: 'inputs.comparison', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('trial_plan'), changes: reports, out: { trial_cells: list, trial_done: list } };
   steps.trial = { name: 'Trial', purpose: 'Runs each trial cell.', each: { cell: 'trial_cells' }, concurrency: 4, do: stage('trial_cell'), out: { trial_run: { type: 'text' } } };
   steps.trial_gather = { name: 'Trial grades', purpose: 'Lists each trial run with the measures that grade it (a person marks only after the full run).', in: { comparison: 'inputs.comparison', trial_runs: 'trial_run', trial_done: 'trial_done', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('trial_gather'), out: { trial_graded: list } };
@@ -704,7 +716,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     main_measure: await measure(doc.measure),
     other_measures: [...await Promise.all((doc.other_measures ?? []).map(measure)),
       ...(corrections ? [{ name: 'Usage per correction', how: 'usage', higher_is_better: false, description: 'What each arm used to take one correction (its training run and its fix or edit): tokens when every agent reports them, else minutes.' }] : [])],
-    rule: doc.rule, runs_per_point: doc.runs, learners: doc.runs, ...(doc.trial ? { trial: doc.trial } : {}),
+    rule: doc.rule, runs_per_point: doc.runs, learners: doc.runs,
     ...(doc.treatment ? { treatment: { kind, items: kinds.length, checkpoints: [...doc.treatment.checkpoints].sort((a, b) => a - b),
       order: doc.treatment.seed !== undefined ? 'shuffled' : 'given', ...(doc.treatment.seed !== undefined ? { seed: doc.treatment.seed } : {}),
       list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name) : `New input: ${e.input.id}`), 4000) })) } } : {}),
@@ -757,9 +769,9 @@ export function taskPrompt(value: unknown, deliverable: string | null) {
   return deliverable ? `${input}\n\nHand in your work as the file ${deliverable} in your working folder.` : input;
 }
 const builderPrompt = `You maintain the instructions of an agent. Its instructions are in instructions.md.
-The agent did the task in task.md and handed in the file in wrong-output/. A person corrected that work, or said that it is right; their words are in correction.md.
+The agent did the task in task.md, with the files in task-files/ (as the agent got them), and handed in the file in wrong-output/. A person corrected that work, or said that it is right; their words are in correction.md. The earlier corrections, in order, are in corrections-log.md.
 Edit instructions.md so that the agent follows this correction on later tasks and still follows everything the instructions already say. The agent reads only instructions.md and each new task: it never sees this correction or this task again.
-Change only instructions.md. When the instructions already make the agent do what the correction asks, leave the file as it is.`;
+Read the task's files and the earlier corrections as you need them, and do not change them. Change only instructions.md. When the instructions already make the agent do what the correction asks, leave the file as it is.`;
 /** What the plain arm's builder reads when the feedback writer found nothing wrong. */
 const RIGHT_WORDS = 'Right: the person checked this work and found nothing wrong.';
 /** The version of the feedback writer's judge: a new prompt writes every feedback again. */
@@ -922,7 +934,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
     checkpoints: doc.treatment ? [...doc.treatment.checkpoints].sort((a, b) => a - b) : null,
     measures: [measure(doc.measure, true), ...(doc.other_measures ?? []).map(m => measure(m, false))],
     expected, checklists,
-    rule: doc.rule, rule_sentence: ruleSentence(doc), learners: doc.runs, trial: Math.min(doc.trial ?? 2, doc.inputs.length),
+    rule: doc.rule, rule_sentence: ruleSentence(doc), learners: doc.runs,
     assumptions: assumptionsOf(doc), compare_root: root, web, judge, judge_method: judgeMethod, model: models.shared, names: doc.about_inputs?.names ?? {},
   };
   const methodPath = join(folder, 'comparison.method');
@@ -983,6 +995,8 @@ const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => 
  * not_run: the training run failed. not_given: an earlier event of the learner is missing. given: a new input.
  */
 export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'not_run' | 'not_given' | 'given';
+/** Whether an outcome changed the agent: Method's fix applied a tested change, or the builder edited the instructions. */
+export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited';
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
   question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
@@ -1026,8 +1040,8 @@ export const delivery = {
     const placed = placeFolders(learner.dir, settings.folders ?? {});
     try { return await deliverIn(room.env, event, learner, workDir, before); } finally { placed(); await room.remove(); }
   },
-  async build(event: any, arm: any, instructions: string, workDir: string, plan: Plan): Promise<Built> {
-    return buildIn(event, arm, instructions, workDir, plan);
+  async build(event: any, arm: any, instructions: string, workDir: string, plan: Plan, log: Array<{ index: number; input: string; text: string }> = []): Promise<Built> {
+    return buildIn(event, arm, instructions, workDir, plan, log);
   },
 };
 /**
@@ -1043,17 +1057,26 @@ function placeFolders(dir: string, folders: Record<string, string>) {
     cpSync(from, target, { recursive: true, verbatimSymlinks: true });
   }
   return () => {
-    for (const envName of Object.keys(folders)) rmSync(join(dir, envName), { recursive: true, force: true });
+    for (const envName of Object.keys(folders)) removeFolder(join(dir, envName));
     for (const [target, saved] of aside) renameSync(saved, target);
   };
 }
 async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: string; file: string }, workDir: string, before?: Delivered): Promise<Delivered> {
+  const file = join(learner.dir, learner.file);
   if (before?.judgment_id && before.run_id) {
-    const earlier = await waitForFix(before.run_id, before.judgment_id, env);
+    let earlier = await waitForFix(before.run_id, before.judgment_id, env, file);
+    // A fix that stopped (an error, a usage limit) gave its correction back: the same judgment of the same run is fixed
+    // again, so one correction stays one judgment with one case.
+    if (earlier.outcome === 'stopped' && earlier.pending) {
+      await command(['__fix', file, '--judgment', before.judgment_id], env);
+      earlier = await waitForFix(before.run_id, before.judgment_id, env, file);
+    }
     if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return { ...earlier, ...(before.text ? { text: before.text } : {}) };
+    // A correction given again is a new judgment of a new run: the old judgment's case does not stay as a second one.
+    rmSync(join(learner.dir, 'cases', correctionCaseId(before.judgment_id)), { recursive: true, force: true });
   }
   const runDir = join(workDir, 'run');
-  rmSync(workDir, { recursive: true, force: true });
+  removeFolder(workDir);
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
   writePrivateJson(join(workDir, 'inputs.json'), event.input.value);
   const run = await command(['run', join(learner.dir, learner.file), '--inputs', join(workDir, 'inputs.json'), '--run-dir', runDir], env);
@@ -1087,7 +1110,7 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   try { judgment = JSON.parse(judged.stdout); } catch { return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method could not take the correction', detail: `method judge failed: ${judged.stderr.trim() || judged.stdout.trim()}` }; }
   const id = judgment?.judgment?.id;
   if (!id || !judgment.fix) return { received: false, outcome: 'stopped', run_id: runId, text, reason: 'Method started no fix for this correction', ...(judgment?.stopped?.failure?.headline ? { detail: judgment.stopped.failure.headline } : {}) };
-  return { ...await waitForFix(runId, id, env), text };
+  return { ...await waitForFix(runId, id, env, file), text };
 }
 
 /** A fix's outcome in the comparison's words, and whether the correction counts as received. */
@@ -1119,25 +1142,43 @@ async function armRoom(file: string, cacheDir: string, fix: boolean, folders: Re
     ...(process.env.METHOD_ACCOUNT ? { METHOD_ACCOUNT: process.env.METHOD_ACCOUNT } : {}) });
   return room;
 }
-/** Wait for the fix of a correction until it has a final outcome, for at most FIX_LIMIT_MS. */
-async function waitForFix(runId: string, id: string, env: NodeJS.ProcessEnv): Promise<Delivered> {
+/**
+ * Wait for the fix of a correction until it has a final outcome and the fix has ended completely: its later check of
+ * the other cases and a pruning pass run after the outcome, and can undo the change, so the outcome is read again
+ * when the Method's fix lock is free. For at most FIX_LIMIT_MS. pending: the fix stopped and gave the correction back.
+ */
+async function waitForFix(runId: string, id: string, env: NodeJS.ProcessEnv, file: string): Promise<Delivered & { pending?: boolean }> {
   const deadline = Date.now() + FIX_LIMIT_MS;
+  const late = { received: false, outcome: 'stopped' as const, run_id: runId, judgment_id: id, reason: `Method's fix did not finish within ${FIX_LIMIT_MS / 3_600_000} hours, the time each correction has` };
   for (;;) {
     const left = Math.ceil((deadline - Date.now()) / 1000);
-    if (left <= 0) return { received: false, outcome: 'stopped', run_id: runId, judgment_id: id, reason: `Method's fix did not finish within ${FIX_LIMIT_MS / 3_600_000} hours, the time each correction has` };
+    if (left <= 0) return late;
     const waited = await command(['wait', id, '--json', '--timeout', String(Math.min(600, left))], env);
     let record: any;
     try { record = JSON.parse(waited.stdout).outcomes?.[0]; } catch { return { received: false, outcome: 'stopped', run_id: runId, judgment_id: id, reason: 'Method could not read what the fix did', detail: `method wait failed: ${waited.stderr.trim()}` }; }
     if (record?.status === 'working') continue;
     if (record?.status === 'done') {
+      if (fixHolds(file, env)) {
+        while (fixHolds(file, env) && Date.now() < deadline) await new Promise(done => setTimeout(done, 1000));
+        if (fixHolds(file, env)) return late;
+        continue;
+      }
       const { received, outcome } = fixOutcome(record.outcome?.outcome);
       if (outcome === 'question') return { received, outcome, run_id: runId, judgment_id: id, reason: `Method's fix asks a question: ${record.outcome?.question ?? record.lines?.[0] ?? ''}`, detail: `Answer it with method answer ${id} "THE ANSWER", then run the comparison again` };
       if (outcome === 'could_not_test') return { received, outcome, run_id: runId, judgment_id: id, reason: 'Method\'s fix could not test a change', ...(record.outcome?.detail ? { detail: record.outcome.detail } : {}) };
       if (!received) return { received, outcome, run_id: runId, judgment_id: id, reason: `Method's fix ended ${outcomeWords[outcome]}` };
       return { received, outcome, run_id: runId, judgment_id: id, tokens: null };
     }
-    return { received: false, outcome: 'stopped', run_id: runId, judgment_id: id, reason: 'Method\'s fix stopped before it finished', ...(record?.error ? { detail: `${record.error} (judgment ${id})` } : {}) };
+    // The fix stopped: its error in its own words (a usage limit says so), with the cause for the CLI.
+    const error = typeof record?.error === 'string' && record.error.trim() ? record.error.trim() : null;
+    return { received: false, outcome: 'stopped', run_id: runId, judgment_id: id, pending: true, reason: error ? `Method's fix stopped: ${error.split('\n')[0]}` : 'Method\'s fix stopped before it finished', ...(error ? { detail: `${error} (judgment ${id})` } : {}) };
   }
+}
+/** Whether a fix of the learner's Method still runs: its lock in the learner's cache names a running process. */
+function fixHolds(file: string, env: NodeJS.ProcessEnv) {
+  const id = (readDocument(file) as any).id;
+  if (typeof id !== 'string' || !env.METHOD_CACHE_DIR) return false;
+  try { const pid = JSON.parse(readFileSync(join(env.METHOD_CACHE_DIR, 'fixes', id, 'lock'), 'utf8')).pid; process.kill(pid, 0); return true; } catch { return false; }
 }
 /** Run the method CLI that runs this comparison (the first method on PATH, which the SDK puts there). */
 function command(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -1172,7 +1213,7 @@ async function runSession(methodFile: string, runDir: string, folders: Record<st
   // A ready folder is the room as it is (the session works on its own copy); folders are copied into a room by name.
   const room = typeof folders === 'string' ? folders : join(dirname(runDir), 'room');
   if (typeof folders !== 'string') {
-    rmSync(room, { recursive: true, force: true });
+    removeFolder(room);
     mkdirSync(room, { recursive: true, mode: 0o700 });
     for (const [envName, dir] of Object.entries(folders)) cpSync(dir, join(room, envName), { recursive: true });
   }
@@ -1181,7 +1222,7 @@ async function runSession(methodFile: string, runDir: string, folders: Record<st
   try {
     await hooks.before?.(inputs);
     return await runMethod(methodFile, { allow_local_processes: true }, { runDir, inputs, fresh: true, ...(hooks.onStart ? { onStart: hooks.onStart, onEvent: hooks.onEvent } : {}) });
-  } finally { if (typeof folders !== 'string') rmSync(room, { recursive: true, force: true }); }
+  } finally { if (typeof folders !== 'string') removeFolder(room); }
 }
 /** The text of a file that a session wrote in its room (a copy under its attempt folder in artifacts/session), or null. */
 function sessionFile(runDir: string, session: any, path: string): string | null {
@@ -1191,8 +1232,8 @@ function sessionFile(runDir: string, session: any, path: string): string | null 
 }
 
 /** The builder of a plain arm, for one correction: a training run with the current instructions (on the input's folders), then the edit. */
-async function buildIn(event: any, arm: any, instructions: string, workDir: string, plan: Plan): Promise<Built> {
-  rmSync(workDir, { recursive: true, force: true });
+async function buildIn(event: any, arm: any, instructions: string, workDir: string, plan: Plan, log: Array<{ index: number; input: string; text: string }> = []): Promise<Built> {
+  removeFolder(workDir);
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
   const folders = cellFolders(arm, event.input);
   const train = join(workDir, 'training', 'run');
@@ -1215,6 +1256,9 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
   writeFileSync(join(room, 'task.md'), `${taskPrompt(event.input.value, event.input.deliverable)}\n`);
   if (wrong !== null) writeFileSync(join(room, 'wrong-output', basename(event.input.deliverable)), wrong);
   else writeFileSync(join(room, 'wrong-output', 'NOT-HANDED-IN.md'), `The agent did not hand in ${event.input.deliverable ?? 'a file'}.\n`);
+  // The case it learns from: the task's own files as the agent got them, and every earlier correction in order.
+  for (const [envName, dir] of Object.entries(folders)) cpSync(dir, join(room, 'task-files', envName), { recursive: true });
+  writeFileSync(join(room, 'corrections-log.md'), log.length ? `${log.map(l => `${l.index}. On ${l.input}: ${l.text}`).join('\n')}\n` : 'No earlier corrections.\n');
   const build = join(workDir, 'builder', 'run');
   const built: any = await runSession(arm.builder, build, room, {});
   const tokens = [tokensOfRun(train), tokensOfRun(build)];
@@ -1226,7 +1270,7 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
 }
 
 /** Copy a folder without its run records. */
-const copyFolder = (from: string, to: string) => { rmSync(to, { recursive: true, force: true }); cpSync(from, to, { recursive: true, filter: path => !['.method-runs', 'node_modules'].includes(basename(path)) }); };
+const copyFolder = (from: string, to: string) => { removeFolder(to); cpSync(from, to, { recursive: true, filter: path => !['.method-runs', 'node_modules'].includes(basename(path)) }); };
 const readRecords = (file: string) => {
   const records = new Map<string, any>();
   try { for (const line of readFileSync(file, 'utf8').split('\n').filter(Boolean)) { const r = JSON.parse(line); records.set(r.key, r); } } catch { /* nothing yet */ }
@@ -1275,7 +1319,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
   const done: EventRecord[] = [], missing: LearnerTreatment['missing'] = [];
   let stopped = false;
   for (const event of events) {
-    const key = sha({ index: event.index, kind: event.kind, text: event.text ?? null, input: event.input.hash, builder: arm.plain ? sha(arm.plain) : null, ...(event.feedback ? { feedback: event.feedback.hash } : {}) });
+    const key = sha({ index: event.index, kind: event.kind, text: event.text ?? null, input: event.input.hash, builder: arm.plain ? sha({ plain: arm.plain, prompt: builderPrompt }) : null, ...(event.feedback ? { feedback: event.feedback.hash } : {}) });
     if (stopped) {
       missing.push({ index: event.index, reason: 'not given', after: missing[0]!.index });
       done.push({ key, index: event.index, kind: event.kind, input: event.input.id, learner, received: false, outcome: 'not_given', tokens: null, duration_ms: 0, at: new Date().toISOString() });
@@ -1285,7 +1329,8 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       const started = Date.now();
       let result: Delivered | Built;
       try {
-        if (arm.plain) result = event.kind === 'correction' ? await delivery.build(event, arm, instructions, join(base, 'events', String(event.index)), plan) : { received: true, outcome: 'given', instructions };
+        if (arm.plain) result = event.kind === 'correction' ? await delivery.build(event, arm, instructions, join(base, 'events', String(event.index)), plan,
+          done.filter(e => e.kind === 'correction' && e.received).map(e => ({ index: e.index, input: plan.names?.[e.input] ?? e.input.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, ''), text: e.text ?? plan.events.find((x: any) => x.index === e.index)?.text ?? '' }))) : { received: true, outcome: 'given', instructions };
         else result = await delivery.deliver(event, method!, method!.cache, join(base, 'events', String(event.index)), records.get(key), { web: plan.web, folders: cellFolders(arm, event.input) });
       } catch (error) { result = { received: false, outcome: 'stopped', reason: 'it stopped with an error', detail: (error as Error).message }; }
       const before = records.get(key);
@@ -1371,7 +1416,7 @@ function missingLines(plan: Plan, learner: LearnerTreatment, kind: string, copie
  */
 function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment | undefined, plan: Plan) {
   const own = runs.filter(r => r.arm === arm);
-  const lines = [{ what: 'Inputs run', received: own.length, planned, missing: [] as string[] }];
+  const lines: Array<{ what: string; received: number; planned: number; missing: string[]; changed?: number }> = [{ what: 'Inputs run', received: own.length, planned, missing: [] as string[] }];
   const details: string[] = [];
   const count = (kind: string) => {
     const learners = t?.learners ?? [];
@@ -1381,14 +1426,15 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
     const copies = learners.filter(l => l.events.some(e => e.kind === kind)).length > 1;
     const missing = learners.map(l => missingLines(plan, l, kind, copies));
     details.push(...missing.flatMap(m => m.details));
-    return { planned: plannedEvents, received, missing: missing.flatMap(m => m.lines) };
+    const changed = learners.reduce((n, l) => n + l.events.filter(e => e.kind === kind && e.received && changedAgent(e.outcome)).length, 0);
+    return { planned: plannedEvents, received, missing: missing.flatMap(m => m.lines), ...(kind === 'correction' ? { changed } : {}) };
   };
   const corrections = count('correction'), inputs = count('input');
   if (corrections.planned) lines.push({ what: 'Corrections received', ...corrections });
   if (inputs.planned) lines.push({ what: 'New inputs received', ...inputs });
   const list = (t?.learners ?? []).flatMap(l => l.events.filter(e => e.kind === 'correction').map(e => {
     const event = plan.events.find((x: any) => x.index === e.index);
-    return { index: e.index, input: e.input, text: short(e.text ?? event?.text ?? '', 2000), outcome: e.outcome, received: e.received, learner: l.learner + 1, ...(e.reason ? { reason: short(e.reason, 500) } : {}) };
+    return { index: e.index, input: e.input, text: short(e.text ?? event?.text ?? '', 2000), outcome: e.outcome, received: e.received, changed: e.received && changedAgent(e.outcome), learner: l.learner + 1, ...(e.reason ? { reason: short(e.reason, 500) } : {}) };
   }));
   return { models: [...new Set(own.flatMap(r => r.models ?? []))].map(modelName).slice(0, 10), lines, corrections: list, details };
 }
@@ -1407,7 +1453,7 @@ function receivedText(received: ReturnType<typeof receivedOf>) {
     return [...counts].map(([outcome, n]) => `${n} ${outcomeWords[outcome as CorrectionOutcome]}`).join(', ');
   };
   return [...(received.models.length ? [`Model: ${received.models.join(', ')}.`] : []),
-    ...received.lines.map(l => `${l.what}: ${l.received} of ${l.planned}${l.what === 'Corrections received' && received.corrections.length ? ` (${tally(received.corrections)})` : ''}.`),
+    ...received.lines.map(l => `${l.what}: ${l.received} of ${l.planned}${l.what === 'Corrections received' && received.corrections.length ? ` (${tally(received.corrections)})` : ''}.${l.changed !== undefined ? ` Changed the agent: ${l.changed}.` : ''}`),
     ...received.details.map(m => `Missing: ${m.charAt(0).toLowerCase()}${m.slice(1)}`)].join(' ');
 }
 
@@ -1471,14 +1517,14 @@ function cellFolders(arm: any, input: { room: string | null }): Record<string, s
 
 /**
  * The cells of a stage. Full: every arm × checkpoint × learner × input. Trial: each arm at the start (checkpoint 0, or
- * the arm itself without a treatment) on the first inputs, with NOISE_LEARNERS learners, for the noise check.
+ * the arm itself without a treatment) on every checking input, with NOISE_LEARNERS learners: the start values. The
+ * full run reuses them.
  */
 function cells(plan: Plan, treated: ArmTreatment[] | null, stage: 'trial' | 'full'): Cell[] {
   const start = plan.checkpoints ? 0 : null;
   const checkpoints: Array<number | null> = stage === 'trial' ? [start] : plan.checkpoints ?? [null];
-  const inputs = stage === 'trial' ? plan.inputs.slice(0, plan.trial) : plan.inputs;
+  const inputs = plan.inputs;
   const learners = stage === 'trial' ? NOISE_LEARNERS : plan.learners;
-  const trialInputs = new Set(plan.inputs.slice(0, plan.trial).map((i: any) => i.id));
   const out: Cell[] = [];
   for (const arm of plan.arms) for (const checkpoint of checkpoints) for (let learner = 0; learner < learners; learner++) {
     const own = treated?.find(t => t.arm === arm.name)?.learners[learner];
@@ -1486,7 +1532,7 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, stage: 'trial' | 'ful
     if (!snapshot) continue;
     for (const input of inputs) {
       const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain ? { method: arm.method } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}), input, repeat: learner, checkpoint,
-        trial: trialInputs.has(input.id) && learner < NOISE_LEARNERS && checkpoint === start, treatment_note: treatmentNote(plan, arm, checkpoint, own) };
+        trial: learner < NOISE_LEARNERS && checkpoint === start, treatment_note: treatmentNote(plan, arm, checkpoint, own) };
       out.push({ key: runKey(cell), ...cell });
     }
   }
@@ -1596,7 +1642,7 @@ async function saveFinishedRun(cell: Cell, record: any) {
 async function runCell(cell: Cell) {
   process.env.METHOD_CACHE_DIR = cell.cache_dir;
   const runDir = join(cell.folder, 'runs', cell.arm, cell.key.slice(0, 16));
-  rmSync(runDir, { recursive: true, force: true });
+  removeFolder(runDir);
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
   const { runMethod } = await import('@withmethod/runtime/runner.js');
   const started = Date.now();
@@ -1722,50 +1768,67 @@ function writeTranscripts(artifacts: string, target: string) {
 // The trial: what each arm received, and the noise at the start
 
 /**
- * The noise check: at the start (checkpoint 0, or the arms themselves without a treatment), the difference between the
- * mean main measure of two learners of the same arm on the trial inputs. With a main measure that scores only the
- * items that corrections cover, no item is covered at the start, so the noise is measured on all items of the same
- * checklist. It passes when the largest difference is at most half the margin. A main measure that a person marks is
- * not measured (spread null).
+ * The noise at the start (checkpoint 0, or the arms themselves without a treatment): the difference between the mean
+ * main measure of two learners of the same arm on every checking input. It is shown and does not stop anything: the
+ * noise that decides is the spread between learners at the point that decides (learnerSpread). With a main measure
+ * that scores only the items that corrections cover, no item is covered at the start, so the start is measured on all
+ * items of the same checklist. A main measure that a person marks has no start value (spread null).
  */
 export function noiseCheck(plan: Plan, grades: any[]) {
   const main = plan.measures.find((m: any) => m.main);
   const margin = plan.rule.margin;
-  if (main.person !== undefined) return { spread: null, margin, passes: null, measure: main.name, by_arm: {} as Record<string, number | null>, start: {} as Record<string, Array<number | null>> };
+  if (main.person !== undefined) return { spread: null, margin, measure: main.name, by_arm: {} as Record<string, number | null>, start: {} as Record<string, Array<number | null>> };
   const start = plan.checkpoints ? 0 : null;
-  const trialInputs: string[] = plan.inputs.slice(0, plan.trial).map((i: any) => i.id);
+  const inputs: string[] = plan.inputs.map((i: any) => i.id);
   const scoreOf = (g: any) => { const v = g.scores?.[main.name]; return typeof v === 'number' ? v : typeof g.noise_scores?.[main.name] === 'number' ? g.noise_scores[main.name] : null; };
   const by_arm: Record<string, number | null> = {}, starts: Record<string, Array<number | null>> = {};
   for (const arm of plan.arms) {
-    const means = Array.from({ length: NOISE_LEARNERS }, (_, learner) => {
-      const own = trialInputs.map(input => grades.find(g => g.arm === arm.name && g.checkpoint === start && g.repeat === learner && g.input === input)).map(g => g ? scoreOf(g) : null);
-      return own;
-    });
+    const means = Array.from({ length: NOISE_LEARNERS }, (_, learner) =>
+      inputs.map(input => grades.find(g => g.arm === arm.name && g.checkpoint === start && g.repeat === learner && g.input === input)).map(g => g ? scoreOf(g) : null));
     // Only the inputs that every learner has a number for.
-    const both = trialInputs.map((_, i) => means.every(list => list[i] !== null && list[i] !== undefined));
+    const both = inputs.map((_, i) => means.every(list => list[i] !== null && list[i] !== undefined));
     const meanOf = (list: Array<number | null>) => { const values = list.filter((_, i) => both[i]) as number[]; return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null; };
     const learnerMeans = means.map(meanOf);
     starts[arm.name] = learnerMeans.map(m => m === null ? null : Number(m.toFixed(4)));
     by_arm[arm.name] = learnerMeans.some(m => m === null) ? null : Number((Math.max(...learnerMeans as number[]) - Math.min(...learnerMeans as number[])).toFixed(4));
   }
   const known = Object.values(by_arm).filter((v): v is number => v !== null);
-  const spread = known.length ? Math.max(...known) : null;
-  return { spread, margin, passes: spread === null ? null : spread <= margin / 2 + 1e-9, measure: main.name, by_arm, start: starts };
+  return { spread: known.length ? Math.max(...known) : null, margin, measure: main.name, by_arm, start: starts };
 }
 
 /**
- * The too easy check: when every arm's start value on the main measure (the mean of its learners' values that the
- * noise check uses) is above 1 − margin, no arm can lead by the margin, and the trial stops before approval. Only for a
- * main measure whose top is 1 (a rubric or a checklist); null when the measure has no known top or an arm has no start
- * value. sentence: what the page and the error say when it stops.
+ * The spread between the learners of each arm at a point: each learner's mean main measure over the inputs, and the
+ * largest difference between two learners of the same arm. A lead that is not larger than this spread could come from
+ * which copies happened to learn what, so the decision says "can't tell yet". Null for an arm with fewer than 2
+ * learners with a number.
+ */
+export function learnerSpread(plan: Plan, grades: any[], at: number | null, measure: string) {
+  const by_arm: Record<string, number | null> = {};
+  for (const arm of plan.arms) {
+    const means: number[] = [];
+    for (let learner = 0; learner < plan.learners; learner++) {
+      const values = grades.filter(g => g.arm === arm.name && g.checkpoint === at && g.repeat === learner).map(g => g.scores?.[measure]).filter((v): v is number => typeof v === 'number');
+      if (values.length) means.push(values.reduce((a, b) => a + b, 0) / values.length);
+    }
+    by_arm[arm.name] = means.length >= 2 ? Number((Math.max(...means) - Math.min(...means)).toFixed(4)) : null;
+  }
+  const known = Object.values(by_arm).filter((v): v is number => v !== null);
+  return { spread: known.length ? Math.max(...known) : null, by_arm };
+}
+
+/**
+ * The too easy check: when every arm's start value on the main measure (the mean of its learners' values at the start)
+ * is above 1 − margin, no arm can lead by the margin, and the trial stops before approval. For a main measure whose
+ * values are shares from 0 to 1: a rubric or a checklist, or a code measure whose start values all lie from 0 to 1.
+ * Null when an arm has no start value, or a value is outside 0 to 1. sentence: what the page and the error say.
  */
 export function tooEasyCheck(plan: Plan, noise: ReturnType<typeof noiseCheck>) {
   const main = plan.measures.find((m: any) => m.main);
-  if (!main.rubric && !main.checklist) return null;
+  if (main.person !== undefined) return null;
   const start: Record<string, number> = {};
   for (const arm of plan.arms) {
     const values = (noise.start[arm.name] ?? []).filter((v): v is number => typeof v === 'number');
-    if (!values.length) return null;
+    if (!values.length || values.some(v => v < 0 || v > 1)) return null;
     start[arm.name] = Number((values.reduce((a, b) => a + b, 0) / values.length).toFixed(4));
   }
   const margin = plan.rule.margin, passes = !Object.values(start).every(v => v > 1 - margin + 1e-9);
@@ -1778,7 +1841,7 @@ export function tooEasyCheck(plan: Plan, noise: ReturnType<typeof noiseCheck>) {
 /** The summary of the trial for the approval question, or an error that names what an arm did not receive, the noise, or a test that is too easy. */
 async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTreatment[] | null) {
   const lines: string[] = [], short: string[] = [];
-  const trialInputs = plan.inputs.slice(0, plan.trial).length;
+  const trialInputs = plan.inputs.length;
   const received: Record<string, ReturnType<typeof receivedOf>> = {};
   for (const arm of plan.arms) {
     const t = treated?.find(x => x.arm === arm.name);
@@ -1791,13 +1854,12 @@ async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTr
   const usage = usagePerCorrection(plan, treated);
   const estimate = fullRunEstimate(plan, runs, treated);
   await sendStage(plan.folder, { stage: 'trial', trial: { inputs: trialInputs, received: accountReceived(received),
-    ...(noise.spread !== null && noise.passes !== null ? { noise: { spread: noise.spread, margin: noise.margin, passes: noise.passes, start: noise.start } } : {}),
+    ...(noise.spread !== null ? { noise: { spread: noise.spread, margin: noise.margin, start: noise.start } } : {}),
     ...(easy ? { too_easy: { start: easy.start, margin: easy.margin, passes: easy.passes } } : {}) },
     cost_estimate: { ...estimate.account, ...(usage ? { usage: { unit: usage.unit, values: Object.fromEntries(Object.entries(usage.values).map(([arm, v]) => [arm, v.value])) } } : {}) } });
   if (short.length) throw Error(`The trial stopped: an arm did not receive everything.\n${short.join('\n')}\nFix the cause and run the comparison again; everything that was received is kept.`);
-  const noiseText = noise.spread === null ? `Noise at the start: not measured (${noise.passes === null && plan.measures.find((m: any) => m.main).person !== undefined ? 'a person marks the main measure after the full run' : 'the trial runs have no number on the main measure'}).`
-    : `Noise at the start: two learners of the same arm differ by up to ${fixed(noise.spread)} on ${noise.measure} (${Object.entries(noise.by_arm).map(([arm, v]) => `${labelOf(plan, arm)} ${v === null ? 'not measured' : fixed(v)}`).join(', ')}); the margin is ${noise.margin}, and half of it is ${fixed(noise.margin / 2)}.`;
-  if (noise.passes === false) throw Error(`The trial stopped: the noise is more than half the margin. ${noiseText} A difference of ${noise.margin} between the arms could be noise. Make the measure steadier (more inputs, or a clearer checklist), or choose a larger margin, then run the comparison again.`);
+  const noiseText = noise.spread === null ? `Noise at the start: not measured (${plan.measures.find((m: any) => m.main).person !== undefined ? 'a person marks the main measure after the full run' : 'the trial runs have no number on the main measure'}).`
+    : `Noise at the start: two learners of the same arm differ by up to ${fixed(noise.spread)} on ${noise.measure} (${Object.entries(noise.by_arm).map(([arm, v]) => `${labelOf(plan, arm)} ${v === null ? 'not measured' : fixed(v)}`).join(', ')}). The decision checks the spread between learners at the point that decides.`;
   if (easy && !easy.passes) throw Error(`The trial stopped. ${easy.sentence} Use harder inputs or a stricter measure, then run the comparison again.`);
   const usageText = usage ? [`Usage per correction (${usage.unit}): ${Object.entries(usage.values).map(([arm, v]) => `${labelOf(plan, arm)} ${v.value ?? 'not known'}`).join(', ')}.`] : [];
   return [`Trial of "${plan.question}"`, '', 'What each arm received:', ...lines.map(l => `  ${l}`), '', noiseText, ...usageText, '',
@@ -1844,8 +1906,12 @@ export function fullRunEstimate(plan: Plan, runs: any[], treated: ArmTreatment[]
       `Cost: ${usd !== null ? `about $${usd.toFixed(2)} at API prices` : events ? 'not known: a fix or an edit reports no price' : 'not known: the trial runs reported no price (a run on your own Claude Code or Codex subscription reports none)'}.`].join(' ');
   return { text, account: { minutes, runs: total, reused, events, ...(events ? { event_minutes: eventMinutes } : {}), usd } };
 }
-/** The trial gives the events before the first checkpoint after 0 (none when every checkpoint is 0). */
-const trialEvents = (plan: Plan) => plan.checkpoints?.find((c: number) => c > 0) ?? 0;
+/**
+ * The trial gives the first learner of each arm the first 2 events: enough to see what each arm received and what
+ * changed it, and to time one, before the person approves. The full run gives the rest.
+ */
+export const TRIAL_EVENTS = 2;
+const trialEvents = (plan: Plan) => Math.min(TRIAL_EVENTS, plan.events.length);
 /** The person said go: keep it for this version of the file, and tell the account (this locks the file there). */
 async function recordApproval(plan: Plan) {
   const digest = JSON.parse(readFileSync(join(plan.folder, 'spec.json'), 'utf8')).spec_digest;
@@ -1918,7 +1984,7 @@ export const judging = {
    */
   async judge(request: { method: string; document: string; documentName: string; items: Array<{ id: string; text: string }>; expected: string | null; folders: Record<string, string>; read: string[]; work: string }): Promise<Verdict[]> {
     const room = join(request.work, 'room');
-    rmSync(request.work, { recursive: true, force: true });
+    removeFolder(request.work);
     mkdirSync(join(room, 'document'), { recursive: true, mode: 0o700 });
     writeFileSync(join(room, 'document', request.documentName), request.document);
     writeFileSync(join(room, 'checklist.json'), JSON.stringify(request.items, null, 2));
@@ -2116,7 +2182,9 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
     const ranked = plan.arms.map((arm: any) => ({ arm: arm.name, mean: point(arm.name, at, main.name).mean! })).sort((a: any, b: any) => b.mean - a.mean);
     const [best, next] = [ranked[0], ranked[1]];
     const lead = best.mean - next.mean;
+    const copies = learnerSpread(plan, grades.filter(g => g.repeat < plan.learners), at, main.name);
     if (lead < plan.rule.margin) reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}, and the rule needs ${plan.rule.margin}`;
+    else if (copies.spread !== null && copies.spread >= lead) reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, but two copies of the same agent differ by ${fixed(copies.spread)} there, so the lead could come from which copies learned what`;
     else {
       const guard = plan.rule.guard;
       // The guard: at the point that decides, the winner's guard measure against the best of the other arms'.
@@ -2140,7 +2208,9 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
   }
   const usage = usagePerCorrection(plan, treated);
   if (usage) lines.push('', `Also shown: usage per correction (${usage.unit}, decided by Method)`, ...Object.entries(usage.values).map(([arm, v]) => `  ${labelOf(plan, arm)}: ${v.value === null ? 'not known' : fixed(v.value)} (n=${v.n})`));
-  if (noise) lines.push('', noise.spread === null ? 'Noise at the start: not measured.' : `Noise at the start: ${fixed(noise.spread)} on ${noise.measure}, at most half the margin (${fixed(noise.margin / 2)}): ${noise.passes ? 'yes' : 'no'}.`);
+  if (noise) lines.push('', noise.spread === null ? 'Noise at the start: not measured.' : `Noise at the start: two copies of the same agent differ by up to ${fixed(noise.spread)} on ${noise.measure}.`);
+  const atPoint = learnerSpread(plan, ownGrades, at, main.name);
+  lines.push(atPoint.spread === null ? `Spread between copies${pointLabel(at)}: not measured (fewer than 2 copies with a number).` : `Spread between copies${pointLabel(at)}: up to ${fixed(atPoint.spread)} on ${main.name} (${plan.arms.map((arm: any) => `${labelOf(plan, arm.name)} ${atPoint.by_arm[arm.name] === null ? 'not measured' : fixed(atPoint.by_arm[arm.name]!)}`).join(', ')}). A lead must be larger.`);
   lines.push('', 'Assumptions:');
   if (treated) lines.push(`  Each arm received its full treatment: checked by Method: ${shortArms.length ? 'no' : 'yes'}.`);
   lines.push(`  Each point has at least ${plural(plan.rule.min_runs, 'learner')}: checked by Method: ${fewest >= plan.rule.min_runs ? 'yes' : 'no'}.`);
@@ -2160,7 +2230,7 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
   const runsOf = (list: string[] = []) => list.map(r => JSON.parse(r));
   const reported = { state: { reported: new Date().toISOString() } };
   if (stage === 'trial_treat') {
-    // The first learner gets the events before the first checkpoint; the other noise learners start as the arm is.
+    // The first learner gets the first events; the other noise learners start as the arm is.
     const value = JSON.stringify(await treat(plan, Array.from({ length: NOISE_LEARNERS }, (_, learner) => learner === 0 ? trialEvents(plan) : 0)));
     return { trial_treatment: value, state: { treatment: value } };
   }

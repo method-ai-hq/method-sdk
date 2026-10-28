@@ -1,3 +1,19 @@
+# 0.23.0
+
+Use runtime 0.16.7.
+
+- **Received and changed are counted apart.** Each comparison line says how many corrections an agent received and how many changed it: "Corrections received: 12 of 12. Changed the agent: 3." A fix that found no fix, or found no change needed, is received and did not change the agent.
+- **A correction that the run already meets needs no change.** When every check that Method writes from a correction holds on the corrected run, the fix ends "no change needed: the run already does what the correction asks", without running the fix. A comparison counts it as received instead of stopping.
+- **A usage limit stops the fix with the limit.** A usage limit in a replay of a case stops `method test` with the usage-limit error; a fix that meets it stops, and a comparison stops with that reason. It is never "no fix found".
+- **A comparison waits until a fix has ended completely.** The later check of earlier corrections and a pruning pass run after a fix's outcome; the comparison records the outcome and freezes a checkpoint only when the Method's fix is over. A fix that the later check undoes is fixed once more in the same fix; after a second undo it ends "no fix found" at once.
+- **One correction, one judgment.** A rerun after a fix stopped fixes the same judgment of the same run again. After "could not test", the correction is given again with a new run and judgment, and the old judgment's case is removed.
+- **A fix thinks on the agent's model.** The fix's own model steps run on the one model and effort that the Method's agent steps name (in a comparison: the arms' model).
+- **The plain builder sees the case.** The session that edits a plain agent's instructions gets the task's files as the agent got them, and every earlier correction in order.
+- **The noise that decides.** The trial runs every checking input at the start with 2 copies of each arm and shows the spread; it no longer stops the comparison. The decision says "can't tell yet" when two copies of the same arm differ at the deciding point by as much as the lead. `trial` is gone from the .compare file.
+- **A shorter trial.** The trial gives the first copy of each arm only its first 2 corrections (what it received, what changed it, and the time of a fix), then the start grades and checks, then approval. The full run gives the rest.
+- **The too easy check covers every measure of shares.** A code measure whose start values all lie from 0 to 1 is checked like a rubric or checklist.
+- **Read-only files in a room.** Comparison folders and session rooms with read-only folders are removed without errors.
+
 # 0.22.7
 
 - **A feedback writer writes each correction from the arm's own output.** In a `.compare` treatment, an event can name a feedback writer (`{feedback: WRITER, input}`, with `treatment.feedback_writers`) in place of fixed words. After the event's training run, the writer reads that arm's own handed-in file and the input's hidden expected answer, and never which arm it is, and writes the correction that the arm gets: the note of `method judge RUN wrong` for a Method arm, the correction that a plain arm's builder edits from. A writer is a script (it reads `{input, values, output, expected}` on stdin and prints `{"correction": TEXT}` or `{"correction": null}`) or one Claude judge with your instruction. When it finds nothing wrong, the Method arm gets `method judge RUN right` and the builder reads that the work is right; the event is received as "was right". The page lists the words each copy received. Run, grade and treatment keys include the writer's hash; fixed-text corrections work as before.

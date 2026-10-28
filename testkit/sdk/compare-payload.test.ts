@@ -61,13 +61,13 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   const file = join(root, 'numbers.compare');
   writeFileSync(file, JSON.stringify({ question: 'Which agent takes 2 corrections better?', arms: { a: 'a/agent.method', b: 'b/agent.method' }, difference: 'Nothing but the copy.',
     inputs: ['inputs/one.json', 'inputs/two.json'], teaching: ['inputs/teach.json'], about_inputs: { noun: 'number', description: 'Two small numbers.', names: { 'inputs/one.json': 'One' } },
-    measure: { name: 'size', code: 'size.mjs', description: 'The number over ten.' }, rule: { margin: 0.1, min_runs: 1, at: 2 }, runs: 1, trial: 1,
+    measure: { name: 'size', code: 'size.mjs', description: 'The number over ten.' }, rule: { margin: 0.1, min_runs: 1, at: 2 }, runs: 1,
     treatment: { events: [{ correction: 'It needs to be bigger because small is wrong.', input: 'inputs/teach.json' }, { correction: 'It needs a unit because readers ask.', input: 'inputs/teach.json' }], checkpoints: [0, 2] },
     assumptions: [{ text: 'The measure is fair.', if_false: 'The sizes say nothing.', check: 'Read 5 runs.' }], decided_by_you: ['question', 'rule'], notes: { treatment: ['Both corrections are about size.'] } }));
   delivery.deliver = async (event: any) => ({ received: true, outcome: event.index === 1 ? 'fixed' : 'no_change_needed' });
   const { inputs } = await compileComparison(file);
   const spec = sent.specs.at(-1);
-  expect(Object.keys(spec).sort()).toEqual(['arms', 'assumptions', 'decisions', 'difference', 'inputs', 'judge', 'learners', 'main_measure', 'method_rules', 'notes', 'other_measures', 'question', 'rule', 'runs_per_point', 'treatment', 'trial']);
+  expect(Object.keys(spec).sort()).toEqual(['arms', 'assumptions', 'decisions', 'difference', 'inputs', 'judge', 'learners', 'main_measure', 'method_rules', 'notes', 'other_measures', 'question', 'rule', 'runs_per_point', 'treatment']);
   expect(spec.inputs).toMatchObject({ checking: ['inputs/one.json', 'inputs/two.json'], teaching: ['inputs/teach.json'], noun: 'number', description: 'Two small numbers.',
     details: { 'inputs/one.json': { name: 'One', file: { sha256: expect.stringMatching(/^[a-f0-9]{64}$/), bytes: 12 } }, 'inputs/teach.json': { name: 'teach' } } });
   expect(spec.treatment).toEqual({ kind: 'Corrections', items: 2, checkpoints: [0, 2], order: 'given', list: [{ input: 'inputs/teach.json', text: 'It needs to be bigger because small is wrong.' }, { input: 'inputs/teach.json', text: 'It needs a unit because readers ask.' }] });
@@ -76,7 +76,7 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   expect(spec.learners).toBe(1);
   expect(spec.decisions).toEqual(expect.arrayContaining([{ part: 'rule', what: 'decision rule', value: expect.any(String), by: 'you' }, { part: 'treatment', what: 'note', value: 'Both corrections are about size.', by: 'writer' }]));
   expect(spec.assumptions[0]).toEqual({ text: 'Each agent received its full treatment.', if_false: expect.any(String), check: expect.any(String), by: 'method', checked_by: 'treatment' });
-  expect(new Set(spec.method_rules.map((r: any) => r.part))).toEqual(new Set(['arms', 'same_for_both', 'treatment', 'runs_per_point', 'main_measure', 'other_measures', 'noise', 'run_rules']));
+  expect(new Set(spec.method_rules.map((r: any) => r.part))).toEqual(new Set(['arms', 'same_for_both', 'treatment', 'runs_per_point', 'main_measure', 'other_measures', 'rule', 'noise', 'run_rules', 'trial']));
 
   // The trial: the first learner gets the corrections before the first checkpoint after 0; 2 learners run at the start.
   const comparison = JSON.parse(readFileSync(inputs, 'utf8')).comparison;
@@ -91,14 +91,15 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   const trial = sent.stages.find(s => s.stage === 'trial');
   expect(Object.keys(trial).sort()).toEqual(['cost_estimate', 'stage', 'trial']);
   // The noise names each arm's start value per learner, and the estimate counts the runs as the page does (2 arms × 2 inputs × 1 learner × 2 checkpoints).
-  expect(trial.trial.noise).toEqual({ spread: 0, margin: 0.1, passes: true, start: { a: [0.1, 0.1], b: [0.1, 0.1] } });
+  expect(trial.trial.noise).toEqual({ spread: 0, margin: 0.1, start: { a: [0.15, 0.15], b: [0.15, 0.15] } });
   // The one learner got both corrections in the trial, so none is left to give.
-  expect(trial.cost_estimate).toEqual({ minutes: 0, runs: 8, reused: 2, events: 0, usd: null, usage: { unit: 'minutes', values: { a: expect.any(Number), b: expect.any(Number) } } });
+  expect(trial.cost_estimate).toEqual({ minutes: 0, runs: 8, reused: 4, events: 0, usd: null, usage: { unit: 'minutes', values: { a: expect.any(Number), b: expect.any(Number) } } });
   expect(spec.arms.map((arm: any) => arm.name)).toEqual(['Agent (a)', 'Agent (b)']);
   expect(trial.trial.received.a.corrections).toEqual([
     { index: 1, input: 'inputs/teach.json', text: 'It needs to be bigger because small is wrong.', outcome: 'fixed', learner: 1 },
     { index: 2, input: 'inputs/teach.json', text: 'It needs a unit because readers ask.', outcome: 'no_change_needed', learner: 1 }]);
-  expect(trial.trial.received.a.lines).toEqual([{ what: 'Inputs run', received: 2, planned: 2, missing: [] }, { what: 'Corrections received', received: 2, planned: 2, missing: [] }]);
+  // Received and changed are counted apart: no change needed is received and did not change the agent.
+  expect(trial.trial.received.a.lines).toEqual([{ what: 'Inputs run', received: 4, planned: 4, missing: [] }, { what: 'Corrections received', received: 2, planned: 2, missing: [], changed: 1 }]);
 }, 600_000);
 
 it('saves a finished trial run that its cell could not save, and links every trial grade to the plan that the account has', async () => {
@@ -115,7 +116,7 @@ it('saves a finished trial run that its cell could not save, and links every tri
   for (const [id, n] of [['one', 1], ['two', 2]] as const) writeFileSync(join(root, 'inputs', `${id}.json`), JSON.stringify({ n }));
   const file = join(root, 'numbers.compare');
   writeFileSync(file, JSON.stringify({ question: 'Which agent gives the larger number?', arms: { a: 'a/agent.method', b: 'b/agent.method' }, difference: 'The factor.',
-    inputs: ['inputs/one.json', 'inputs/two.json'], measure: { name: 'size', code: 'size.mjs' }, rule: { margin: 0.1, min_runs: 1 }, runs: 1, trial: 1 }));
+    inputs: ['inputs/one.json', 'inputs/two.json'], measure: { name: 'size', code: 'size.mjs' }, rule: { margin: 0.1, min_runs: 1 }, runs: 1 }));
   const { inputs, folder } = await compileComparison(file);
   writeFileSync(join(folder, 'account.json'), JSON.stringify({ server: 'https://app.example.test', config_dir: root, cache_dir: root, comparison_id: `cmp_${'e'.repeat(32)}`, version_number: 1, stage: 'draft', url: '', spec_digest: '' }));
   const comparison = JSON.parse(readFileSync(inputs, 'utf8')).comparison;
@@ -138,7 +139,7 @@ it('saves a finished trial run that its cell could not save, and links every tri
     await trial();
     const plan = sent.plans.at(-1)!;
     const runs = plan.filter(c => c.kind === 'run'), grades = plan.filter(c => c.kind === 'grade');
-    expect(runs).toHaveLength(4);
+    expect(runs).toHaveLength(8);
     for (const cell of runs) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ run_id: expect.stringMatching(/^[0-9a-f-]{36}$/) });
     for (const cell of grades) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ measures: { size: expect.any(Number) } });
     // A kept grade that the account lacks links again.

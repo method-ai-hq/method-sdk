@@ -127,7 +127,7 @@ it('method improve and method apply are gone', async () => {
  * A signed-in fake Claude Code on PATH. It writes the sentences of a correction's case, votes as the rubric judge (the
  * sentences fail on the judged run) and as the conflict judge (no conflict), and logs every request.
  */
-function fakeClaude(root: string) {
+function fakeClaude(root: string, { met = false } = {}) {
   const bin = join(root, 'bin'); mkdirSync(bin);
   writeFileSync(join(bin, 'claude'), `#!${process.execPath}
 const fs=require('node:fs'),args=process.argv.slice(2);
@@ -135,7 +135,7 @@ if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:true}));process.exit(0
 let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{
   fs.appendFileSync(${JSON.stringify(join(root, 'claude.log'))},JSON.stringify(prompt)+'\\n');
   const out=prompt.includes('Write 1 to 3 plain sentences')?{criteria:[{text:'The reply escalates the non-compete clause to Legal.',ref:'result'}],check_script:'',check_says:''}
-    :prompt.includes('Decide whether the text below meets each criterion')?{verdicts:['c1','c2','c3'].map(id=>({id,pass:false,quote:'',reason:'It does not escalate it.'}))}
+    :prompt.includes('Decide whether the text below meets each criterion')?{verdicts:['c1','c2','c3'].map(id=>({id,pass:${met},quote:'',reason:'By the reply.'}))}
     :prompt.includes('Find conflicts')?{conflicts:[]}:null;
   console.log(JSON.stringify({type:'result',subtype:'success',structured_output:out}));
 });`, { mode: 0o700 });
@@ -275,6 +275,38 @@ it('says No fix found yet, leaves the file, and keeps the case', async () => {
   expect(existsSync(join(folder, 'cases', correctionCaseId(id), 'case.json'))).toBe(true);
   expect(client.calls.filter((c: any) => c.verb === 'PUT')).toEqual([]);
   expect(client.outcomes).toEqual([{ id, outcome: 'no_fix_found', detail: 'I tried 3 changes; none fixed this reliably without breaking another result.' }]);
+});
+
+it('the fix thinks on the model of the Method\'s own agent steps: a session on Claude Opus 5.5 at high effort gives its fix that model', async () => {
+  const s = setup();
+  fakeImprove(s.root, 'none');
+  const { file } = await project(s.root);
+  const { ownAgentModel, runImprovement } = await import('../../packages/sdk/src/improve.js');
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  doc.steps.work = { name: 'Work', purpose: 'Does the task.', in: { room: 'inputs.room' }, out: 'session', do: { kind: 'session', agent: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high', prompt: 'Do it.', tools: ['read'], room: 'room' } };
+  expect(await ownAgentModel(doc)).toEqual({ backend: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high' });
+  // Steps that name no model, or two models, give no one model: the fix uses the user's own agent as it is.
+  expect(await ownAgentModel(JSON.parse(readFileSync(file, 'utf8')))).toBeUndefined();
+  writeFileSync(file, JSON.stringify(doc));
+  let config: any;
+  await runImprovement(fakeClient(), file, [], [], (async (...args: any[]) => { config = args[5]; return { status: 'completed', result: { proposal: JSON.stringify({ cause: 'None.', evidence: { kind: 'none' } }), outcomes: '[]' } }; }) as any);
+  expect(config.models.default).toEqual({ backend: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high' });
+});
+
+it('a correction that the run already meets ends no change needed, without a fix', async () => {
+  const s = setup(); noStart();
+  fakeClaude(s.root, { met: true }); fakeImprove(s.root, 'change');
+  const { folder, file, run } = await project(s.root);
+  await expect(caseFromCorrection(file, { id: 'jdg_' + 'e'.repeat(32), note: 'It needs to escalate the non-compete clause.' }, run)).rejects.toMatchObject({ code: 'case_met' });
+  const before = readFileSync(file, 'utf8');
+  const client = fakeClient();
+  await methodMain(['judge', 'run_1', 'wrong', '--note', 'It needs to escalate the non-compete clause.'], () => client);
+  await backgroundFix(client, file, [id]);
+  expect(client.outcomes).toEqual([{ id, outcome: 'not_reproduced', detail: 'No change needed: the run already does what the correction asks.' }]);
+  // The fix itself did not run, nothing changed, and no case was kept.
+  expect(existsSync(join(folder, 'passes.log'))).toBe(false);
+  expect(readFileSync(file, 'utf8')).toBe(before);
+  expect(existsSync(join(folder, 'cases', correctionCaseId(id)))).toBe(false);
 });
 
 it('a question goes to the person word for word; method answer sends their words and the fix starts again with them', async () => {
@@ -537,6 +569,13 @@ it('the later check: a failing case of a retired rule brings the rule back; anot
   expect(unshownLines(METHOD_ID)).toEqual([
     'I put back the rule "Escalate exclusivity clauses": without it, a problem you corrected came back.',
     'I undid the fix for your correction ("Escalate restrictions"): it changed a result that was right before. I\'ll try a new fix on the next run.']);
+  // The next fix of it is undone too: it ends with no fix found, at once, in the account and on this computer.
+  const { storedOutcome } = await import('../../packages/sdk/src/fix-outcomes.js');
+  Object.assign(client.judgments[0], { pending: false, outcome: 'fixed' });
+  const twice = await checkBackground(client, file, fix(fixAgain('Writes the reply, escalates restrictions, and says why.')), { runCases: verdicts([otherCase]), reopen: [] });
+  expect(twice).toMatchObject({ undone: true, reopened: [] });
+  expect(storedOutcome(METHOD_ID, fixedId)).toMatchObject({ status: 'done', outcome: { outcome: 'no_fix_found' } });
+  expect(client.outcomes).toContainEqual(expect.objectContaining({ id: fixedId, outcome: 'no_fix_found' }));
 }, 60_000);
 
 it('the pruning sweep: a change applies with undo and says the summary; a sweep with no change still says what nothing checks', async () => {
