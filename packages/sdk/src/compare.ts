@@ -1506,8 +1506,8 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
 }
 /** The outcomes that the account shows; a correction that ended otherwise is named in its line's missing. */
 const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right', 'no_feedback']);
-/** The most of one change's diff that the page shows. */
-const CHANGE_DIFF_CHARS = 20_000;
+/** The most of one change's diff that the page shows; the learner's record and method changes keep it whole. */
+const CHANGE_DIFF_CHARS = 2000;
 /** What each arm received, as the account takes it: each correction with {index, input, text, outcome, learner, change?}. */
 function accountReceived(received: Record<string, ReturnType<typeof receivedOf>>) {
   return Object.fromEntries(Object.entries(received).map(([arm, r]) => [arm, { models: r.models, lines: r.lines.map(l => ({ ...l, missing: l.missing.map(m => m.slice(0, 500)) })),
