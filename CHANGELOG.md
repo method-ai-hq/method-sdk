@@ -1,3 +1,7 @@
+# 0.24.2
+
+- **A Claude Code project arm works outside the comparison's folder.** Each chat works in a copy of the project in a folder of its own outside every repository, so it reads no instructions of the folders around it and finds no hidden answers beside it. Its memory is the folder Claude Code names for it, so a memory saved in a project inside a repository is no longer lost. The account's cloud plugins and skills are not synced into the chat.
+
 # 0.24.1
 
 - **A project arm keeps Claude Code's memory on**, as in the desktop app.
