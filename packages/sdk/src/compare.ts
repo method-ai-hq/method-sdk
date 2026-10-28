@@ -28,6 +28,8 @@ import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS } from './learner.js';
 import { textDiff } from './text-diff.js';
+import { RIGHT_MESSAGE, copyTree, didSummary, fillMessage, handedIn as handedInFile, keptSomething, methodPluginFolder, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
+import { cliBin } from './prepare.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
@@ -41,7 +43,7 @@ export const noteParts = ['question', 'arms', 'same_for_both', 'inputs', 'treatm
 const measureSchema = z.strictObject({
   name: text.describe('A short name for the number, for example "corrected items right".'),
   description: text.optional().describe('What the number is, in plain words, as the page shows it.'),
-  code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, output, expected, run_dir, artifacts} as JSON on stdin and prints {"score": NUMBER}.'),
+  code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, output, expected, run_dir, artifacts, probe} as JSON on stdin and prints {"score": NUMBER}. probe: a project arm\'s answer to the treatment\'s probe at the run\'s checkpoint, or null.'),
   rubric: z.array(text).min(1).optional().describe('Sentences that must be true of the output. The judge marks each one met, partly or not met; the score is the mean (partly counts as half).'),
   checklist: z.literal('expected').optional().describe('expected: each input\'s checklist is its expected answer, a list of items. Each item is a criterion for that input only. The judge marks each one met, partly or not met.'),
   covered: z.boolean().optional().describe('With checklist: expected, true scores only the items that a correction given so far covers (an item names its events in covered_by).'),
@@ -54,6 +56,13 @@ const armSchema = z.union([
     instructions: text.describe('A file with the instructions the agent gets.'),
     model: text.optional().describe('Only when the comparison tests the model (tested: model): the model of this arm. Otherwise a plain arm takes the Method arms\' model.'),
     effort: text.optional().describe('Only with tested: model: the reasoning effort of this arm.'),
+  }),
+  z.strictObject({
+    project: z.enum(['claude']).describe('A Claude Code project, used as a person uses the desktop app: each piece of work is a new chat in the project folder, and only the folder carries over.'),
+    plugins: z.array(z.enum(projectPlugins)).optional().describe('The plugins the project has. method: the Method plugin (its skill and hooks, and the method CLI on PATH, signed in to your Method account). Without plugins the project has none, and no method command.'),
+    files: text.optional().describe('A folder whose files the project starts with. Without it the project starts empty.'),
+    model: text.optional().describe('The model of every chat. Every project arm names the same model, unless the comparison tests the model.'),
+    effort: text.optional().describe('The reasoning effort of every chat, the same for every project arm unless the model is tested.'),
   }),
 ]);
 const eventSchema = z.strictObject({
@@ -82,6 +91,8 @@ export const comparisonSchema = z.strictObject({
   tested: z.enum(['model', 'tools']).optional().describe('When the difference is the model or the tools, say which. Without it every arm runs on the same model and effort, and no arm uses the web.'),
   inputs: z.array(text).min(1).describe('The inputs that each arm runs: case IDs (folders in cases/ beside this file) or JSON files of input values. The same for each arm. An input\'s own files (inputs/ID/ beside inputs/ID.json, or the case\'s snapshot/env/), one folder per files connection, replace the arms\' folders of those names for that input.'),
   deliverable: text.optional().describe('The file that each arm hands in for an input: a path in its room whose first folder is a files connection, such as work/reply.md. {{NAME}} takes the input\'s value NAME. Needed with a plain arm.'),
+  message: text.optional().describe('With project arms: a file with the chat message that starts each piece of work, the same for every arm. {{NAME}} takes the input\'s value NAME.'),
+  first_message: text.optional().describe('With project arms: a file with what the person puts before the message in the first chat of a project (the first event, and each measuring chat at the start), the same for every arm, such as a guide pasted in.'),
   measure: measureSchema.describe('The main measure: one number per run that decides.'),
   rule: z.strictObject({
     margin: z.number().describe('How far ahead an arm must be on the main measure (the mean per run). Above 0.'),
@@ -95,6 +106,7 @@ export const comparisonSchema = z.strictObject({
     feedback_writers: z.record(name, feedbackWriterSchema).optional().describe('Feedback writers by name, for events with feedback: each writes the correction from the arm\'s own output and the hidden expected answer. Use one when the expert\'s feedback depends on what the agent did.'),
     checkpoints: z.array(z.number().int().min(0)).min(1).describe('The number of events after which the arms are measured.'),
     seed: z.number().int().optional().describe('Shuffle the events once with this seed: one order, the same for every arm. Without it the events come in the order given.'),
+    probe: text.optional().describe('With project arms: a question asked in a new chat in a copy of each project at each checkpoint after the start, such as "Which rules do you follow for these reviews?". The answer is kept, and a code measure gets it as probe.'),
   }).optional().describe('A list of events that each arm gets in order, with checkpoints.'),
   about_inputs: z.strictObject({
     noun: text.optional().describe('What one input is, in one word, such as "task" or "ticket".'),
@@ -153,6 +165,10 @@ function inputValue(root: string, id: string): unknown {
 /** A treatment event that corrects the arm: fixed words, or the words that a feedback writer writes from the arm's own output. */
 const isCorrection = (event: { correction?: string | undefined; feedback?: string | undefined }) => event.correction !== undefined || event.feedback !== undefined;
 const armIsMethod = (arm: Comparison['arms'][string]): arm is string => typeof arm === 'string';
+type ProjectArm = Extract<Comparison['arms'][string], { project: string }>;
+type PlainArm = Extract<Comparison['arms'][string], { agent: string }>;
+const armIsProject = (arm: Comparison['arms'][string]): arm is ProjectArm => typeof arm === 'object' && 'project' in arm;
+const armIsPlain = (arm: Comparison['arms'][string]): arm is PlainArm => typeof arm === 'object' && 'agent' in arm;
 /**
  * The folder of an input's own files, or null: inputs/ID/ beside the file inputs/ID.json, or a case's recorded copy of
  * the folders its run read (cases/ID/snapshot/env/). Each folder in it is named after a files connection. Every arm gets
@@ -224,8 +240,20 @@ export function readComparison(file: string): Comparison {
   const arms = Object.entries(doc.arms);
   if (arms.length < 2) problems.push('A comparison needs two or more arms.');
   const ids = new Map<string, string>(), connections = new Set<string>(), armConnections = new Map<string, string[]>();
+  const projects = arms.filter(([, arm]) => armIsProject(arm)) as Array<[string, ProjectArm]>;
+  if (projects.length && projects.length < arms.length) problems.push(`The arm ${projects[0]![0]} is a Claude Code project, and ${arms.find(([, arm]) => !armIsProject(arm))![0]} is not. A project arm is compared with other project arms.`);
+  for (const [armName, arm] of projects) {
+    if (arm.files !== undefined && !(existsSync(resolve(root, arm.files)) && statSync(resolve(root, arm.files)).isDirectory())) problems.push(`The files of the project arm ${armName} (${arm.files}) are not a folder.`);
+    if (doc.tested !== 'model' && (arm.model !== projects[0]![1].model || arm.effort !== projects[0]![1].effort)) problems.push(`The project arms ${projects[0]![0]} and ${armName} name different models or efforts. Every arm uses the same model and effort unless the comparison tests the model (tested: model).`);
+  }
+  if (projects.length) {
+    if (!doc.message) problems.push('A project arm starts each piece of work with a chat message. Add message: a file with its words, where {{NAME}} takes the input\'s value NAME.');
+    for (const [part, file] of [['message', doc.message], ['first_message', doc.first_message]] as const) if (file !== undefined && !existsSync(resolve(root, file))) problems.push(`The ${part} file ${file} is not there.`);
+  } else for (const part of ['message', 'first_message'] as const) if (doc[part] !== undefined) problems.push(`${part} is for project arms, and this comparison has none.`);
+  if (!projects.length && doc.treatment?.probe !== undefined) problems.push('treatment.probe is for project arms, and this comparison has none.');
   for (const [armName, arm] of arms) {
-    if (!armIsMethod(arm)) {
+    if (armIsProject(arm)) continue;
+    if (armIsPlain(arm)) {
       if (!existsSync(resolve(root, arm.instructions))) problems.push(`The instructions of the arm ${armName} (${arm.instructions}) are not there.`);
       if ((arm.model !== undefined || arm.effort !== undefined) && doc.tested !== 'model') problems.push(`The plain arm ${armName} names its model or effort. A plain arm takes the Method arms' model and effort; name them only when the model is the tested difference (tested: model).`);
       continue;
@@ -267,13 +295,22 @@ export function readComparison(file: string): Comparison {
     for (const expected of Object.values(doc.expected ?? {})) if (`${resolve(root, expected)}/`.startsWith(`${room}/`)) problems.push(`The expected answer ${expected} is in the folder of the input ${id}, which the arms get. Keep expected answers outside it.`);
   }
   // The deliverable: every arm hands in the same file. A plain agent's last message is no output.
-  const plainArms = arms.filter(([, arm]) => !armIsMethod(arm)).map(([armName]) => armName);
+  const plainArms = arms.filter(([, arm]) => armIsPlain(arm)).map(([armName]) => armName);
   if (plainArms.length && !doc.deliverable) problems.push(`The plain arm ${plainArms[0]} hands in a file, not its last message. Add deliverable: the path of the file that each input asks for, such as work/reply.md, in the folder of one of its files connections.`);
-  if (doc.deliverable) {
+  if (projects.length && !doc.deliverable) problems.push(`The project arm ${projects[0]![0]} hands in a file, not its last message. Add deliverable: the path in the project of the file that the message asks for, such as decision.json.`);
+  if (doc.deliverable && projects.length) {
+    if (doc.deliverable.startsWith('/') || doc.deliverable.split('/').some(part => part === '..' || part === '')) problems.push(`The deliverable ${doc.deliverable} must be a path in the project folder, such as decision.json.`);
+    for (const [id, value] of values) { try { deliverableOf(doc.deliverable, value); } catch (error) { problems.push(`For the input ${id}: ${(error as Error).message}`); } }
+  } else if (doc.deliverable) {
     const first = doc.deliverable.split('/')[0]!;
     if (!doc.deliverable.includes('/') || doc.deliverable.split('/').some(part => part === '..' || part === '')) problems.push(`The deliverable ${doc.deliverable} must be a path in the room whose first folder is a files connection, such as work/reply.md.`);
     else for (const [armName, own] of armConnections) if (!own.includes(first)) problems.push(`The deliverable ${doc.deliverable} is in ${first}/, which is not a files connection of the Method arm ${armName}${own.length ? ` (${own.join(', ')})` : ''}. A Method arm hands in its file in one of its files folders.`);
     for (const [id, value] of values) { try { deliverableOf(doc.deliverable, value); } catch (error) { problems.push(`For the input ${id}: ${(error as Error).message}`); } }
+  }
+  // A project's message names values that every input gives.
+  if (projects.length && doc.message && existsSync(resolve(root, doc.message))) {
+    const template = readFileSync(resolve(root, doc.message), 'utf8');
+    for (const [id, value] of values) { try { fillMessage(template, value, `The message ${doc.message}`); } catch (error) { problems.push(`For the input ${id}: ${(error as Error).message}`); } }
   }
   // A checklist measure: each measured input's expected answer is its checklist.
   const events = doc.treatment?.events ?? [];
@@ -375,9 +412,15 @@ export async function armModels(doc: Comparison, root: string): Promise<{ arms: 
   const { localAgent } = await import('@withmethod/runtime/agents.js');
   const defaultAgent: 'claude' | 'codex' = (await localAgent()) === 'codex' ? 'codex' : 'claude';
   const arms: Record<string, ArmModel[]> = {};
+  // Project arms are compared only with project arms, and name their own model: the same for every arm unless tested.
+  const projects = Object.entries(doc.arms).filter(([, arm]) => armIsProject(arm)) as Array<[string, ProjectArm]>;
+  if (projects.length) {
+    for (const [armName, arm] of projects) arms[armName] = [{ agent: 'claude', model: arm.model ?? null, effort: arm.effort ?? null }];
+    return { arms, shared: doc.tested === 'model' ? null : arms[projects[0]![0]]![0]! };
+  }
   for (const [armName, arm] of Object.entries(doc.arms)) if (armIsMethod(arm)) arms[armName] = await methodModels(readDocument(resolve(root, arm)), defaultAgent);
   const methodSets = Object.entries(arms).filter(([, models]) => models.length);
-  const plainArms = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)) as Array<[string, Exclude<Comparison['arms'][string], string>]>;
+  const plainArms = Object.entries(doc.arms).filter(([, arm]) => armIsPlain(arm)) as Array<[string, PlainArm]>;
   if (doc.tested === 'model') {
     for (const [armName, arm] of plainArms) arms[armName] = [{ agent: arm.agent, model: arm.model ?? null, effort: arm.effort ?? null }];
     return { arms, shared: null };
@@ -423,6 +466,7 @@ export function armLabels(doc: Comparison, root: string) {
   const methods = Object.entries(doc.arms).filter(([, arm]) => armIsMethod(arm)) as Array<[string, string]>;
   const base: Record<string, string> = {};
   for (const [key, arm] of Object.entries(doc.arms)) {
+    if (armIsProject(arm)) { base[key] = projectWords(arm); continue; }
     if (!armIsMethod(arm)) { base[key] = `plain ${arm.agent === 'claude' ? 'Claude Code' : 'Codex'}`; continue; }
     if (methods.length === 1) { base[key] = 'Method agent'; continue; }
     let name: unknown;
@@ -432,6 +476,10 @@ export function armLabels(doc: Comparison, root: string) {
   const shared = (label: string) => Object.values(base).filter(other => other === label).length > 1;
   return Object.fromEntries(Object.entries(base).map(([key, label]) => [key, shared(label) ? `${label} (${key})` : label]));
 }
+/** A project arm as people say it: "Claude Code project", "Claude Code project with the Method plugin". */
+const projectWords = (arm: ProjectArm) => `Claude Code project${arm.plugins?.length ? ` with the ${arm.plugins.map(p => p === 'method' ? 'Method' : p).join(' and ')} plugin${arm.plugins.length === 1 ? '' : 's'}` : ''}`;
+/** What a project arm starts with, in words, for the page (its starting instructions). */
+const projectStart = (arm: ProjectArm) => `A Claude Code project folder that starts ${arm.files ? `with the files of ${arm.files}` : 'empty'}. ${arm.plugins?.includes('method') ? 'It has the Method plugin: its skill and hooks, and the method command, signed in to your Method account.' : 'It has no plugin and no method command.'} Each piece of work is a new chat in the folder; only the folder carries over.`;
 /** The file that each arm hands in, by its name: "the file reply.md", or "the file that the task names" when the path takes a value of the input. */
 export function deliverableWords(doc: Comparison) {
   if (!doc.deliverable) return null;
@@ -464,9 +512,14 @@ export function decisions(doc: Comparison): Decision[] {
   // keys: the fields that make the value; entries: what to add to decided_by_you to make it the person's (the keys, or their part).
   const add = (part: PagePart, what: string, value: string, keys: string[], options: { exact?: boolean; entries?: string[] } = {}) => out.push({ part, what, value: short(value, 2000),
     by: keys.length > 0 && keys.every(key => options.exact ? marked.includes(key) : has(key)) ? 'you' : 'writer', entries: options.entries ?? keys });
-  const plain = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)) as Array<[string, Exclude<Comparison['arms'][string], string>]>;
+  const plain = Object.entries(doc.arms).filter(([, arm]) => armIsPlain(arm)) as Array<[string, PlainArm]>;
+  const projects = Object.entries(doc.arms).filter(([, arm]) => armIsProject(arm)) as Array<[string, ProjectArm]>;
   add('arms', 'difference', doc.difference, ['difference']);
   if (plain.length) add('arms', 'instructions', plain.map(([armName, arm]) => `${armName}: ${arm.instructions}`).join('; '), plain.map(([armName]) => `arms.${armName}.instructions`), { exact: true });
+  if (projects.length) add('arms', 'projects', projects.map(([armName, arm]) => `${armName}: ${projectWords(arm)}${arm.files ? `, starting with ${arm.files}` : ', starting empty'}`).join('; '), projects.map(([armName]) => `arms.${armName}`));
+  if (doc.message) add('same_for_both', 'message', `Each chat starts with the message in ${doc.message}, filled with the input's values.`, ['message']);
+  if (doc.first_message) add('same_for_both', 'first message', `The first chat of each project also gets ${doc.first_message}, before the message.`, ['first_message']);
+  if (doc.treatment?.probe) add('treatment', 'probe', `At each checkpoint after the start, a new chat in a copy of each project asks: ${doc.treatment.probe}`, ['treatment']);
   if (doc.other_differences?.length) add('arms', 'other differences', doc.other_differences.join('; '), ['other_differences']);
   if (doc.tested) add('arms', 'tested', doc.tested, ['tested']);
   if (doc.deliverable) add('same_for_both', 'deliverable', `Each agent hands in ${deliverableWords(doc)}.`, ['deliverable']);
@@ -500,7 +553,8 @@ export function decisions(doc: Comparison): Decision[] {
 export function methodRules(doc: Comparison, settings: { model: ArmModel | null; judge: { agent: string; model: string | null }; labels: Record<string, string> }) {
   const rules: Array<{ part: PagePart; text: string }> = [];
   const add = (part: PagePart, text: string) => rules.push({ part, text });
-  const plain = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)) as Array<[string, Exclude<Comparison['arms'][string], string>]>;
+  const plain = Object.entries(doc.arms).filter(([, arm]) => armIsPlain(arm)) as Array<[string, PlainArm]>;
+  const projects = Object.entries(doc.arms).filter(([, arm]) => armIsProject(arm)) as Array<[string, ProjectArm]>;
   const corrections = (doc.treatment?.events ?? []).some(isCorrection);
   const feedback = (doc.treatment?.events ?? []).some(e => e.feedback !== undefined);
   const web = doc.tested === 'tools';
@@ -512,9 +566,18 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   if (doc.tested === 'model') add('same_for_both', 'The model is the tested difference, so each agent runs on its own model.');
   else {
     add('same_for_both', `Every agent runs on ${settings.model ? modelPhrase(settings.model) : 'the model that its agent uses by default'}.`);
-    if (corrections) add('same_for_both', 'The session that changes an agent after a correction runs on the same model.');
+    if (corrections && !projects.length) add('same_for_both', 'The session that changes an agent after a correction runs on the same model.');
   }
-  add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
+  if (projects.length) {
+    add('same_for_both', 'Every chat runs in a clean room: a fresh home folder with only the Claude Code sign-in, so no agent has your instructions, memory or settings. Claude Code\'s memory is off: only the project folder carries over from one chat to the next.');
+    add('same_for_both', `Every chat has the same Claude Code tools (files, commands and subagents)${web ? ', and the web' : ', without the web'}.`);
+    for (const [armName, arm] of projects) add('arms', `${capital(settings.labels[armName] ?? armName)}: ${arm.plugins?.includes('method') ? 'the Method plugin is loaded in every chat (its skill and hooks), and the method command is on its path, signed in to your Method account. Whether it uses Method is up to the agent.' : 'no plugin, and no method command.'}`);
+    add('treatment', 'Each event is one new chat in the project folder. The first message is the task: the input\'s files are put in the folder, and the message asks for the file to hand in. After the agent works, a correction is the second message of the same chat; when the feedback writer finds nothing wrong, the second message is "That\'s right, thanks." Then the chat ends.');
+    if (doc.first_message) add('treatment', 'The first chat of each project starts with the same first material for every agent, before the message.');
+    add('treatment', 'A correction counts as received when its chat ended, and every Method fix that the chat started had ended. A chat that stops (a usage limit too) is not received, and the comparison stops there.');
+    add('treatment', 'For each correction the page says what the agent did in the project: the files it wrote or changed, the Methods it built, and the method commands it ran.');
+    add('main_measure', 'A checkpoint is measured on copies of each project: each checking input is a new chat in a fresh copy, so measuring never changes the project.');
+  } else add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
   add('same_for_both', web ? 'The tools are the tested difference, so the agents may use the web.' : 'No agent can use the web.');
   if (doc.deliverable) add('same_for_both', 'Only the handed-in file is measured.');
   if (doc.deliverable && plain.length) add('same_for_both', 'A plain agent\'s last message is not its output.');
@@ -523,8 +586,8 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
     add('treatment', 'Corrections arrive one at a time: an agent finishes learning from one correction before it gets the next.');
     add('trial', `Before approval, the trial gives one copy of each agent its first ${TRIAL_EVENTS} corrections, to show what it received and what changed it, and how long one takes. The full run gives every copy the rest.`);
     add('treatment', `An agent has up to ${FIX_LIMIT_MS / 3_600_000} hours to learn from each correction.`);
-    add('treatment', 'A correction counts as received when Method\'s fix ended: it applied a tested change, found that the run already does what the correction asks, or found no fix. For a plain agent it counts as received when the session that edits the instructions finished, edited or not. When Method\'s fix could not test a change or stopped (a usage limit too), the correction is not received, and the comparison stops there.');
-    add('treatment', 'Each agent\'s page counts both: the corrections it received, and those that changed the agent (a tested change applied, or the instructions edited), and shows what each correction changed.');
+    if (!projects.length) add('treatment', 'A correction counts as received when Method\'s fix ended: it applied a tested change, found that the run already does what the correction asks, or found no fix. For a plain agent it counts as received when the session that edits the instructions finished, edited or not. When Method\'s fix could not test a change or stopped (a usage limit too), the correction is not received, and the comparison stops there.');
+    if (!projects.length) add('treatment', 'Each agent\'s page counts both: the corrections it received, and those that changed the agent (a tested change applied, or the instructions edited), and shows what each correction changed.');
   }
   if (feedback) {
     add('treatment', 'A feedback writer reads each agent\'s own output of its training run and the hidden expected answer, and writes the correction that this agent gets. So each agent\'s corrections are about its own work, and their words differ by design. Each agent\'s page lists the words it received.');
@@ -703,7 +766,7 @@ function assumptionsOf(doc: Comparison) {
  * of the definition, each input's name and uploaded content, the checklists, who decided each value, and Method's rules.
  * upload: puts a text in the account and returns its reference (null when signed out).
  */
-async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string }; source?: string }>,
+async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain; project?: Project }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string }; source?: string }>,
   checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>) {
   const measure = async (m: Measure) => ({ name: m.name, how: m.code ? 'code' : m.rubric || m.checklist ? 'model' : 'person', ...(m.description ? { description: m.description } : {}),
     ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}),
@@ -722,7 +785,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
   for (const [part, list] of Object.entries(doc.notes ?? {})) { const page = notePart(part); if (page && list?.length) notes[page] = [...(notes[page] ?? []), ...list]; }
   return {
     question: doc.question,
-    arms: arms.map(arm => ({ id: arm.name, name: arm.label, ...(arm.plain ? { agent: arm.plain.agent, instructions: arm.plain.instructions } : { method_id: arm.id }) })),
+    arms: arms.map(arm => ({ id: arm.name, name: arm.label, ...(arm.plain ? { agent: arm.plain.agent, instructions: arm.plain.instructions } : arm.project ? { agent: 'claude', instructions: arm.project.start_words } : { method_id: arm.id }) })),
     difference: doc.difference, ...(doc.other_differences?.length ? { other_differences: doc.other_differences } : {}),
     inputs: { checking: doc.inputs, ...(doc.teaching?.length ? { teaching: doc.teaching } : {}), ...(about?.description ? { description: about.description } : {}),
       ...(about?.teaching_description ? { teaching_description: about.teaching_description } : {}), ...(about?.noun ? { noun: about.noun } : {}), details },
@@ -887,7 +950,20 @@ export async function compileComparison(file: string, options: { strict?: boolea
   const arms: any[] = [];
   for (const [armName, arm] of Object.entries(doc.arms)) {
     const cache_dir = join(folder, 'arms', armName, 'cache');
-    if (!armIsMethod(arm)) {
+    if (armIsProject(arm)) {
+      const model = models.arms[armName]![0]!;
+      // The folder the project starts from: a copy of its files, or empty.
+      const start = join(folder, 'arms', armName, 'start');
+      copyTree(arm.files ? resolve(root, arm.files) : join(folder, 'arms', armName, 'no-files'), start);
+      const plugins = [...new Set(arm.plugins ?? [])] as ProjectPlugin[];
+      const project: Project = { agent: 'claude', plugins, model: model.model, effort: model.effort, web, deliverable: doc.deliverable!,
+        message: readFileSync(resolve(root, doc.message!), 'utf8'), first_message: doc.first_message ? readFileSync(resolve(root, doc.first_message), 'utf8') : null,
+        probe: doc.treatment?.probe ?? null, start_words: projectStart(arm), start };
+      const hash = sha({ ...project, start: folderHash(start), plugin: plugins.includes('method') ? folderHash(methodPluginFolder()) : null, version: 'project/1' });
+      arms.push({ name: armName, label: labels[armName], project, models: [model], cache_dir, folders: {}, hash });
+      continue;
+    }
+    if (armIsPlain(arm)) {
       const model = models.arms[armName]![0]!;
       arms.push({ name: armName, label: labels[armName], plain: { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8'), model: model.model, effort: model.effort }, models: [model], cache_dir });
       continue;
@@ -896,7 +972,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
   }
   // A plain arm gets the same folders that the Method arms get: a copy of each bound folder, by its name. For an input
   // with its own folder, measured or teaching, every arm gets that input's folders instead (cellFolders).
-  const shared = Object.assign({}, ...arms.filter(a => !a.plain).map(a => a.folders)) as Record<string, string>;
+  const shared = Object.assign({}, ...arms.filter(a => !a.plain && !a.project).map(a => a.folders)) as Record<string, string>;
   const generated = (armName: string, fileName: string, method: unknown) => {
     const target = join(folder, 'arms', armName, fileName);
     let methodId: string | undefined;
@@ -913,6 +989,16 @@ export async function compileComparison(file: string, options: { strict?: boolea
     arm.builder = generated(arm.name, 'builder.method', sessionMethod('Instructions builder', 'Edit a plain agent\'s instructions after a correction.', arm.plain.agent, model, plainTools(arm.plain.agent, false), builderPrompt, [], FIX_LIMIT_MS));
     arm.id = readDocument(arm.method).id;
     arm.hash = sha({ ...arm.plain, tools, deliverable: doc.deliverable ?? null, prompt: 'task/1', folders: Object.fromEntries(Object.entries(shared).map(([envName, dir]) => [envName, folderHash(dir)])) });
+  }
+  // A project arm's runs are runs of a Method of one step, which holds one chat: so each measured chat is a run in the account.
+  for (const arm of arms.filter(a => a.project)) {
+    arm.method = generated(arm.name, 'project.method', { format: 'method/3.4', name: arm.label, goal: 'One chat in a Claude Code project folder, as a person has it in the desktop app.',
+      inputs: { request: { type: 'text', description: 'The chat: the project folder, the message and how Claude Code runs.' } },
+      limits: { timeout_ms: 6 * 3_600_000, step: { timeout_ms: 6 * 3_600_000 } },
+      steps: { chat: { in: { request: 'inputs.request' }, do: { kind: 'run', runtime: 'node', entrypoint: 'stage.mjs', args: ['project_chat'] }, out: { reply: { type: 'text', description: 'The agent\'s last words, the handed-in file, and what it did.' } } } },
+      result: 'reply' });
+    writeFileSync(join(dirname(arm.method), 'stage.mjs'), stageScript, { mode: 0o600 });
+    arm.id = readDocument(arm.method).id;
   }
   const device = arms.some(a => a.run_data === 'device');
   const judge = { agent: 'claude' as const, model: models.shared?.agent === 'claude' ? models.shared.model : null };
@@ -1027,9 +1113,16 @@ export async function comparisonRunArgs(args: string[]) {
 type Plan = ReturnType<typeof JSON.parse>;
 /** A plain arm: Claude Code or Codex with its instructions (after a treatment, as its builder left them), model and effort. */
 type Plain = { agent: 'claude' | 'codex'; instructions: string; model: string | null; effort: string | null };
-/** An arm at one point: a Method folder and file, or a plain agent. */
-type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } | { plain: Plain; hash: string };
-type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean; feedback?: string;
+/**
+ * A Claude Code project arm: its plugins, model, effort and web, the file it hands in, the message that starts each
+ * chat (with {{NAME}}), what the first chat of a project gets before it, the probe question, what it starts with in
+ * words (start_words) and the folder it starts from (start).
+ */
+type Project = { agent: 'claude'; plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean; deliverable: string; message: string; first_message: string | null;
+  probe: string | null; start_words: string; start: string };
+/** An arm at one point: a Method folder and file, a plain agent, or a copy of a project folder and its Method cache (with its answer to the probe). */
+type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } | { plain: Plain; hash: string } | { copy: { dir: string; cache: string | null }; probe: string | null; hash: string };
+type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; project?: Project; copy?: { dir: string; cache: string | null }; probe?: string | null; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean; feedback?: string;
   input: { id: string; value: unknown; hash: string; room: string | null; deliverable: string | null }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
 /** An arm's name on the page (armLabels), by its key. */
@@ -1049,7 +1142,7 @@ export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' 
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
   question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
-type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; change?: ChangeRecord;
+type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; change?: ChangeRecord; did?: Did;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
 type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot> };
@@ -1080,7 +1173,7 @@ type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[]
  * delivery keeps the words the arm received (text).
  */
 type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null; change?: ChangeRecord };
-type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; instructions?: string; tokens?: number | null; change?: ChangeRecord };
+type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; instructions?: string; tokens?: number | null; change?: ChangeRecord; did?: Did };
 export const delivery = {
   async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered, settings: { web: boolean; folders?: Record<string, string> } = { web: false }): Promise<Delivered> {
     // The training run and its fix run in a clean room, as the arm's cells do: they see none of the user's
@@ -1334,6 +1427,84 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
     ...(next !== instructions ? { change: { diff: textDiff(instructions, next, 'instructions.md', 'instructions.md') } } : {}) };
 }
 
+/** How a project arm's chats run, with this learner's Method cache: the method CLI that runs the comparison, signed in to its account. */
+function chatSettings(project: Project, cache: string, folder: string): ChatSettings {
+  return { plugins: project.plugins, model: project.model, effort: project.effort, web: project.web,
+    ...(project.plugins.includes('method') ? { method: { cli: cliBin(), config: configRoot(), cache, account: readAccount(folder)?.account ?? process.env.METHOD_ACCOUNT ?? null, server: process.env.METHOD_SERVER ?? null } } : {}) };
+}
+/** The first message of a chat on an input: the message filled with the input's values, after the first material when this is the project's first chat. */
+export function projectMessage(project: Pick<Project, 'message' | 'first_message'>, value: unknown, first: boolean) {
+  const message = fillMessage(project.message, value, 'The message').trim();
+  return first && project.first_message ? `${project.first_message.trim()}\n\n${message}` : message;
+}
+const sumTokens = (list: Array<number | null>) => list.every(t => t !== null) ? list.reduce((a, b) => a! + b!, 0) : null;
+
+/**
+ * One treatment event of a project arm: one new chat in the learner's project folder. The input's folders go into the
+ * project, the first message asks for the work, and for a correction the second message of the same chat is the
+ * correction (fixed words, or the feedback writer's words on the file the agent handed in), or "That's right, thanks."
+ * when the writer finds nothing wrong. Received when the chat ended and every Method fix it started had ended. A copy
+ * of the project before the chat (after its input was put in) restores the project when a chat did not finish, and
+ * gives the diff of what the chat changed.
+ */
+async function projectEvent(event: any, arm: any, learner: { project: string; cache: string }, workDir: string, plan: Plan, first: boolean): Promise<Built> {
+  const project: Project = arm.project, start = join(workDir, 'start');
+  if (existsSync(start)) { copyTree(join(start, 'project'), learner.project); copyTree(join(start, 'cache'), learner.cache); }
+  removeFolder(join(workDir, 'artifacts'));
+  placeInput(learner.project, event.input, event.input.deliverable);
+  copyTree(learner.project, join(start, 'project')); copyTree(learner.cache, join(start, 'cache'));
+  const before = projectFiles(learner.project);
+  const message = projectMessage(project, event.input.value, first);
+  const chat = await openChat(learner.project, chatSettings(project, learner.cache, plan.folder), join(workDir, 'artifacts'));
+  const turns = [];
+  let text: string | undefined, right = false, none: string | null = null;
+  try {
+    turns.push(await chat.send(message));
+    if (event.kind === 'correction') {
+      text = event.text;
+      if (event.feedback) {
+        const output = handedInFile(learner.project, event.input.deliverable);
+        const written = await feedbackWriting.write(event.feedback, { input: event.input, task: message, output, outputName: basename(event.input.deliverable) });
+        if (written.correction === null && !checkedAll(written)) none = `No feedback (the writer checked ${written.checked} and found nothing wrong).`;
+        else { right = written.correction === null; text = written.correction ?? RIGHT_MESSAGE; }
+      }
+      if (none === null) turns.push(await chat.send(text!));
+    }
+  } finally { await chat.close(); }
+  const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable);
+  const diff = projectDiff(join(start, 'project'), learner.project, did);
+  removeFolder(start);
+  // A Method fix's tokens are not reported: a chat that started one reports none, so usage falls back to minutes.
+  const tokens = did.judged.includes('wrong') ? null : sumTokens(turns.map(t => t.tokens));
+  if (event.kind !== 'correction') return { received: true, outcome: 'given', did, tokens };
+  const outcome: CorrectionOutcome = none !== null ? 'no_feedback' : keptSomething(did) ? 'edited' : right ? 'was_right' : 'not_edited';
+  return { received: true, outcome, text: none ?? text ?? '', did, tokens, change: { summary: didSummary(did), diff } };
+}
+
+/**
+ * A project at a checkpoint: a copy of its folder and Method cache, and, when the treatment has a probe and the
+ * checkpoint is after the start, its answer to the probe, asked in a new chat in another copy (so asking changes nothing).
+ */
+async function freezeProject(arm: any, learner: { project: string; cache: string }, base: string, at: number, plan: Plan): Promise<Snapshot> {
+  const dir = join(base, `after-${at}`);
+  if (!existsSync(join(dir, 'project'))) { copyTree(learner.project, join(dir, 'project')); copyTree(learner.cache, join(dir, 'cache')); }
+  let probe: string | null = null;
+  if (arm.project.probe && at > 0) {
+    const answer = join(dir, 'probe.md');
+    if (!existsSync(answer)) {
+      const work = join(dir, 'probe');
+      copyTree(join(dir, 'project'), join(work, 'project')); copyTree(join(dir, 'cache'), join(work, 'cache'));
+      const chat = await openChat(join(work, 'project'), chatSettings(arm.project, join(work, 'cache'), plan.folder), join(work, 'artifacts'));
+      let reply: string;
+      try { reply = (await chat.send(arm.project.probe)).reply; } finally { await chat.close(); }
+      removeFolder(join(work, 'project')); removeFolder(join(work, 'cache'));
+      writeFileSync(answer, reply, { mode: 0o600 });
+    }
+    probe = readFileSync(answer, 'utf8');
+  }
+  return { copy: { dir: join(dir, 'project'), cache: join(dir, 'cache') }, probe, hash: sha({ arm: arm.hash, project: folderHash(join(dir, 'project')), probe }) };
+}
+
 /** Copy a folder without its run records. */
 const copyFolder = (from: string, to: string) => { removeFolder(to); cpSync(from, to, { recursive: true, filter: path => !['.method-runs', 'node_modules'].includes(basename(path)) }); };
 const readRecords = (file: string) => {
@@ -1363,14 +1534,18 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
   const records = readRecords(recordFile);
   const snapshots: LearnerTreatment['snapshots'] = {};
   // A Method learner: its own copy of the arm with its own Method ID and cache, frozen at the start too.
-  const method = arm.plain ? null : { dir: join(base, 'method'), file: arm.file, cache: join(base, 'cache') };
+  const method = arm.plain || arm.project ? null : { dir: join(base, 'method'), file: arm.file, cache: join(base, 'cache') };
+  // A project learner: its own project folder, from the arm's start, and its own Method cache.
+  const project = arm.project ? { project: join(base, 'project'), cache: join(base, 'cache') } : null;
+  if (project && !existsSync(project.project)) { copyTree(arm.project.start, project.project); mkdirSync(project.cache, { recursive: true, mode: 0o700 }); }
   if (method && !existsSync(join(method.dir, method.file))) {
     copyFolder(arm.dir, method.dir);
     writeMethodId(join(method.dir, method.file), newMethodId());
     copyFolder(method.dir, join(base, 'after-0'));
   }
   let instructions: string = arm.plain ? arm.plain.instructions : '';
-  const freeze = (at: number) => {
+  const freeze = async (at: number) => {
+    if (project) { snapshots[at] = await freezeProject(arm, project, base, at, plan); return; }
     if (arm.plain) {
       const plain = { ...arm.plain, instructions };
       snapshots[at] = { plain, hash: at === 0 && instructions === arm.plain.instructions ? arm.hash : sha({ plain, room: arm.hash }) };
@@ -1380,7 +1555,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
     if (!existsSync(join(dir, arm.file))) copyFolder(method!.dir, dir);
     snapshots[at] = { dir, file: arm.file, hash: folderHash(dir, arm.file), cache_dir: method!.cache };
   };
-  freeze(0);
+  await freeze(0);
   const done: EventRecord[] = [], missing: LearnerTreatment['missing'] = [];
   let stopped = false;
   for (const event of events) {
@@ -1394,7 +1569,8 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       const started = Date.now();
       let result: Delivered | Built;
       try {
-        if (arm.plain) result = event.kind === 'correction' ? await delivery.build(event, arm, instructions, join(base, 'events', String(event.index)), plan,
+        if (project) result = await projectEvent(event, arm, project, join(base, 'events', String(event.index)), plan, event.index === 1);
+        else if (arm.plain) result = event.kind === 'correction' ? await delivery.build(event, arm, instructions, join(base, 'events', String(event.index)), plan,
           done.filter(e => e.kind === 'correction' && e.received && e.outcome !== 'no_feedback').map(e => ({ index: e.index, input: plan.names?.[e.input] ?? e.input.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, ''), text: e.text ?? plan.events.find((x: any) => x.index === e.index)?.text ?? '' }))) : { received: true, outcome: 'given', instructions };
         else result = await delivery.deliver(event, method!, method!.cache, join(base, 'events', String(event.index)), records.get(key), { web: plan.web, folders: cellFolders(arm, event.input) });
       } catch (error) { result = { received: false, outcome: 'stopped', reason: 'it stopped with an error', detail: (error as Error).message }; }
@@ -1409,10 +1585,10 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
     }
     const record = records.get(key);
     done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(typeof record.text === 'string' ? { text: record.text } : {}), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
-      ...(record.change ? { change: record.change } : {}), ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
+      ...(record.change ? { change: record.change } : {}), ...(record.did ? { did: record.did } : {}), ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
     if (!record.received) { missing.push({ index: event.index, reason: record.reason ?? 'not received', ...(record.detail ? { detail: record.detail } : {}) }); stopped = true; continue; }
     if (arm.plain && typeof record.instructions === 'string') instructions = record.instructions;
-    if (plan.checkpoints?.includes(event.index)) freeze(event.index);
+    if (plan.checkpoints?.includes(event.index)) await freeze(event.index);
   }
   return { learner, events: done, missing, snapshots };
 }
@@ -1422,9 +1598,9 @@ function treatmentNote(plan: Plan, arm: any, checkpoint: number | null, learner?
   if (checkpoint === null) return null;
   const given = plan.events.filter((e: any) => e.index <= checkpoint);
   if (!given.length) return 'Nothing was given to the agent before this run.';
-  const how = arm.plain ? `After each correction a ${arm.plain.agent === 'codex' ? 'Codex' : 'Claude Code'} session edited the agent's instructions. The corrections, one at a time, in this order` : 'Method learned from each correction, one at a time, in this order';
+  const how = arm.project ? 'Each event was one new chat in the project folder; a correction was the second message of its chat. The events, in this order' : arm.plain ? `After each correction a ${arm.plain.agent === 'codex' ? 'Codex' : 'Claude Code'} session edited the agent's instructions. The corrections, one at a time, in this order` : 'Method learned from each correction, one at a time, in this order';
   const record = (e: any) => learner?.events.find(x => x.index === e.index);
-  const outcome = (e: any) => { const r = record(e); return r && e.kind === 'correction' ? ` (${outcomeWords[r.outcome]})` : ''; };
+  const outcome = (e: any) => { const r = record(e); return r && e.kind === 'correction' ? ` (${outcomeWords[r.outcome]}${r.did ? `; ${didSummary(r.did).replace(/\.$/, '')}` : ''})` : ''; };
   const name = (id: string) => plan.names?.[id] ?? id.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, '');
   // A feedback writer's words are this copy's own.
   const words = (e: any) => record(e)?.text ?? e.text ?? (e.feedback ? `(from the feedback writer ${e.feedback.name})` : '');
@@ -1497,6 +1673,16 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
   const corrections = count('correction'), inputs = count('input');
   if (corrections.planned) lines.push({ what: 'Corrections received', ...corrections });
   if (inputs.planned) lines.push({ what: 'New inputs received', ...inputs });
+  // A project arm: what it did with its corrections, counted over its learners' chats.
+  const project = plan.arms.find((a: any) => a.name === arm)?.project as Project | undefined;
+  const chats = (t?.learners ?? []).flatMap(l => l.events.filter(e => e.kind === 'correction' && e.received && e.did)).map(e => e.did!);
+  if (project && chats.length) {
+    lines.push({ what: 'Corrections after which it saved something in the project', received: chats.filter(keptSomething).length, planned: chats.length, missing: [] });
+    if (project.plugins.includes('method')) {
+      lines.push({ what: 'Corrections after which it built or changed a Method', received: chats.filter(d => d.methods_built.length + d.methods_changed.length > 0).length, planned: chats.length, missing: [] });
+      lines.push({ what: 'Corrections it gave to method judge', received: chats.filter(d => d.judged.length > 0).length, planned: chats.length, missing: [] });
+    }
+  }
   const list = (t?.learners ?? []).flatMap(l => l.events.filter(e => e.kind === 'correction').map(e => {
     const event = plan.events.find((x: any) => x.index === e.index);
     return { index: e.index, input: e.input, text: short(e.text ?? event?.text ?? '', 2000), outcome: e.outcome, received: e.received, changed: e.received && changedAgent(e.outcome), learner: l.learner + 1, ...(e.reason ? { reason: short(e.reason, 500) } : {}),
@@ -1596,10 +1782,10 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, stage: 'trial' | 'ful
   const out: Cell[] = [];
   for (const arm of plan.arms) for (const checkpoint of checkpoints) for (let learner = 0; learner < learners; learner++) {
     const own = treated?.find(t => t.arm === arm.name)?.learners[learner];
-    const snapshot: Snapshot | undefined = checkpoint === null ? (arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : own?.snapshots[checkpoint];
+    const snapshot: Snapshot | undefined = checkpoint === null ? (arm.project ? { copy: { dir: arm.project.start, cache: null }, probe: null, hash: arm.hash } : arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : own?.snapshots[checkpoint];
     if (!snapshot) continue;
     for (const input of inputs) {
-      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain ? { method: arm.method } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}), input, repeat: learner, checkpoint,
+      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain || arm.project ? { method: arm.method } : {}), ...(arm.project ? { project: arm.project } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}), input, repeat: learner, checkpoint,
         trial: learner < NOISE_LEARNERS && checkpoint === start, treatment_note: treatmentNote(plan, arm, checkpoint, own) };
       out.push({ key: runKey(cell), ...cell });
     }
@@ -1684,11 +1870,11 @@ async function cellSync(folder: string, file: string, frozen: boolean) {
 
 /** Save a finished run of a cell to the account from its run folder, as its cell would have when it ran, and keep its run ID in the cell's record. */
 async function saveFinishedRun(cell: Cell, record: any) {
-  const file = cell.plain ? cell.method! : join(cell.dir!, cell.file!);
+  const file = cell.plain || cell.project ? cell.method! : join(cell.dir!, cell.file!);
   try {
-    const sync = (await cellSync(cell.folder, file, !cell.plain && cell.checkpoint !== null))?.(record.run_dir);
+    const sync = (await cellSync(cell.folder, file, !cell.plain && !cell.project && cell.checkpoint !== null))?.(record.run_dir);
     if (!sync) return;
-    await sync.start(readDocument(file), (cell.plain ? { instructions: cell.plain.instructions, task: taskPrompt(cell.input.value, cell.input.deliverable) } : cell.input.value) as any, {}, false);
+    await sync.start(readDocument(file), (cell.project ? { request: record.request } : cell.plain ? { instructions: cell.plain.instructions, task: taskPrompt(cell.input.value, cell.input.deliverable) } : cell.input.value) as any, {}, false);
     await sync.finish();
     await sync.outbox.drain();
     const runId = JSON.parse(readFileSync(join(record.run_dir, 'method-sync.json'), 'utf8')).id;
@@ -1707,6 +1893,8 @@ async function saveFinishedRun(cell: Cell, record: any) {
  * file, which the cell reads; without a deliverable a Method arm's output is its result. Both write the same run
  * records, with a transcript of each agent attempt; the run is saved in the account and linked to its cell.
  */
+/** The model that a project chat ran on, as Claude Code named it. */
+const chatModels = (result: any): string[] => { try { const model = JSON.parse(result.result).model; return typeof model === 'string' ? [model] : []; } catch { return []; } };
 async function runCell(cell: Cell) {
   process.env.METHOD_CACHE_DIR = cell.cache_dir;
   const runDir = join(cell.folder, 'runs', cell.arm, cell.key.slice(0, 16));
@@ -1714,17 +1902,32 @@ async function runCell(cell: Cell) {
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
   const { runMethod } = await import('@withmethod/runtime/runner.js');
   const started = Date.now();
-  const file = cell.plain ? cell.method! : join(cell.dir!, cell.file!);
+  const file = cell.plain || cell.project ? cell.method! : join(cell.dir!, cell.file!);
   // A Method cell at a checkpoint runs the learner's frozen copy (after-N); without a treatment it runs the arm's own copy.
-  const syncFor = await cellSync(cell.folder, file, !cell.plain && cell.checkpoint !== null);
+  const syncFor = await cellSync(cell.folder, file, !cell.plain && !cell.project && cell.checkpoint !== null);
   const sync = syncFor?.(join(runDir, 'run'));
   const hooks = {
     onStart: async ({ method, inputs }: any) => { await sync?.start(method, inputs, {}); },
     onEvent: async () => { sync?.snapshot(); },
   };
-  let result: any, output: unknown = null, handedIn = true;
+  let result: any, output: unknown = null, handedIn = true, request: string | null = null, did: Did | null = null, folders = cell.folders;
   try {
-    if (cell.plain) {
+    if (cell.project) {
+      // A new chat in a fresh copy of the project at its checkpoint (folders/project, so the judge finds what it read),
+      // with the input's folders put in: measuring never changes the learner's project.
+      const work = join(runDir, 'folders', 'project'), cache = join(runDir, 'cache');
+      copyTree(cell.copy!.dir, work); copyTree(cell.copy!.cache ?? join(runDir, 'no-cache'), cache);
+      placeInput(work, cell.input, cell.input.deliverable);
+      folders = { project: work };
+      request = JSON.stringify({ project: work, deliverable: cell.input.deliverable, settings: chatSettings(cell.project, cache, cell.folder),
+        message: projectMessage(cell.project, cell.input.value, cell.checkpoint === null || cell.checkpoint === 0) });
+      await sync?.start(readDocument(file), { request } as any, {}, false);
+      result = await runMethod(file, { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } } } as any, {
+        runDir: join(runDir, 'run'), inputs: { request }, fresh: true, processPath: [cliBin(), dirname(process.execPath), process.env.PATH ?? ''].join(':'), ...hooks } as any);
+      try { did = JSON.parse(result.result).did ?? null; } catch { /* the chat did not finish */ }
+      output = handedInFile(work, cell.input.deliverable);
+      handedIn = output !== null;
+    } else if (cell.plain) {
       // The session's room: a copy of each of the cell's folders, by its name. The session works on its own copy of it.
       result = await runSession(file, join(runDir, 'run'), cell.folders, { instructions: cell.plain.instructions, task: taskPrompt(cell.input.value, cell.input.deliverable) },
         { before: async (inputs: any) => { await sync?.start(readDocument(file), inputs, {}, false); }, ...hooks });
@@ -1766,8 +1969,9 @@ async function runCell(cell: Cell) {
   let runId: string | null = null;
   try { runId = JSON.parse(readFileSync(join(runDir, 'run', 'method-sync.json'), 'utf8')).id; } catch { /* not saved in the account */ }
   const record = { key: cell.key, arm: cell.arm, input: cell.input.id, repeat: cell.repeat, checkpoint: cell.checkpoint, trial: cell.trial, result: output, deliverable: cell.input.deliverable, handed_in: handedIn,
-    folders: cell.folders, run_dir: join(runDir, 'run'), artifacts: join(runDir, 'run', 'artifacts'), transcript: transcript?.markdown ?? null, transcript_jsonl: transcript?.jsonl ?? null,
-    treatment_note: cell.treatment_note, models: modelsOfRun(join(runDir, 'run')), run_id: runId, device: sync?.device ?? false,
+    folders, run_dir: join(runDir, 'run'), artifacts: join(runDir, 'run', 'artifacts'), transcript: transcript?.markdown ?? null, transcript_jsonl: transcript?.jsonl ?? null,
+    ...(cell.project ? { request, did, probe: cell.probe ?? null } : {}),
+    treatment_note: cell.treatment_note, models: cell.project ? chatModels(result) : modelsOfRun(join(runDir, 'run')), run_id: runId, device: sync?.device ?? false,
     duration_ms: Date.now() - started, cost_usd: typeof result.usage?.cost_usd === 'number' ? result.usage.cost_usd : null };
   writeRecord(cell.folder, cell.key, record);
   await linkRun(cell.folder, record);
@@ -2183,7 +2387,7 @@ async function linkGrade(folder: string, record: any) {
   await linkCells(folder, [{ key: record.key, measures, ...(record.verdicts.length ? { verdicts: record.verdicts } : {}), ...(seen ? { seen } : {}) }]);
 }
 async function codeScore(m: any, run: any, expected: unknown) {
-  const result = await runScript(m.code.path, { input: run.input, output: run.result, expected: expected ?? null, run_dir: run.run_dir, artifacts: run.artifacts });
+  const result = await runScript(m.code.path, { input: run.input, output: run.result, expected: expected ?? null, run_dir: run.run_dir, artifacts: run.artifacts, probe: run.probe ?? null });
   let score: unknown;
   try { const value = JSON.parse(result.stdout); score = typeof value === 'number' ? value : value?.score; } catch { /* below */ }
   if (result.code !== 0 || typeof score !== 'number' || !Number.isFinite(score))
@@ -2290,6 +2494,19 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
   return { answer, reason, text: lines.join('\n'), decision, received, usage };
 }
 
+/**
+ * One measured chat of a project arm, as the step of its generated Method: a new chat in the cell's copy of the project
+ * with one message. Its prompt, events and transcript go in the run's artifacts (METHOD_OUTPUT_DIR), as a session
+ * step's do. Returns the agent's last words, the model it ran on, its tokens, and what it did in the project.
+ */
+async function projectChatStage(request: { project: string; deliverable: string | null; settings: ChatSettings; message: string }) {
+  const before = projectFiles(request.project);
+  const chat = await openChat(request.project, request.settings, process.env.METHOD_OUTPUT_DIR ?? join(dirname(request.project), 'artifacts'));
+  let turn;
+  try { turn = await chat.send(request.message); } finally { await chat.close(); }
+  return { reply: turn.reply, model: turn.model, tokens: turn.tokens, did: whatItDid(before, projectFiles(request.project), turn.entries, request.deliverable) };
+}
+
 /** `method __compare STAGE`: one stage of a comparison, run by the generated Method's stage script. */
 export async function compareStage(stage: string, bindings: any): Promise<Record<string, unknown>> {
   const plan = bindings.comparison ? JSON.parse(bindings.comparison) : undefined;
@@ -2300,6 +2517,7 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
   const runsOf = (list: string[] = []) => list.map(r => JSON.parse(r));
   const reported = { state: { reported: new Date().toISOString() } };
   if (stage === 'trial_approved') return { start: true };
+  if (stage === 'project_chat') return { reply: JSON.stringify(await projectChatStage(JSON.parse(bindings.request))) };
   // The trial runs only after a yes (the Trial approval step's start), which holds for this version of the file.
   if ((stage === 'trial_treat' || stage === 'trial_plan') && bindings.start !== undefined) {
     if (bindings.start !== true) throw Error('The trial was not approved.');

@@ -22,4 +22,6 @@ cpSync(fileURLToPath(new URL('../src/browser-runtime/',import.meta.url)),resolve
 cpSync(fileURLToPath(new URL('../src/browser-service.py',import.meta.url)),resolve(runtimeTarget,'browser-service.py'));
 // The reviewed observers are read from the installed package.
 for (const folder of ['observers']) cpSync(fileURLToPath(new URL(`../${folder}/`, import.meta.url)), fileURLToPath(new URL(`../dist/packages/sdk/${folder}/`, import.meta.url)), {recursive: true});
+// Method's Claude Code plugin, which a comparison's project arm loads for its chats.
+cpSync(fileURLToPath(new URL('../../../plugins/method/', import.meta.url)), fileURLToPath(new URL('../dist/packages/sdk/plugins/method/', import.meta.url)), {recursive: true});
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) copyPublicExamples(fileURLToPath(new URL('../dist/packages/sdk/examples/', import.meta.url)));
