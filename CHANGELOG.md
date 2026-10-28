@@ -1,4 +1,4 @@
-# Unreleased
+# 0.24.0
 
 - **Method's learner is one agent session.** A correction goes to one Claude Code or Codex session (the agent, model and effort of the Method's own steps, on your own subscription) in a private copy of the Method's folder. It reads the correction, the run (inputs, step outputs, result, transcripts, files), every earlier correction with its check and outcome, and the authoring guide. It writes the check of the correction with `method case new`, changes whatever the Method needs (a prompt, a learned rule, a new run step with a data file, a check, a split step, examples), and runs `method validate` and `method test`.
 - **A gate in code decides.** Method applies the change only when the new check fails on the Method as it was and passes on the new one, every earlier check that passed still passes, the person's own words are unchanged, and `method validate` gives no errors. A failed gate goes back to the session with the exact failure, 3 tries in all; then the outcome is no fix found (or held, when the change breaks only checks that other people made). A usage limit is a plain error.
@@ -9,6 +9,7 @@
 - **Corrections are fixed on a computer.** Method no longer fixes corrections in the cloud. `method judge` and `method wait` say that a correction that no computer here takes will be fixed the next time the Method runs on a computer with Claude Code or Codex.
 - **A network failure loses no correction.** When the account does not get a correction back, or does not get its outcome (no connection, a reset), this computer keeps it, and the next fix sends the outcome or fixes the correction again. Before, the correction stayed taken in the account and no fix took it again.
 - **The authoring guide** starts with the principles of a Method that just works.
+- **A Claude Code project arm in comparisons.** An arm can be one Claude Code project folder, used as a person uses the desktop app: each correction is a new chat in it, with the task, then the correction or "That's right, thanks." Only the folder carries over. The Method plugin loads in the Method project and puts the method CLI on PATH; the plain project has neither. Each correction records what the chat did, and the page counts it.
 - **Comparisons:** the Method arm's learner is this session; it and the plain builder have the same model and the same 2 hours for each correction, and the page shows what each correction changed.
 
 # 0.23.3
