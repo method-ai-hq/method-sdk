@@ -74,7 +74,9 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   expect(spec.other_measures).toEqual([{ name: 'Usage per correction', how: 'usage', higher_is_better: false, description: expect.any(String) }]);
   expect(spec.judge).toEqual({ agent: 'claude', model: 'Claude Code\'s default model' });
   expect(spec.learners).toBe(1);
-  expect(spec.decisions).toEqual(expect.arrayContaining([{ part: 'rule', what: 'decision rule', value: expect.any(String), by: 'you' }, { part: 'treatment', what: 'note', value: 'Both corrections are about size.', by: 'writer' }]));
+  // Each value names the decided_by_you entries that would make it the person's, for a "Keep this?" answer on the page.
+  expect(spec.decisions).toEqual(expect.arrayContaining([{ part: 'rule', what: 'decision rule', value: expect.any(String), by: 'you', entries: ['rule'] },
+    { part: 'treatment', what: 'note', value: 'Both corrections are about size.', by: 'writer', entries: ['notes.treatment'] }]));
   expect(spec.assumptions[0]).toEqual({ text: 'Each agent received its full treatment.', if_false: expect.any(String), check: expect.any(String), by: 'method', checked_by: 'treatment' });
   expect(new Set(spec.method_rules.map((r: any) => r.part))).toEqual(new Set(['arms', 'same_for_both', 'treatment', 'runs_per_point', 'main_measure', 'other_measures', 'rule', 'noise', 'run_rules', 'trial']));
 

@@ -689,7 +689,8 @@ it('method publish NAME.compare saves the comparison as a draft with its inputs 
   vi.spyOn(MethodClient.prototype, 'token').mockReturnValue('method_x');
   const sent: Array<{ path: string; verb: string; body: any }> = [], uploaded: string[] = [];
   vi.spyOn(MethodClient.prototype, 'request').mockImplementation(async (path: string, verb?: string, body?: any) => {
-    sent.push({ path, verb: verb!, body });
+    sent.push({ path, verb: verb ?? 'GET', body });
+    if (path.endsWith('/answers')) return { url: `https://example.test/comparisons/${id()}`, open: 3, approved: { trial: false, full_run: false }, answers: [] } as any;
     return { comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1` } as any;
   });
   vi.spyOn(MethodClient.prototype, 'transfer').mockImplementation(async (path: string) => { uploaded.push(path); return {} as any; });
@@ -697,18 +698,74 @@ it('method publish NAME.compare saves the comparison as a draft with its inputs 
   await methodMain(['publish', file]);
   const printed = JSON.parse(stdout.mock.calls.map(c => String(c[0])).join(''));
   stdout.mockRestore();
-  expect(printed).toEqual({ comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1`,
-    next: 'Give the user this link to review every part of the comparison. When they are ready, run it: method run numbers.compare' });
-  expect(sent.map(s => `${s.verb} ${s.path}`)).toEqual([`PUT /api/cli/comparisons/${id()}`]);
+  expect(printed).toEqual({ comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1`, questions_open: 3,
+    next: 'Give the user this link. The page asks them about the comparison one question at a time; when they say yes to the trial there, run it: method run numbers.compare' });
+  expect(sent.map(s => `${s.verb} ${s.path}`)).toEqual([`PUT /api/cli/comparisons/${id()}`, `GET /api/cli/comparisons/${id()}/versions/1/answers`]);
   // The same spec that method run saves, with each input's content uploaded.
   expect(sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(uploaded).toContain(`/api/cli/result-files/${sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256}`);
   expect([calls(root, 'a'), calls(root, 'b')]).toEqual([0, 0]);
   // method run of the same file saves the same spec, so the account answers the same draft.
   await comparisonRunArgs(['run', file]);
-  expect(sent[1]!.body).toEqual(sent[0]!.body);
+  expect(sent[2]!.body).toEqual(sent[0]!.body);
   await expect(methodMain(['publish', file, '--reason', 'x'])).rejects.toThrow('It takes no options');
 });
+
+it('prints the answers on the comparison page for the agent, holds the run while an answer changes the file, and takes the approvals from the page', async () => {
+  const { root, file } = fixture({ treatment: { events: [{ correction: 'It needs to be bigger because small is wrong.', input: 'inputs/three.json', source: 'Written by us: a rule kind she called realistic.' }], checkpoints: [0, 1] }, rule: { margin: 0.1, min_runs: 1, at: 1 } });
+  const id = () => JSON.parse(readFileSync(file, 'utf8')).id as string;
+  vi.spyOn(MethodClient.prototype, 'token').mockReturnValue('method_x');
+  vi.spyOn(MethodClient.prototype, 'transfer').mockResolvedValue({} as any);
+  const kept = { kind: 'writer_choice', question: 'The decision rule. Keep this?', choice: 'yes', words: null, by: 'Ryan', at: '2026-10-27T00:00:00Z', change: false,
+    to_do: 'Ryan kept the writer\'s choice “The decision rule”. Add rule to decided_by_you.' };
+  const said = { kind: 'correction', question: 'Would you give this correction on three?', choice: 'differently', words: 'Bigger, because small reads as wrong.', by: 'Gráinne', at: '2026-10-27T00:00:00Z', change: true,
+    to_do: 'Gráinne would say the correction on inputs/three.json differently. Their words: “Bigger, because small reads as wrong.” Use their words for that event, and say in its source that they are theirs.' };
+  const page = { url: 'https://example.test/comparisons/x', open: 1, approved: { trial: false, full_run: false }, answers: [kept, said] as any[] };
+  const specs: any[] = [];
+  vi.spyOn(MethodClient.prototype, 'request').mockImplementation(async (path: string, _verb?: string, body?: any) => {
+    if (path.endsWith('/answers')) return structuredClone(page) as any;
+    specs.push(body.spec);
+    return { comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1` } as any;
+  });
+  // The page shows where the correction's words come from.
+  await expect(comparisonRunArgs(['run', file])).rejects.toThrow(`The comparison page has answers that change the file (https://example.test/comparisons/x):\n- ${kept.to_do}\n- ${said.to_do}\nChange the file, then publish again: method publish numbers.compare. The run starts when no answer waits for a change.`);
+  expect(specs[0].treatment.list).toEqual([{ input: 'inputs/three.json', text: 'It needs to be bigger because small is wrong.', source: 'Written by us: a rule kind she called realistic.' }]);
+  const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  await methodMain(['publish', file]);
+  const printed = JSON.parse(stdout.mock.calls.map(c => String(c[0])).join(''));
+  stdout.mockRestore();
+  expect(printed).toMatchObject({ questions_open: 1, answers: [kept.to_do, said.to_do],
+    next: 'The comparison page has answers that change the file. Make each change in answers, then publish again: method publish numbers.compare' });
+
+  // Once the file has the change, the run starts and prints what is left for the agent. The trial waits for a yes on the page.
+  page.answers = [kept];
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const args = await comparisonRunArgs(['run', file]);
+  expect(stderr.mock.calls.map(c => String(c[0])).join('')).toBe(`Answers on the comparison page (https://example.test/comparisons/x):\n- ${kept.to_do}\n`);
+  stderr.mockRestore();
+  const generated = () => JSON.parse(readFileSync(args[1]!, 'utf8'));
+  expect(generated().steps.trial_approve).toMatchObject({ name: 'Trial approval', ask: 'Run the trial of "Which agent gives the larger number?"? Answer "Run the trial?" on the comparison page, https://example.test/comparisons/x, then run the comparison again. Or, when the person said it here, pass their answer: start: true to run it, or start: false to stop.' });
+  expect(generated().steps.trial_plan.in.start).toBe('start');
+  expect(generated().steps.approve.ask).toContain('Answer "Run the full run?" on the comparison page, https://example.test/comparisons/x');
+  // The trial does not start without the yes.
+  const comparison = JSON.parse(readFileSync(args[args.indexOf('--inputs') + 1]!, 'utf8')).comparison;
+  await expect(compareStage('trial_plan', { comparison, start: false })).rejects.toThrow('The trial was not approved.');
+  // A yes on the page: the run goes on without asking, for the trial and then for the full run.
+  page.approved = { trial: true, full_run: false };
+  await comparisonRunArgs(['run', file]);
+  expect(generated().steps.trial_approve).toMatchObject({ do: { args: ['trial_approved'] } });
+  expect(generated().steps.approve.ask).toBeDefined();
+  expect(await compareStage('trial_approved', { comparison })).toEqual({ start: true });
+  page.approved = { trial: false, full_run: true };
+  await comparisonRunArgs(['run', file]);
+  expect(generated().steps.approve).toMatchObject({ do: { args: ['approved'] } });
+  // A yes passed with method answer holds too: the trial records it for this version of the file.
+  expect(generated().steps.trial_approve.ask).toBeDefined();
+  await compareStage('trial_treat', { comparison, start: true });
+  await comparisonRunArgs(['run', file]);
+  expect(generated().steps.trial_approve).toMatchObject({ do: { args: ['trial_approved'] } });
+  void root;
+}, 600_000);
 
 it('grades two runs that hand in the same document at the same time, each in its own work folder', async () => {
   const { root, file } = fixture({ measure: { name: 'items right', rubric: ['Names the cause (met).', 'Gives a date (partly).'] } });
@@ -833,7 +890,7 @@ it('marks who decided each value: you for what decided_by_you names, Method for 
   // Each rule is plain sentences, with no semicolon.
   expect(rules).not.toContain(';');
   expect(rules).not.toMatch(/clean room|builder|learner|runner|method judge|\barm\b|answer\.txt|work\//);
-  expect(spec.decisions.find((d: any) => d.what === 'deliverable')).toEqual({ part: 'same_for_both', what: 'deliverable', value: 'Each agent hands in the file answer.txt.', by: 'writer' });
+  expect(spec.decisions.find((d: any) => d.what === 'deliverable')).toEqual({ part: 'same_for_both', what: 'deliverable', value: 'Each agent hands in the file answer.txt.', by: 'writer', entries: ['deliverable'] });
   expect(spec.assumptions).toEqual([{ text: 'The measure is fair.', check: null, by: 'writer' },
     { text: 'The judge agrees with the expert.', if_false: 'The scores show the judge\'s taste.', check: 'The expert marks 10 verdicts.', by: 'writer' },
     { text: 'The corrections and the checklist come from one source.', check: null, by: 'writer', limit: true }]);

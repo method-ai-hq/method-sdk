@@ -23,7 +23,7 @@ import { methodContent, methodIdPattern, newMethodId, writeMethodId } from './ve
 import { packageFileNames } from './method-files.js';
 import { writePrivateJson } from './files.js';
 import { configRoot } from './computer-settings.js';
-import { linkCells, readAccount, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PlannedCell } from './compare-account.js';
+import { linkCells, readAccount, readAnswers, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PageAnswers, type PlannedCell } from './compare-account.js';
 import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 
@@ -59,6 +59,7 @@ const eventSchema = z.strictObject({
   feedback: name.optional().describe('Instead of correction: the name of a feedback writer (feedback_writers). The arm runs the input; the writer reads that arm\'s own output and the input\'s hidden expected answer, and writes the correction that the arm gets, or finds nothing wrong (the arm is told the output was right).'),
   input: text.optional().describe('The input (case ID or file) that the arm runs for this event.'),
   model: text.optional().describe('A new model for the arm from this point on.'),
+  source: text.optional().describe('Where the correction\'s words come from, such as "her reply of 22 Oct, word for word" or "written by us: a rule kind she called realistic". When it says "written by us", the comparison page asks the expert whether they would give it. For a feedback event, say here what the writer\'s words are when the agent is wrong.'),
 });
 const feedbackWriterSchema = z.strictObject({
   code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, values, output, expected} as JSON on stdin (output: the text of the file that the arm handed in, or null) and prints {"correction": TEXT}, or {"correction": null} when nothing is wrong.'),
@@ -442,7 +443,8 @@ export function deliverableWords(doc: Comparison) {
 export type PagePart = 'arms' | 'same_for_both' | 'inputs' | 'treatment' | 'main_measure' | 'other_measures' | 'runs_per_point' | 'rule' | 'noise' | 'run_rules' | 'trial' | 'assumptions';
 /** The page part of a note's part in the file: measure is the main measure, runs the runs per point. Notes on the question have no part on the page. */
 const notePart = (part: string): PagePart | null => part === 'question' ? null : part === 'measure' ? 'main_measure' : part === 'runs' ? 'runs_per_point' : part as PagePart;
-export type Decision = { part: PagePart; what: string; value: string; by: 'you' | 'writer' | 'method' };
+/** entries: the decided_by_you entries that make the value the person's, so an answer "Keep this?" on the page names the exact edit. */
+export type Decision = { part: PagePart; what: string; value: string; by: 'you' | 'writer' | 'method'; entries: string[] };
 const short = (value: string, max = 300) => value.length > max ? `${value.slice(0, max - 1)}…` : value;
 /**
  * Every value of the file, with who decided it: you when decided_by_you names it (a part, or each of the fields that
@@ -454,36 +456,36 @@ const short = (value: string, max = 300) => value.length > max ? `${value.slice(
 export function decisions(doc: Comparison): Decision[] {
   const marked = doc.decided_by_you ?? [];
   const has = (key: string) => marked.some(entry => key === entry || key.startsWith(`${entry}.`));
-  // The starting instructions are yours only when decided_by_you names them: naming the arm says which agent it is, not what its instructions say.
-  const named = (keys: string[]) => keys.length > 0 && keys.every(key => marked.includes(key)) ? 'you' as const : 'writer' as const;
-  // A value made of several fields is yours when each of them is.
-  const all = (keys: string[]) => keys.length > 0 && keys.every(has) ? 'you' as const : 'writer' as const;
+  // A value made of several fields is yours when each of them is. The starting instructions are yours only when
+  // decided_by_you names them (exact): naming the arm says which agent it is, not what its instructions say.
   const out: Decision[] = [];
-  const add = (part: PagePart, what: string, value: string, by: 'you' | 'writer' | 'method') => out.push({ part, what, value: short(value, 2000), by });
+  // keys: the fields that make the value; entries: what to add to decided_by_you to make it the person's (the keys, or their part).
+  const add = (part: PagePart, what: string, value: string, keys: string[], options: { exact?: boolean; entries?: string[] } = {}) => out.push({ part, what, value: short(value, 2000),
+    by: keys.length > 0 && keys.every(key => options.exact ? marked.includes(key) : has(key)) ? 'you' : 'writer', entries: options.entries ?? keys });
   const plain = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)) as Array<[string, Exclude<Comparison['arms'][string], string>]>;
-  add('arms', 'difference', doc.difference, all(['difference']));
-  if (plain.length) add('arms', 'instructions', plain.map(([armName, arm]) => `${armName}: ${arm.instructions}`).join('; '), named(plain.map(([armName]) => `arms.${armName}.instructions`)));
-  if (doc.other_differences?.length) add('arms', 'other differences', doc.other_differences.join('; '), all(['other_differences']));
-  if (doc.tested) add('arms', 'tested', doc.tested, all(['tested']));
-  if (doc.deliverable) add('same_for_both', 'deliverable', `Each agent hands in ${deliverableWords(doc)}.`, all(['deliverable']));
-  add('inputs', 'inputs', doc.inputs.join(', '), all(['inputs']));
-  if (doc.teaching?.length) add('inputs', 'teaching inputs', doc.teaching.join(', '), all(['teaching']));
+  add('arms', 'difference', doc.difference, ['difference']);
+  if (plain.length) add('arms', 'instructions', plain.map(([armName, arm]) => `${armName}: ${arm.instructions}`).join('; '), plain.map(([armName]) => `arms.${armName}.instructions`), { exact: true });
+  if (doc.other_differences?.length) add('arms', 'other differences', doc.other_differences.join('; '), ['other_differences']);
+  if (doc.tested) add('arms', 'tested', doc.tested, ['tested']);
+  if (doc.deliverable) add('same_for_both', 'deliverable', `Each agent hands in ${deliverableWords(doc)}.`, ['deliverable']);
+  add('inputs', 'inputs', doc.inputs.join(', '), ['inputs']);
+  if (doc.teaching?.length) add('inputs', 'teaching inputs', doc.teaching.join(', '), ['teaching']);
   if (doc.treatment) {
     const corrections = doc.treatment.events.filter(isCorrection).length;
     for (const [writerName, writer] of Object.entries(doc.treatment.feedback_writers ?? {}))
-      add('treatment', 'feedback writer', `${writerName}: ${writer.code ? `the script ${writer.code}` : `one Claude judge with the instruction: ${writer.judge}`}`, all(['treatment']));
-    add('treatment', 'treatment', `${plural(doc.treatment.events.length, 'event')}${corrections ? ` (${plural(corrections, 'correction')})` : ''}, ${doc.treatment.seed !== undefined ? `shuffled once with seed ${doc.treatment.seed}` : 'in the given order'}, measured after ${[...doc.treatment.checkpoints].sort((a, b) => a - b).join(', ')}`, all(['treatment']));
+      add('treatment', 'feedback writer', `${writerName}: ${writer.code ? `the script ${writer.code}` : `one Claude judge with the instruction: ${writer.judge}`}`, ['treatment']);
+    add('treatment', 'treatment', `${plural(doc.treatment.events.length, 'event')}${corrections ? ` (${plural(corrections, 'correction')})` : ''}, ${doc.treatment.seed !== undefined ? `shuffled once with seed ${doc.treatment.seed}` : 'in the given order'}, measured after ${[...doc.treatment.checkpoints].sort((a, b) => a - b).join(', ')}`, ['treatment']);
   }
   const how = (m: Measure) => m.code ? `the script ${m.code}` : m.rubric ? `a rubric of ${plural(m.rubric.length, 'sentence')}` : m.checklist ? `each input's checklist from its expected answer${m.covered ? ', only the items that corrections cover so far' : ''}` : `a person answers: ${m.person}`;
-  add('main_measure', 'main measure', `${doc.measure.name}: ${how(doc.measure)}`, all(['measure', ...(doc.measure.checklist ? ['expected'] : [])]));
-  (doc.other_measures ?? []).forEach((m, i) => add('other_measures', m.name, how(m), all([`other_measures.${i + 1}`])));
-  add('runs_per_point', 'learners', String(doc.runs), all(['runs']));
+  add('main_measure', 'main measure', `${doc.measure.name}: ${how(doc.measure)}`, ['measure', ...(doc.measure.checklist ? ['expected'] : [])]);
+  (doc.other_measures ?? []).forEach((m, i) => add('other_measures', m.name, how(m), [`other_measures.${i + 1}`]));
+  add('runs_per_point', 'learners', String(doc.runs), ['runs']);
   const ruleFields = ['margin', 'min_runs', ...(doc.rule.at !== undefined ? ['at'] : []), ...(doc.rule.guard ? ['guard'] : [])].map(f => `rule.${f}`);
-  add('rule', 'decision rule', ruleSentence(doc), all(ruleFields));
-  (doc.assumptions ?? []).forEach((a, i) => add('assumptions', short(typeof a === 'string' ? a : a.text, 200), typeof a === 'string' ? a : a.text, all([`assumptions.${i + 1}`])));
+  add('rule', 'decision rule', ruleSentence(doc), ruleFields, { entries: ['rule'] });
+  (doc.assumptions ?? []).forEach((a, i) => add('assumptions', short(typeof a === 'string' ? a : a.text, 200), typeof a === 'string' ? a : a.text, [`assumptions.${i + 1}`]));
   for (const [part, list] of Object.entries(doc.notes ?? {})) {
     const page = notePart(part);
-    if (page) for (const note of list ?? []) add(page, 'note', note, all([`notes.${part}`]));
+    if (page) for (const note of list ?? []) add(page, 'note', note, [`notes.${part}`]);
   }
   return out;
 }
@@ -633,22 +635,31 @@ const readMarks = (folder: string): Record<string, number> => { try { return JSO
  * and report (and so cost nothing) change state.reported, which keeps them from being reused: they report to the
  * account on every run. approved: the person already said go to this version of the file, so the approval does not ask.
  */
-function generatedMethod(doc: Comparison, previousId: string | undefined, counts: { cells: number }, approved: boolean) {
+/**
+ * approval.trial: the person said yes to the trial (on the comparison page, or with method answer), or no page asks
+ * (signed out); else the Trial approval step asks, with the page's link. approval.full_run: the same for the full run.
+ */
+function generatedMethod(doc: Comparison, previousId: string | undefined, counts: { cells: number }, approval: { trial: boolean; full_run: boolean; url: string | null }) {
   const treatment = !!doc.treatment, person = [doc.measure, ...(doc.other_measures ?? [])].some(m => m.person !== undefined);
   const stage = (name: string) => ({ kind: 'run', runtime: 'node', entrypoint: 'stage.mjs', args: [name] });
   const list = { type: 'list', items: { type: 'text' } };
   const treated = treatment ? { treated: 'treatment' } : {};
   const reports = ['state.reported'];
   const steps: Record<string, any> = {};
-  if (treatment) steps.trial_treat = { name: 'Trial treatment', purpose: `Gives the first learner of each arm the first ${TRIAL_EVENTS} treatment events, one at a time, and records what it received and what happened to each.`, in: { comparison: 'inputs.comparison' }, do: stage('trial_treat'), changes: ['state.treatment'], out: { trial_treatment: { type: 'text' } } };
-  steps.trial_plan = { name: 'Trial plan', purpose: `Lists the trial runs (each arm at the start on the first inputs, with ${NOISE_LEARNERS} learners) that have not finished yet, and reports them to the comparison page.`, in: { comparison: 'inputs.comparison', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('trial_plan'), changes: reports, out: { trial_cells: list, trial_done: list } };
+  const onPage = (question: string) => approval.url ? `Answer "${question}" on the comparison page, ${approval.url}, then run the comparison again. Or, when the person said it here, pass their answer: ` : '';
+  steps.trial_approve = approval.trial
+    ? { name: 'Trial approval', purpose: 'The person said yes to the trial of this version of the file.', in: { comparison: 'inputs.comparison' }, do: stage('trial_approved'), out: { start: { type: 'boolean' } } }
+    : { name: 'Trial approval', purpose: 'The person says yes to the trial on the comparison page.', in: { comparison: 'inputs.comparison' },
+      ask: `Run the trial of "${doc.question.replace(/"/g, "'")}"? ${onPage('Run the trial?') || 'Answer '}start: true to run it, or start: false to stop.`, out: { start: { type: 'boolean', description: 'true to run the trial.' } } };
+  if (treatment) steps.trial_treat = { name: 'Trial treatment', purpose: `Gives the first learner of each arm the first ${TRIAL_EVENTS} treatment events, one at a time, and records what it received and what happened to each.`, in: { comparison: 'inputs.comparison', start: 'start' }, do: stage('trial_treat'), changes: ['state.treatment'], out: { trial_treatment: { type: 'text' } } };
+  steps.trial_plan = { name: 'Trial plan', purpose: `Lists the trial runs (each arm at the start on the first inputs, with ${NOISE_LEARNERS} learners) that have not finished yet, and reports them to the comparison page.`, in: { comparison: 'inputs.comparison', start: 'start', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('trial_plan'), changes: reports, out: { trial_cells: list, trial_done: list } };
   steps.trial = { name: 'Trial', purpose: 'Runs each trial cell.', each: { cell: 'trial_cells' }, concurrency: 4, do: stage('trial_cell'), out: { trial_run: { type: 'text' } } };
   steps.trial_gather = { name: 'Trial grades', purpose: 'Lists each trial run with the measures that grade it (a person marks only after the full run).', in: { comparison: 'inputs.comparison', trial_runs: 'trial_run', trial_done: 'trial_done', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('trial_gather'), out: { trial_graded: list } };
   steps.trial_grade = { name: 'Trial grade', purpose: 'Gives each trial run its number on each measure, with the judge\'s verdicts.', each: { item: 'trial_graded' }, concurrency: 4, do: stage('trial_grade'), out: { trial_grade: { type: 'text' } } };
   steps.trial_check = { name: 'Treatment and noise check', purpose: 'Says what each arm received and what happened to each correction, and stops when an arm did not receive everything. Measures the noise at the start and stops when it is more than half the margin. Estimates the full run from the trial.', in: { comparison: 'inputs.comparison', runs: 'trial_run', done: 'trial_done', grades: 'trial_grade', ...(treatment ? { treated: 'trial_treatment' } : {}) }, do: stage('check'), changes: reports, out: { trial_summary: { type: 'text' } } };
-  steps.approve = approved
+  steps.approve = approval.full_run
     ? { name: 'Approval', purpose: 'The person already approved the full run of this version of the file.', in: { summary: 'trial_summary' }, do: stage('approved'), out: { go: { type: 'boolean' } } }
-    : { name: 'Approval', purpose: 'The person reads the trial and says go.', in: { summary: 'trial_summary' }, ask: '{{summary}}\n\nStart the full run? Answer go: true to start it, or go: false to stop.', out: { go: { type: 'boolean', description: 'true to start the full run.' } } };
+    : { name: 'Approval', purpose: 'The person reads the trial and says go.', in: { summary: 'trial_summary' }, ask: `{{summary}}\n\nStart the full run? ${onPage('Run the full run?') || 'Answer '}go: true to start it, or go: false to stop.`, out: { go: { type: 'boolean', description: 'true to start the full run.' } } };
   if (treatment) steps.treat = { name: 'Treatment', purpose: 'Gives each learner of each arm every treatment event, one at a time and in order, freezes a copy at each checkpoint, and records what it received and what happened to each.', in: { comparison: 'inputs.comparison', go: 'go' }, do: stage('treat'), changes: ['state.treatment'], out: { treatment: { type: 'text' } } };
   steps.plan = { name: 'Plan', purpose: 'Lists every cell of the full run that has not finished yet, and reports the plan to the comparison page.', in: { comparison: 'inputs.comparison', go: 'go', ...treated }, do: stage('plan'), changes: reports, out: { cells: list, done: list } };
   steps.cells = { name: 'Full run', purpose: 'Runs each cell: one learner of one arm on one input, at one checkpoint.', each: { cell: 'cells' }, concurrency: 4, do: stage('cell'), out: { full_run: { type: 'text' } } };
@@ -690,7 +701,7 @@ function assumptionsOf(doc: Comparison) {
  * of the definition, each input's name and uploaded content, the checklists, who decided each value, and Method's rules.
  * upload: puts a text in the account and returns its reference (null when signed out).
  */
-async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string } }>,
+async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string }; source?: string }>,
   checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>) {
   const measure = async (m: Measure) => ({ name: m.name, how: m.code ? 'code' : m.rubric || m.checklist ? 'model' : 'person', ...(m.description ? { description: m.description } : {}),
     ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}),
@@ -719,7 +730,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     rule: doc.rule, runs_per_point: doc.runs, learners: doc.runs,
     ...(doc.treatment ? { treatment: { kind, items: kinds.length, checkpoints: [...doc.treatment.checkpoints].sort((a, b) => a - b),
       order: doc.treatment.seed !== undefined ? 'shuffled' : 'given', ...(doc.treatment.seed !== undefined ? { seed: doc.treatment.seed } : {}),
-      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name) : `New input: ${e.input.id}`), 4000) })) } } : {}),
+      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name) : `New input: ${e.input.id}`), 4000), ...(e.source ? { source: short(e.source, 2000) } : {}) })) } } : {}),
     ...(doc.expected ? { expected_answers: true } : {}),
     judge: { agent: settings.judge.agent, model: settings.judge.model ?? 'Claude Code\'s default model' },
     assumptions: assumptionsOf(doc),
@@ -744,6 +755,9 @@ export function shuffled<T>(list: T[], seed: number | undefined): T[] {
 
 /** The person said go to this version of the file (on this computer, or the account's version is past its trial). */
 const approvalFile = (folder: string) => join(folder, 'approval.json');
+/** The person said yes to the trial of this version of the file (on the page, or with method answer on this computer). */
+const trialApprovalFile = (folder: string) => join(folder, 'trial-approval.json');
+const isTrialApproved = (folder: string, digest: string) => { try { return JSON.parse(readFileSync(trialApprovalFile(folder), 'utf8')).spec_digest === digest; } catch { return false; } };
 function isApproved(folder: string, digest: string) {
   const account = readAccount(folder);
   if (account?.spec_digest === digest && ['running', 'done'].includes(account.stage)) return true;
@@ -922,7 +936,9 @@ export async function compileComparison(file: string, options: { strict?: boolea
   });
   const feedbackHash = events.some(e => e.feedback) ? sha(events.map(e => e.feedback?.hash ?? null)) : null;
   const checklists = Object.fromEntries(Object.entries(expected).map(([inputId, value]) => [inputId, checklistOf(value).map(item => ({ ...item, covered_by: item.covered_by.map(n => place.get(n) ?? n) }))]));
-  const spec = await accountSpec(doc, root, arms, events, checklists, { model: models.shared, judge, device }, uploadSignedIn);
+  // The page shows where each correction's words come from; the run's plan does not need it.
+  const sourced = events.map(e => { const source = doc.treatment?.events[e.file_index - 1]?.source; return source ? { ...e, source } : e; });
+  const spec = await accountSpec(doc, root, arms, sourced, checklists, { model: models.shared, judge, device }, uploadSignedIn);
   // The approval holds for the definition, whether or not the inputs' content went up.
   const digest = sha({ ...spec, inputs: { ...spec.inputs, details: Object.fromEntries(Object.entries(spec.inputs.details).map(([key, d]) => [key, d.name])) } });
   writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
@@ -942,10 +958,13 @@ export async function compileComparison(file: string, options: { strict?: boolea
   try { const old = JSON.parse(readFileSync(methodPath, 'utf8')).id; if (typeof old === 'string' && methodIdPattern.test(old)) previousId = old; } catch { /* first run */ }
   const cellCount = arms.length * doc.inputs.length * Math.max(doc.runs, NOISE_LEARNERS) * ((plan.checkpoints?.length ?? 1) + 1);
   writeFileSync(join(folder, 'stage.mjs'), stageScript, { mode: 0o600 });
-  writeFileSync(methodPath, JSON.stringify(generatedMethod(doc, previousId, { cells: cellCount }, isApproved(folder, digest)), null, 2) + '\n', { mode: 0o600 });
+  // The answers on the comparison page: the approvals let the run go on, and the other answers are for the agent.
+  const page = account ? await readAnswers(account) : null;
+  const approval = { trial: !page || page.approved.trial || isTrialApproved(folder, digest), full_run: isApproved(folder, digest) || !!page?.approved.full_run, url: page?.url ?? account?.url ?? null };
+  writeFileSync(methodPath, JSON.stringify(generatedMethod(doc, previousId, { cells: cellCount }, approval), null, 2) + '\n', { mode: 0o600 });
   const inputs = join(folder, 'inputs.json');
   writePrivateJson(inputs, { comparison: JSON.stringify(plan), marks: JSON.stringify(readMarks(folder)) });
-  return { method: methodPath, inputs, folder, plan, spec, account };
+  return { method: methodPath, inputs, folder, plan, spec, account, page };
 }
 
 /**
@@ -956,11 +975,22 @@ export async function compileComparison(file: string, options: { strict?: boolea
 export async function publishComparison(args: string[]) {
   if (args.length !== 2) throw Error('Use method publish NAME.compare. It takes no options: it saves the comparison as a draft for review and runs nothing.');
   const compiled = await compileComparison(args[1]!, { strict: true });
-  const account = compiled.account!, file = basename(authoringPath(args[1]!));
-  const next = account.stage === 'draft' ? `Give the user this link to review every part of the comparison. When they are ready, run it: method run ${file}`
-    : account.stage === 'trial' ? `The trial of this version has run. Give the user this link to read it. When they approve, run it: method run ${file}`
+  const account = compiled.account!, file = basename(authoringPath(args[1]!)), page = compiled.page;
+  const todo = pageToDo(page), change = page?.answers.some(answer => answer.change);
+  const next = change ? `The comparison page has answers that change the file. Make each change in answers, then publish again: method publish ${file}`
+    : account.stage === 'draft' ? `Give the user this link. The page asks them about the comparison one question at a time; when they say yes to the trial there, run it: method run ${file}`
+    : account.stage === 'trial' ? `The trial of this version has run. Give the user this link to read it; the page asks them to approve the full run. Then run it: method run ${file}`
     : 'This version has already run. Change the file to make a new draft.';
-  process.stdout.write(JSON.stringify({ comparison_id: account.comparison_id, version_number: account.version_number, stage: account.stage, url: account.url, next }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ comparison_id: account.comparison_id, version_number: account.version_number, stage: account.stage, url: account.url,
+    ...(page ? { questions_open: page.open } : {}), ...(todo.length ? { answers: todo } : {}), next }, null, 2) + '\n');
+}
+
+/**
+ * What the agent does about the answers on the comparison page: each answer that asks for a change of the file, and
+ * each writer's choice that the person kept (it goes into decided_by_you). Approvals and plain yeses need nothing.
+ */
+export function pageToDo(page: PageAnswers | null) {
+  return (page?.answers ?? []).filter(answer => answer.change || answer.kind === 'writer_choice').map(answer => answer.to_do);
 }
 
 /**
@@ -971,6 +1001,11 @@ export async function comparisonRunArgs(args: string[]) {
   const rest = args.slice(2);
   if (rest.some(arg => /^--inputs(-from)?(=|$)/.test(arg))) throw Error('A comparison names its inputs in the file. Run it without --inputs.');
   const compiled = await compileComparison(args[1]!);
+  // An answer on the page that changes the file holds the run until the file has the change.
+  const todo = pageToDo(compiled.page), file = basename(authoringPath(args[1]!));
+  if (compiled.page?.answers.some(answer => answer.change))
+    throw Error(`The comparison page has answers that change the file (${compiled.page.url}):\n${todo.map(line => `- ${line}`).join('\n')}\nChange the file, then publish again: method publish ${file}. The run starts when no answer waits for a change.`);
+  if (todo.length) process.stderr.write(`Answers on the comparison page (${compiled.page!.url}):\n${todo.map(line => `- ${line}`).join('\n')}\n`);
   return ['run', compiled.method, ...rest, ...(rest.includes('--resume') ? [] : ['--inputs', compiled.inputs])];
 }
 
@@ -2229,6 +2264,13 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
   const treated: ArmTreatment[] | null = bindings.treated ? JSON.parse(bindings.treated) : null;
   const runsOf = (list: string[] = []) => list.map(r => JSON.parse(r));
   const reported = { state: { reported: new Date().toISOString() } };
+  if (stage === 'trial_approved') return { start: true };
+  // The trial runs only after a yes (the Trial approval step's start), which holds for this version of the file.
+  if ((stage === 'trial_treat' || stage === 'trial_plan') && bindings.start !== undefined) {
+    if (bindings.start !== true) throw Error('The trial was not approved.');
+    const digest = JSON.parse(readFileSync(join(plan.folder, 'spec.json'), 'utf8')).spec_digest;
+    if (!isTrialApproved(plan.folder, digest)) writePrivateJson(trialApprovalFile(plan.folder), { spec_digest: digest, at: new Date().toISOString() });
+  }
   if (stage === 'trial_treat') {
     // The first learner gets the first events; the other noise learners start as the arm is.
     const value = JSON.stringify(await treat(plan, Array.from({ length: NOISE_LEARNERS }, (_, learner) => learner === 0 ? trialEvents(plan) : 0)));

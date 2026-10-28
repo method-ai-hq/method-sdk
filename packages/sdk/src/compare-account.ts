@@ -131,3 +131,18 @@ export async function sendStage(folder: string, update: { stage: 'trial' | 'runn
   const answer = await report<{ stage: string }>(folder, '/stage', update);
   if (answer) writePrivateJson(accountFile(folder), { ...account, stage: answer.stage });
 }
+
+/**
+ * The answers on the comparison's page for this version (questions for you): what the person or the expert said about
+ * the writer's choices, the corrections and the assumptions, each with what the agent does about it (to_do) and whether
+ * the run waits for a change of the file (change), and whether the trial and the full run are approved. open: the
+ * questions that nobody has answered yet. Null without the account, or when it did not answer.
+ */
+export type PageAnswers = {
+  url: string; open: number; approved: { trial: boolean; full_run: boolean };
+  answers: Array<{ kind: string; question: string; choice: string; words: string | null; by: string; at: string; change: boolean; to_do: string }>;
+};
+export async function readAnswers(account: Account): Promise<PageAnswers | null> {
+  try { return await clientOf(account).request<PageAnswers>(`/api/cli/comparisons/${account.comparison_id}/versions/${account.version_number}/answers`); }
+  catch (error) { warn(error); return null; }
+}

@@ -1,3 +1,9 @@
+# 0.23.1
+
+- **Questions for you on the comparison page.** The page asks the person one question at a time: whether to keep each of the writer's choices, whether the expert would give each correction whose words the writer wrote (an event's new `source` field says "written by us"), whether an assumption is true when its check names a member, and whether to run the trial and the full run. `method publish` and `method run` of a comparison print the answers with the exact edit for the agent (a kept choice goes into `decided_by_you`), and the run does not start while an answer waits for a change of the file.
+- **Approvals from the page.** `method run NAME.compare` asks to run the trial, and a yes on the page lets a later run go on without asking, for the trial and for the full run. `method answer RUN_ID --answer '{"start": true}'` (trial) and `'{"go": true}'` (full run) still work.
+- Each decision of a comparison names its `decided_by_you` entries.
+
 # 0.23.0
 
 Use runtime 0.16.7.
