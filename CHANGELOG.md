@@ -1,3 +1,14 @@
+# 0.23.2
+
+Use runtime 0.16.8.
+
+- **A correction's check is blocked only by approved runs of the same inputs.** A sentence such as "return is 14 days" must still pass on runs the person approved, but only on runs of the same request: an approved run of another date or another party may be right because the rule does not apply there. A conditional or dated rule no longer ends "could not test".
+- **"Could not test" says why.** When no check could be made from a correction, the fix says so with the reason, instead of saying the run is not on this computer.
+- **A winner needs two copies of each agent.** With one copy, Method cannot see how much copies differ, so the answer is "can't tell yet" and the result says why. The rule sentence says at least 2 copies.
+- **A feedback writer says what it checked.** It prints {"correction", "checked"}; a writer that leaves out checked checked all of the output. Nothing wrong in one part it checked gives the agent no feedback (no feedback), never "your output is right".
+- **Session steps learn rules.** A session step reads its learned rules after its prompt, each with its condition, and Method's fix can teach it learned rules as it teaches call and agent steps.
+- **The fix and its checks think on the agent's model.** The case written from a correction and the judges of a Method's cases run on the model of the Method's own agent steps.
+
 # 0.23.1
 
 - **Questions for you on the comparison page.** The page asks the person one question at a time: whether to keep each of the writer's choices, whether the expert would give each correction whose words the writer wrote (an event's new `source` field says "written by us"), whether an assumption is true when its check names a member, and whether to run the trial and the full run. `method publish` and `method run` of a comparison print the answers with the exact edit for the agent (a kept choice goes into `decided_by_you`), and the run does not start while an answer waits for a change of the file.

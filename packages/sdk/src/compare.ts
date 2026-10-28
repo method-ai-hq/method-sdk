@@ -406,7 +406,7 @@ export function ruleSentence(doc: Comparison) {
   const point = at !== undefined ? ` after ${plural(at, 'treatment event')}` : '';
   const other = Object.keys(doc.arms).length > 2 ? 'the best other arm\'s' : 'the other arm\'s';
   const guardText = guard ? `, and its ${guard.measure}${at !== undefined ? ' at that point' : ''} is not more than ${guard.max_drop} below ${other}` : '';
-  return `An arm is better when its mean ${doc.measure.name}${point} is at least ${margin} above every other arm's, its lead is larger than the spread between two copies of the same agent${at !== undefined ? ' at that point' : ''}${guardText}, with at least ${plural(min_runs, 'learner')} behind each point. Otherwise: can't tell yet.`;
+  return `An arm is better when its mean ${doc.measure.name}${point} is at least ${margin} above every other arm's, its lead is larger than the spread between two copies of the same agent${at !== undefined ? ' at that point' : ''}${guardText}, with at least ${plural(Math.max(2, min_runs), 'learner')} behind each point. Otherwise: can't tell yet.`;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -813,8 +813,8 @@ function runScript(path: string, input: unknown) {
 }
 /**
  * What a feedback writer said: the correction (null when it found nothing wrong in what it checked) and what it checked:
- * "all" for the whole output, else the part it checked, in words. Undefined when the answer is not
- * {"correction": TEXT | null, "checked": "all" | TEXT}.
+ * "all" for the whole output (also when it does not say), else the part it checked, in words. Undefined when the answer
+ * is not {"correction": TEXT | null, "checked"?: "all" | TEXT}.
  */
 export type Feedback = { correction: string | null; checked: string };
 function feedbackOf(answer: string): Feedback | undefined {
@@ -822,8 +822,9 @@ function feedbackOf(answer: string): Feedback | undefined {
   if (from < 0 || to < from) return undefined;
   let value: any;
   try { value = JSON.parse(answer.slice(from, to + 1)); } catch { return undefined; }
-  if (!value || typeof value !== 'object' || !('correction' in value) || typeof value.checked !== 'string' || !value.checked.trim()) return undefined;
-  const checked = value.checked.trim();
+  if (!value || typeof value !== 'object' || !('correction' in value)) return undefined;
+  // A writer that does not say what it checked checked all of the output.
+  const checked = typeof value.checked === 'string' && value.checked.trim() ? value.checked.trim() : 'all';
   if (value.correction === null || typeof value.correction === 'string' && !value.correction.trim()) return { correction: null, checked };
   return typeof value.correction === 'string' ? { correction: value.correction.trim(), checked } : undefined;
 }
@@ -1848,7 +1849,7 @@ export function noiseCheck(plan: Plan, grades: any[]) {
  * The spread between the learners of each arm at a point: each learner's mean main measure over the inputs, and the
  * largest difference between two learners of the same arm. A lead that is not larger than this spread could come from
  * which copies happened to learn what, so the decision says "can't tell yet". Null for an arm with fewer than 2
- * learners with a number.
+ * learners with a number; spread is null unless every arm has one.
  */
 export function learnerSpread(plan: Plan, grades: any[], at: number | null, measure: string) {
   const by_arm: Record<string, number | null> = {};
@@ -1860,8 +1861,9 @@ export function learnerSpread(plan: Plan, grades: any[], at: number | null, meas
     }
     by_arm[arm.name] = means.length >= 2 ? Number((Math.max(...means) - Math.min(...means)).toFixed(4)) : null;
   }
-  const known = Object.values(by_arm).filter((v): v is number => v !== null);
-  return { spread: known.length ? Math.max(...known) : null, by_arm };
+  // Every arm needs two copies with a number: a lead over an arm whose copies cannot be compared says nothing.
+  const values = Object.values(by_arm);
+  return { spread: values.length && values.every(v => v !== null) ? Math.max(...values as number[]) : null, by_arm };
 }
 
 /**
@@ -2232,7 +2234,8 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
     const lead = best.mean - next.mean;
     const copies = learnerSpread(plan, grades.filter(g => g.repeat < plan.learners), at, main.name);
     if (lead < plan.rule.margin) reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}, and the rule needs ${plan.rule.margin}`;
-    else if (copies.spread !== null && copies.spread >= lead) reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, but two copies of the same agent differ by ${fixed(copies.spread)} there, so the lead could come from which copies learned what`;
+    else if (copies.spread === null) reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, but no agent has two copies with a number there, so Method cannot tell whether the lead is larger than the difference between copies`;
+    else if (copies.spread >= lead) reason = `${labelOf(plan, best.arm)} is ahead of ${labelOf(plan, next.arm)} by ${fixed(lead)} on ${main.name}${pointLabel(at)}, but two copies of the same agent differ by ${fixed(copies.spread)} there, so the lead could come from which copies learned what`;
     else {
       const guard = plan.rule.guard;
       // The guard: at the point that decides, the winner's guard measure against the best of the other arms'.

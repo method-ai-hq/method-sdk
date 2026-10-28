@@ -32,6 +32,8 @@ export type ImproveJudgment = {
   case_id?: string; source: string; created_at: string; new?: boolean; run?: unknown; noted_by?: string | null;
   /** The question that an earlier fix asked about this correction, and the person's answer. */
   question?: string; answer?: string;
+  /** Why no check could be made from this correction on this computer, when none was. */
+  case_problem?: string;
 };
 type AccountJudgment = { id: string; run_id: string; step_id: string | null; verdict: 'right' | 'wrong'; note: string | null; corrected: unknown; source: string; created_at: string; pending: boolean;
   noted_by?: string | null; outcome?: string | null; handled_by?: string | null; held_with?: string | null; question?: string | null; answer?: string | null };
@@ -139,25 +141,8 @@ export async function cachedImproveMethod(client: MethodClient) {
   return { file, root, version_id: saved.version_id };
 }
 
-/**
- * The model that the Method's own agent steps run on, as a default model profile for its fix: the one Claude Code or
- * Codex model and effort that all of its call, agent and session steps name. Undefined when its steps name none, or
- * more than one; then the fix runs on the user's own agent with its default model.
- */
-export async function ownAgentModel(document: any): Promise<{ backend: 'claude' | 'codex'; model: string; reasoning_effort?: string } | undefined> {
-  const { methodProfiles } = await import('@withmethod/runtime/agents.js');
-  const profiles: Record<string, any> = methodProfiles(document);
-  const found = new Map<string, { backend: 'claude' | 'codex'; model: string; reasoning_effort?: string }>();
-  for (const step of Object.values(document.steps ?? {}) as any[]) for (const exec of [step.do, step.check]) {
-    if (!exec || !['call', 'agent', 'session'].includes(exec.kind)) continue;
-    const profile = exec.kind === 'session' ? { backend: exec.agent, model: exec.model, reasoning_effort: exec.reasoning_effort } : profiles[exec.model ?? 'default'] ?? {};
-    if (!['claude', 'codex'].includes(profile.backend) || typeof profile.model !== 'string') return undefined;
-    const effort = profile.reasoning_effort ?? profile.effort;
-    const value = { backend: profile.backend, model: profile.model, ...(typeof effort === 'string' ? { reasoning_effort: effort } : {}) };
-    found.set(JSON.stringify(value), value);
-  }
-  return found.size === 1 ? [...found.values()][0] : undefined;
-}
+export { ownAgentModel } from './quality.js';
+import { ownAgentModel } from './quality.js';
 
 /**
  * Run improve.method on this computer (mode prune: the pruning pass). Its model steps run on the model of the Method's
@@ -252,7 +237,7 @@ export function seenOfRun(outcome: any): Seen[] {
  * the person saw (the result, the files the run wrote, and the calls and effects it made) and writes 1 to 3 plain
  * sentences, each about one of those things and decidable from it alone, that a right result can meet with the
  * information the run had; for a note about form or a missing action, also a small check script. A
- * sentence is kept only when it fails on the corrected run and passes on every approved run of the same part, with two
+ * sentence is kept only when it fails on the corrected run and passes on every approved run of the same part and the same inputs, with two
  * judges when both Claude Code and Codex are signed in. Sentences that do not fail get one more try with the reason.
  */
 export async function caseFromCorrection(file: string, judgment: { id: string; note: string | null; corrected?: unknown; noted_by?: string | null; answer?: string | null }, runDir: string, options: { approvedRuns?: string[] } = {}) {
@@ -260,13 +245,18 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
   if (existsSync(join(folder, 'cases', id, 'case.json'))) return { id, made: false };
   const { outcomeOfRun, createCase } = await import('@withmethod/runtime/cases.js');
   const outcome: any = await outcomeOfRun(runDir);
+  // An approved run is evidence against a sentence only for the same request: a run of other inputs may be right
+  // because the corrected rule does not apply to it (another party, an earlier date).
   const approved: any[] = [];
-  for (const dir of options.approvedRuns ?? []) { try { approved.push(await outcomeOfRun(dir)); } catch { /* not a finished run */ } }
+  for (const dir of options.approvedRuns ?? []) { try { const run = await outcomeOfRun(dir); if (isDeepStrictEqual(run.inputs ?? {}, outcome.inputs ?? {})) approved.push(run); } catch { /* not a finished run */ } }
   const seen = seenOfRun(outcome), refs = new Set(seen.map(s => s.ref));
   const fallback = refs.has('result') ? 'result' : seen[0]?.ref ?? 'result';
   const method = readDocument(file) as any;
   const note = [judgment.note?.trim() || 'The person marked this result wrong.', judgment.answer?.trim() ? `Asked what they meant, the person answered: ${judgment.answer.trim()}` : ''].filter(Boolean).join('\n');
   const { callModel } = await import('./model-call.js');
+  // The case is written on the model of the Method's own agent steps, as its fix and judges are.
+  const own = await ownAgentModel(method);
+  const writer = own ? { model: 'case_writer', models: { case_writer: { agent: own.backend, model: own.model, ...(own.reasoning_effort ? { reasoning_effort: own.reasoning_effort } : {}) } } } : {};
   const { preparedConfig, judgeProfiles, evaluateWithJudges } = await import('./quality.js');
   const prepared = await preparedConfig(file, {}, { judge: true });
   const profiles = await judgeProfiles(prepared.config);
@@ -287,7 +277,7 @@ export async function caseFromCorrection(file: string, judgment: { id: string; n
   ].join(' ');
   let reason = '', met = 0;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const answer = await callModel({ schema: caseSchema, system, user: reason ? `${user}\n\nYour last answer could not be used: ${reason}` : user });
+    const answer = await callModel({ schema: caseSchema, system, user: reason ? `${user}\n\nYour last answer could not be used: ${reason}` : user, ...writer });
     const written = (Array.isArray(answer.value?.criteria) ? answer.value.criteria : [])
       .map((c: any) => typeof c === 'string' ? { text: c.trim(), ref: fallback } : { text: String(c?.text ?? '').trim(), ref: refs.has(String(c?.ref ?? '').trim()) ? String(c.ref).trim() : fallback })
       .filter((c: { text: string }) => c.text).slice(0, 3);
@@ -420,6 +410,7 @@ export async function fixCorrections(client: MethodClient, file: string, options
       judgments.push({ id: j.id, run_id: j.run_id, ...(j.run_dir ? { run_dir: j.run_dir } : {}), step_id: j.step_id, verdict: j.verdict, note: j.note, ...(j.corrected !== null ? { corrected: j.corrected } : {}),
         ...(existsSync(join(dirname(file), 'cases', caseId, 'case.json')) ? { case_id: caseId } : {}), source: j.source, created_at: j.created_at, ...(freshIds.has(j.id) ? { new: true } : {}),
         ...(j.noted_by ? { noted_by: j.noted_by } : {}), ...(j.question ? { question: j.question } : {}), ...(j.answer ? { answer: j.answer } : {}),
+        ...((p => p ? { case_problem: p } : {})(cases.not_made.find(c => c.id === j.id)?.reason)),
         ...(run ? { run: { id: run.id, status: run.status, created_at: run.created_at, version_id: run.workflow_version_id, inspection: run.inspection } } : {}) });
     }
     const runFolders = (await localRuns(file)).map(r => r.dir);

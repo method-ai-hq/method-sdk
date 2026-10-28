@@ -10,7 +10,7 @@ import { createCase, retireCase, listCases, testSuite, defaultCasesDir, evaluate
 import { authoringPath, editDocument, readDocument } from "./authoring.js";
 import { localSetup } from "./local-setup.js";
 import { resolveAgentProfiles, checkAgents, accountNeeds } from "./capabilities.js";
-import { agentSignedIn, localAgent, resolveModels } from "@withmethod/runtime/agents.js";
+import { agentSignedIn, localAgent, methodProfiles, resolveModels } from "@withmethod/runtime/agents.js";
 import { executable } from "@withmethod/runtime/io.js";
 import { hostedModelsFor, managedModels } from "./hosted-models.js";
 import { managedClassification } from "./classification-client.js";
@@ -37,7 +37,10 @@ export async function preparedConfig(file: string, flags: { workspace?: string }
     catch (error: any) { process.stderr.write(`Hosted models are unavailable (${error.message}).\n`); }
   }
   config.models = await resolveAgentProfiles(method, config, hostedModel);
-  if (judge) {
+  // A judge of the Method's cases thinks on the model of the Method's own agent steps, as its fix does.
+  const own = judge ? await ownAgentModel(method) : undefined;
+  if (own) config.models.judge = own;
+  else if (judge) {
     try { config.models.judge = (await resolveModels({ steps: { judge: { do: { kind: 'call', model: 'judge' } } } }, {}, { hostedModel })).judge; }
     catch (error: any) { if (error.code !== 'needs_input') throw error; }
   }
@@ -144,6 +147,25 @@ export function signedInName(client: Pick<MethodClient, "server" | "request" | "
 async function declaredSecrets(file: string) {
   const { resolveSecrets } = await import("./secrets.js");
   return resolveSecrets(Object.keys((readDocument(file) as any)?.secrets ?? {}));
+}
+
+/**
+ * The model that the Method's own agent steps run on, as a default model profile for its fix: the one Claude Code or
+ * Codex model and effort that all of its call, agent and session steps name. Undefined when its steps name none, or
+ * more than one; then the fix runs on the user's own agent with its default model.
+ */
+export async function ownAgentModel(document: any): Promise<{ backend: 'claude' | 'codex'; model: string; reasoning_effort?: string } | undefined> {
+  const profiles: Record<string, any> = methodProfiles(document);
+  const found = new Map<string, { backend: 'claude' | 'codex'; model: string; reasoning_effort?: string }>();
+  for (const step of Object.values(document.steps ?? {}) as any[]) for (const exec of [step.do, step.check]) {
+    if (!exec || !['call', 'agent', 'session'].includes(exec.kind)) continue;
+    const profile = exec.kind === 'session' ? { backend: exec.agent, model: exec.model, reasoning_effort: exec.reasoning_effort } : profiles[exec.model ?? 'default'] ?? {};
+    if (!['claude', 'codex'].includes(profile.backend) || typeof profile.model !== 'string') return undefined;
+    const effort = profile.reasoning_effort ?? profile.effort;
+    const value = { backend: profile.backend, model: profile.model, ...(typeof effort === 'string' ? { reasoning_effort: effort } : {}) };
+    found.set(JSON.stringify(value), value);
+  }
+  return found.size === 1 ? [...found.values()][0] : undefined;
 }
 
 /** Run the cases of a Method with the same preparation as method run. */

@@ -246,7 +246,7 @@ it('every arm runs on the same model: a plain arm takes the Method arm\'s model,
 }, 600_000);
 
 it('runs a plain arm as one session in a clean room with the same task prompt and no web, and reads the file it hands in, not its last message', async () => {
-  const { root, file } = plainFixture();
+  const { root, file } = plainFixture({ runs: 2 });
   const claude = claudeStub(root);
   // The Method arm has a Claude Code step too, on the agent's default model.
   const armFile = join(root, 'a', 'agent.method'), method = JSON.parse(readFileSync(armFile, 'utf8'));
@@ -277,7 +277,7 @@ it('runs a plain arm as one session in a clean room with the same task prompt an
 }, 600_000);
 
 it('a Codex plain arm hands in its file too, and has no web search', async () => {
-  const { root, file } = plainFixture({}, 'codex');
+  const { root, file } = plainFixture({ runs: 2 }, 'codex');
   codexStub(root);
   const result = await runComparison(root, file, 'first');
   expect(result.result).toMatch(/^plain Codex is better: plain Codex is ahead of Method agent by 0\.\d+ on size/);
@@ -981,13 +981,13 @@ it('gives the corrections in one shuffled order from the seed, the same for ever
 }, 600_000);
 
 it('runs each Method arm as its own Method, decides by the rule, and reruns only the cells of a changed part', async () => {
-  const { root, file } = fixture();
+  const { root, file } = fixture({ runs: 2 });
   const first = await runComparison(root, file, 'first');
   expect(first.status).toBe('completed');
   expect(first.result).toMatch(/^Agent b is better: Agent b is ahead of Agent a by 0\.15 on size, and the rule needs 0\.1\./);
-  expect(first.result).toContain('Rule: An arm is better when its mean size is at least 0.1 above every other arm\'s, its lead is larger than the spread between two copies of the same agent, with at least 1 learner behind each point. Otherwise: can\'t tell yet.');
-  expect(first.result).toContain('  Agent a: Inputs run: 2 of 2.');
-  expect(first.result).toContain('  Agent b: 0.30 (n=1)');
+  expect(first.result).toContain('Rule: An arm is better when its mean size is at least 0.1 above every other arm\'s, its lead is larger than the spread between two copies of the same agent, with at least 2 learners behind each point. Otherwise: can\'t tell yet.');
+  expect(first.result).toContain('  Agent a: Inputs run: 4 of 4.');
+  expect(first.result).toContain('  Agent b: 0.30 (n=2)');
   // The trial ran every checking input with 2 learners; the full run reused learner 1.
   expect([calls(root, 'a'), calls(root, 'b')]).toEqual([4, 4]);
 
@@ -1022,6 +1022,9 @@ it('decides by the fixed rule: margin, minimum learners and guard', async () => 
   const grades = (runs: number, b: { size: number; words: number }) => ['a', 'b'].flatMap(arm => ['inputs/one.json', 'inputs/two.json'].flatMap(input =>
     Array.from({ length: runs }, (_, repeat) => ({ arm, input, repeat, checkpoint: null, scores: arm === 'a' ? { size: 0.2, words: 0.5 } : b }))));
   expect(decide(plan, grades(1, { size: 0.9, words: 0.5 }), null).text).toMatch(/^Can't tell yet: each point has 1 learner, and the rule needs 2\./);
+  // One copy of each agent, even when the rule asks for one: Method cannot see how much copies differ, so it cannot tell.
+  const one = { ...plan, learners: 1, rule: { ...plan.rule, min_runs: 1 } };
+  expect(decide(one, grades(1, { size: 0.9, words: 0.5 }), null).text).toMatch(/^Can't tell yet: Agent b is ahead of Agent a by 0\.70 on size, but no agent has two copies with a number there, so Method cannot tell whether the lead is larger than the difference between copies\./);
   expect(decide(plan, grades(2, { size: 0.9, words: 0.4 }), null).text).toMatch(/^Can't tell yet: Agent b is ahead on size, but its words is 0\.10 below Agent a's, and the rule allows 0\.05\./);
   expect(plan.rule_sentence).toBe('An arm is better when its mean size is at least 0.1 above every other arm\'s, its lead is larger than the spread between two copies of the same agent, and its words is not more than 0.05 below the other arm\'s, with at least 2 learners behind each point. Otherwise: can\'t tell yet.');
   const better = decide(plan, grades(2, { size: 0.9, words: 0.5 }), null);
@@ -1035,11 +1038,11 @@ it('decides by the fixed rule: margin, minimum learners and guard', async () => 
 
 it('guards the winner against the other arm at the deciding checkpoint, not against its own first score', async () => {
   const { root, file } = fixture({ other_measures: [{ name: 'words', code: 'size.mjs' }], teaching: ['inputs/three.json'],
-    rule: { margin: 0.1, min_runs: 1, at: 1, guard: { measure: 'words', max_drop: 0.05 } }, treatment: { events: [{ correction: 'Be brief.', input: 'inputs/three.json' }], checkpoints: [0, 1] } });
+    rule: { margin: 0.1, min_runs: 1, at: 1, guard: { measure: 'words', max_drop: 0.05 } }, runs: 2, treatment: { events: [{ correction: 'Be brief.', input: 'inputs/three.json' }], checkpoints: [0, 1] } });
   const { plan } = await compileComparison(file);
   expect(plan.rule_sentence).toContain('and its words at that point is not more than 0.05 below the other arm\'s,');
   const grades = (scores: Record<string, Record<number, { size: number; words: number }>>) => Object.keys(scores).flatMap(arm => [0, 1].flatMap(checkpoint =>
-    ['inputs/one.json', 'inputs/two.json'].map(input => ({ arm, input, repeat: 0, checkpoint, scores: scores[arm]![checkpoint]! }))));
+    ['inputs/one.json', 'inputs/two.json'].flatMap(input => [0, 1].map(repeat => ({ arm, input, repeat, checkpoint, scores: scores[arm]![checkpoint]! })))));
   const low = decide(plan, grades({ a: { 0: { size: 0.2, words: 0.8 }, 1: { size: 0.2, words: 0.8 } }, b: { 0: { size: 0.2, words: 0.5 }, 1: { size: 0.9, words: 0.5 } } }), null);
   expect(low.answer).toBe("Can't tell yet");
   expect(low.text).toMatch(/^Can't tell yet: Agent b is ahead on size, but its words is 0\.30 below Agent a's after 1 event, and the rule allows 0\.05\./);
@@ -1086,7 +1089,7 @@ it('grades again every grade that could read a run that ran again', async () => 
 });
 
 it('takes the person\'s go from method answer RUN_ID, as an agent passes it on, and continues the run', async () => {
-  const { root, file } = fixture();
+  const { root, file } = fixture({ runs: 2 });
   const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   const execArgv = [...process.execArgv];
   process.execArgv = ['--import', 'tsx'];

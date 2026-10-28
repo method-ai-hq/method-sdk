@@ -293,6 +293,29 @@ it('the fix thinks on the model of the Method\'s own agent steps: a session on C
   expect(config.models.default).toEqual({ backend: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high' });
 });
 
+it('an approved run counts against a correction\'s check only for the same inputs: a rule for one date or one party is not blocked by right runs of others', async () => {
+  const s = setup();
+  fakeClaude(s.root);
+  const { file, run } = await project(s.root);
+  const { cpSync } = await import('node:fs');
+  // Approved runs, each judged with the same verdict as the corrected run: the check fails on them too.
+  const approvedAs = (name: string, inputs: unknown) => {
+    const dir = join(s.root, 'cache', 'runs', name);
+    cpSync(run, dir, { recursive: true });
+    const checkpoint = JSON.parse(readFileSync(join(dir, 'checkpoint.json'), 'utf8'));
+    checkpoint.root.inputs = inputs;
+    writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify(checkpoint));
+    return dir;
+  };
+  // A right run of an earlier date (before the rule changed) does not block the check of the new rule.
+  const earlier = approvedAs('approved-earlier', { today: '2026-03-01' });
+  const made = await caseFromCorrection(file, { id: 'jdg_' + 'f'.repeat(32), note: 'Return is 14 days from April.' }, run, { approvedRuns: [earlier] });
+  expect(made.made).toBe(true);
+  // A right run of the same request does: the person approved the other result for it.
+  const same = approvedAs('approved-same', JSON.parse(readFileSync(join(run, 'checkpoint.json'), 'utf8')).root.inputs ?? {});
+  await expect(caseFromCorrection(file, { id: 'jdg_' + '1'.repeat(32), note: 'Return is 14 days from April.' }, run, { approvedRuns: [same] })).rejects.toMatchObject({ code: 'case_not_made' });
+});
+
 it('a correction that the run already meets ends no change needed, without a fix', async () => {
   const s = setup(); noStart();
   fakeClaude(s.root, { met: true }); fakeImprove(s.root, 'change');
