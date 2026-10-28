@@ -1,3 +1,14 @@
+# Unreleased
+
+- **Method's learner is one agent session.** A correction goes to one Claude Code or Codex session (the agent, model and effort of the Method's own steps, on your own subscription) in a private copy of the Method's folder. It reads the correction, the run (inputs, step outputs, result, transcripts, files), every earlier correction with its check and outcome, and the authoring guide. It writes the check of the correction with `method case new`, changes whatever the Method needs (a prompt, a learned rule, a new run step with a data file, a check, a split step, examples), and runs `method validate` and `method test`.
+- **A gate in code decides.** Method applies the change only when the new check fails on the Method as it was and passes on the new one, every earlier check that passed still passes, the person's own words are unchanged, and `method validate` gives no errors. A failed gate goes back to the session with the exact failure, 3 tries in all; then the outcome is no fix found (or held, when the change breaks only checks that other people made). A usage limit is a plain error.
+- **The person's own words stay.** Every paragraph of the goal, the prompts, the classify questions and options, the questions to people, the check prompts, and the .md and .txt files is the person's, except the paragraphs that Method's learner wrote (recorded in `.method/written.json`). The learner adds text beside them; it changes one only after the person answered a question that quotes it.
+- **Each change is recorded.** A fix has its correction, a plain summary and a diff: `method wait --json`, `method changes --json` and the comparison page show them, and `method undo` takes the whole change back, the new files and the new check too.
+- **Outcomes.** fixed, no change needed (the run, or the Method as it is now, already does what the correction asks; its check stays), no fix found, could not test, question, held. not_reproduced and not_fixable_here are gone.
+- **Removed:** improve.method and its download (`METHOD_IMPROVE_METHOD`), the case writer (`caseFromCorrection`), correction kinds and candidate kinds, finding the step by trying, ranking by fewest words, the pruning sweep, the later check of other cases, `method __model`, and a learned rule added without a test.
+- **The authoring guide** starts with the principles of a Method that just works.
+- **Comparisons:** the Method arm's learner is this session; it and the plain builder have the same model and the same 2 hours for each correction, and the page shows what each correction changed.
+
 # 0.23.3
 
 - **A Method arm whose agent is a session step runs its measured runs.** The clean room of a Method arm gets the sign-in of each session step's agent, not only of call and agent steps.

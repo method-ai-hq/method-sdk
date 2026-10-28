@@ -328,6 +328,9 @@ it('a plain arm with corrections is a builder: after each correction a session g
   expect(plain.snapshots['2'].plain.instructions).toBe('Answer with three times n.\n- Add one, because the count starts at one.');
   expect(plain.snapshots['3'].plain.instructions).toBe(plain.snapshots['2'].plain.instructions);
   expect(plain.events.map((e: any) => [e.index, e.outcome, e.received])).toEqual([[1, 'edited', true], [2, 'given', true], [3, 'not_edited', true]]);
+  // What the builder changed is kept with its correction, as a diff of the instructions.
+  expect(plain.events[0].change).toEqual({ diff: '--- instructions.md\n+++ instructions.md\n@@ -1,1 +1,2 @@\n Answer with three times n.\n+- Add one, because the count starts at one.' });
+  expect(plain.events[2].change).toBeUndefined();
   expect(JSON.stringify(treated)).not.toContain('Corrections to follow');
   // The builder used the file tools and no web; usage per correction counts its tokens (training run and edit).
   expect(claude.calls().filter(c => c.kind === 'builder')[0].args.join(' ')).toContain('--tools Read,Write,Edit,Glob,Grep');
@@ -518,16 +521,15 @@ it('runs counts separate learners: each Method learner has its own Method ID, fo
 }, 600_000);
 
 it('says what happened to each correction for each learner; could not test and a stopped fix are not received, and the trial stops', async () => {
-  // A correction that could not be tested but became a learned rule changed the agent.
-  expect(fixOutcome('could_not_test', true)).toEqual({ received: true, outcome: 'rule_added' });
-  expect([fixOutcome('fixed'), fixOutcome('not_reproduced'), fixOutcome('no_fix_found'), fixOutcome('could_not_test'), fixOutcome('question'), fixOutcome(undefined)]).toEqual([
+  expect([fixOutcome('fixed'), fixOutcome('no_change_needed'), fixOutcome('no_fix_found'), fixOutcome('could_not_test'), fixOutcome('question'), fixOutcome(undefined)]).toEqual([
     { received: true, outcome: 'fixed' }, { received: true, outcome: 'no_change_needed' }, { received: true, outcome: 'no_fix_found' },
     { received: false, outcome: 'could_not_test' }, { received: false, outcome: 'question' }, { received: false, outcome: 'stopped' }]);
   const { root, file } = fixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 5 },
     treatment: { events: [1, 2, 3, 4, 5].map(i => ({ correction: `Correction ${i}.`, input: 'inputs/three.json' })), checkpoints: [0, 5] } });
   // Every correction reaches arm a; the second one could not be tested for arm b.
   const failsAt = (index: number) => async (event: any, learner: any) => learner.dir.includes(join('arms', 'b')) && event.index === index
-    ? { received: false, outcome: 'could_not_test' as const, reason: 'Method\'s fix could not test a change', detail: 'the case needs a file.' } : { received: true, outcome: event.index === 2 ? 'no_fix_found' as const : 'fixed' as const };
+    ? { received: false, outcome: 'could_not_test' as const, reason: 'Method\'s fix could not test a change', detail: 'the case needs a file.' }
+    : event.index === 2 ? { received: true, outcome: 'no_fix_found' as const } : { received: true, outcome: 'fixed' as const, change: { summary: `Fix ${event.index}.`, diff: `--- agent.method\n+++ agent.method\n+fix ${event.index}` } };
   delivery.deliver = failsAt(2);
   const comparison = await stagePlan(file);
   const treated = (await compareStage('trial_treat', { comparison })).trial_treatment as string;
@@ -556,6 +558,8 @@ it('says what happened to each correction for each learner; could not test and a
   expect(result.text).toContain('SHORT Agent b: Inputs run: 4 of 4. Corrections received: 4 of 5');
   // Each correction of each learner, with its outcome, counted from 1.
   expect(result.received.b.corrections[4]).toEqual({ index: 5, input: 'inputs/three.json', text: 'Correction 5.', outcome: 'could_not_test', received: false, changed: false, learner: 1, reason: 'Method\'s fix could not test a change' });
+  // A fixed correction keeps what the learner changed: its summary and its diff.
+  expect(result.received.a.corrections[0]).toMatchObject({ index: 1, outcome: 'fixed', changed: true, change: { summary: 'Fix 1.', diff: '--- agent.method\n+++ agent.method\n+fix 1' } });
   // The page's line says what happened in plain words, without the cause's details.
   expect(result.received.b.lines[1]!.missing).toEqual(['Correction 5 (“Correction 5.”) was not received: Method\'s fix could not test a change.']);
   expect(result.text).toContain('Each arm received its full treatment: checked by Method: no.');

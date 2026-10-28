@@ -22,6 +22,15 @@
 
 When a run fails, read failure.headline and failure.next, change what they name, and run again.
 
+# A Method that just works
+
+- **Exact things in code or data.** Put exact rules, values, dates, thresholds and lists in a `run` step and a data file, not in a prompt: code does them the same way every time.
+- **A model step only for judgement**: reading, writing, and deciding what a text means.
+- **A check on each output that matters**, so a wrong output is caught and tried again.
+- **One task per prompt.** Split a step that does several things.
+- **Keep the user's words word for word.** Their rules and instructions stay as they wrote them; add your own text beside them, and ask before you change theirs.
+- **Each correction becomes a check** (a case) that fails on the wrong run and passes on a right one, and every earlier check keeps passing.
+
 # Write each prompt
 
 - **One task per prompt.** If a prompt says "then" or has several jobs, make several steps. Split the tasks, not the user's rules: every step that applies them receives all of them, word for word.
@@ -1335,7 +1344,7 @@ method judge RUN_ID keep JUDGMENT_ID
 ```
 
 Arguments and defaults:
-RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result; it is recorded only. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters), even when they are vague. --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment starts the fix in its own process, with your own Claude Code or Codex (hosted models only when neither is signed in), and prints one line at once. The fix records the correction as a case in cases/ next to the Method file, judged on what the person saw (the result, the files the run wrote, the messages it sent), and tests changes on a private copy of the run, with every message or change held back. It applies a change only when the change fixes this run reliably and breaks no earlier correction, or adds the note as a learned rule when it cannot test one safely. method wait prints what it did, and so does the next method run of the Method. method undo restores the Method as it was before. The fix starts from the newest version of the Method, as method run does. Two people who judge the same step of a run in opposite ways are held: the output shows both, and method judge RUN_ID keep JUDGMENT_ID keeps one and sets the other aside. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file. Do not ask the person to confirm a judgment, and do not edit the Method yourself for the same correction.
+RUN_ID is the run_id of the run's start line, or the run ID on the dashboard. right: the person used or approved the result; it is recorded only. wrong: the person corrected it, or asked to change the Method because of it. --note: the person's words (at most 4000 characters), even when they are vague. --corrected FILE: the result that the person says is right; JSON is sent as JSON, other text as text (at most 1 MB). --step: the step whose output was wrong. A wrong judgment starts the fix in its own process, with your own Claude Code or Codex (hosted models only when neither is signed in), and prints one line at once. The fix is one session of the agent that the Method's own steps use, on its model and effort, in a private copy of the Method's folder: it writes a check of the correction in cases/ next to the Method file, judged on what the person saw (the result, the files the run wrote, the messages it sent), changes what the Method needs (a prompt, a learned rule, a new script step with a data file, a check, a split step), and runs method validate and method test. Method then applies the change only when the new check fails on the Method as it was and passes on the new one, every earlier check that passed still passes, the person's own words in the prompts and in the .md and .txt files are unchanged (unless the person approved the change in an answer), and method validate gives no errors. Otherwise the session gets the exact failure and tries again, 3 times in all. Every test runs on private copies, with every message or change held back. The outcome is fixed, no change needed (the run already does what the person asks), no fix found, could not test, a question, or held (the fix breaks another person's correction). method wait prints what it did, and so does the next method run of the Method. method undo restores the Method as it was before. The fix starts from the newest version of the Method, as method run does. Two people who judge the same step of a run in opposite ways are held: the output shows both, and method judge RUN_ID keep JUDGMENT_ID keeps one and sets the other aside. For a run whose content stays on this computer (run_data: device), the account gets only the verdict and the step; the note and the corrected result go in .method/judgments.jsonl next to the Method file. Do not ask the person to confirm a judgment, and do not edit the Method yourself for the same correction.
 
 Result and changes:
 One line: Working on it. --json prints the judgment and {fix: {status: working, wait}}; method wait JUDGMENT_ID gives the outcome.
@@ -1378,7 +1387,7 @@ method learned nda.method --remove 2
 
 ## undo
 
-Undo Method's last change to a Method: a fix, a pruning change, or a removed learned rule.
+Undo Method's last change to a Method: a fix, or a removed learned rule.
 
 Usage:
 
@@ -1415,7 +1424,7 @@ Arguments and defaults:
 Lists, newest first, the changes that method judge applied on this computer and the changes that Method made in the account. A change made in the account is a new version: the next method run of the file takes it.
 
 Result and changes:
-One line per change: its date, its version, and its cause. --json prints {file, method_id, changes: [{id, source, cause, date, version_id, steps}]}. No changes.
+One line per change: its date, its version, and its cause. --json prints {file, method_id, changes: [{id, source, cause, date, version_id, steps}]}; a fix on this computer also has the correction it came from (judgment, note) and its diff. No changes.
 
 Errors:
 No id: line and no change made on this computer.

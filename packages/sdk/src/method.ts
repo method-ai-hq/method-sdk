@@ -193,10 +193,10 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (args[0] === 'learned') return (await import('./learned.js')).learnedCommand(args.slice(1), clientFactory);
   if (args[0] === 'undo') return (await import('./undo.js')).undoCommand(args.slice(1), clientFactory);
   if (args[0] === '__fix' || args[0] === '__watch') {
-    const p = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, judgment: { type: 'string', multiple: true }, prune: { type: 'boolean' } } });
+    const p = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, judgment: { type: 'string', multiple: true } } });
     const client = clientFactory(p.values.server ?? DEFAULT_SERVER), file = authoringPath(p.positionals[0]!);
     if (args[0] === '__watch') { await (await import('./watch.js')).watchRun(client, file, resolve(p.positionals[1]!)); return; }
-    return (await import('./improve.js')).backgroundFix(client, file, p.values.judgment ?? [], { prune: !!p.values.prune });
+    return (await import('./improve.js')).backgroundFix(client, file, p.values.judgment ?? []);
   }
   if (args[0] === 'changes') return (await import('./proposals.js')).changesMain(args.slice(1), clientFactory);
   // A comparison file publishes as a draft for review, and runs as the Method it compiles into.
@@ -205,7 +205,6 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (args[0] === 'run' && /\.method$/i.test(args[1] ?? '') && !args.includes('--help') && !await beforeFileRun(args, clientFactory)) return;
   if (args[0] === 'worker' || args[0] === 'keys') return (await import('./worker.js')).productionCommand(args, clientFactory);
   if (args[0] === '__run-data') return (await import('./run-data.js')).runDataCommand(args.slice(1));
-  if (args[0] === '__model') return (await import('./model-call.js')).modelCallCommand();
   if (args[0] === '__compare' && args[1]) return (await import('./compare.js')).compareStageCommand(args[1]);
   if (args[0] === '__local-server') return (await import('./local-server.js')).localServerCommand();
   // A run on this computer takes its answer here and continues; a production run's answer goes to the account.

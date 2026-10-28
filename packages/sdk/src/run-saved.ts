@@ -125,7 +125,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
         writePrivateJson(join(directory,'state-pending.json'),commit);
         const result=await client.request<any>(statePath,'POST',commit);revision=result.revision;
       }
-    },client,config,{},saved.saved_by??null);
+    },client,config,saved.saved_by??null);
     // Every step finished (an unconfirmed run too), so the run no longer owns the shared state.
     if(acquired&&finishedRun(result.status)){await client.request(statePath,'POST',{action:'release',run_id:request.run_id});acquired=false;}
     return {run_id:request.run_id,directory,...result};

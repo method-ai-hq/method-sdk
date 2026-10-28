@@ -1,8 +1,0 @@
-{
-  "proposal": "{\"cause\": \"I tried 3 changes; none fixed this reliably without breaking another result.\", \"evidence\": {\"kind\": \"none\", \"steps\": [], \"candidate\": null, \"cases\": [], \"before_after\": [], \"replay\": null, \"cost\": null, \"prompt_growth_pct\": null, \"budget\": {\"model_calls\": 12, \"usd\": null, \"minutes\": 0.03}, \"judgments\": null}}",
-  "kind": "none",
-  "proposal_id": "",
-  "outcomes": "[{\"id\": \"jdg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"outcome\": \"no_fix_found\", \"detail\": \"I tried 3 changes; none fixed this reliably without breaking another result.\", \"kind\": \"rule\", \"step_id\": \"summarize\", \"tests\": {\"case\": \"names-owner\", \"base\": {\"passes\": 0, \"runs\": 2}}}]",
-  "background_cases": [],
-  "summary": "I tried 3 changes; none fixed this reliably without breaking another result."
-}

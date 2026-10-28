@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { methodMain } from '../../packages/sdk/src/method.js';
 import { MethodClient } from '../../packages/sdk/src/method-client.js';
-import { backgroundFix, caseFromCorrection, correctionCaseId, fixCorrections, stopCause } from '../../packages/sdk/src/improve.js';
+import { backgroundFix, correctionCaseId, fixCorrections, learnerModel } from '../../packages/sdk/src/improve.js';
+import { learnerAgent } from '../../packages/sdk/src/learner.js';
+import { createCase } from '@withmethod/runtime/cases.js';
 import { fixStarter, storedOutcome } from '../../packages/sdk/src/fix-outcomes.js';
 import { notHereLine, workingLine } from '../../packages/sdk/src/fix-lines.js';
 import { methodContent } from '../../packages/sdk/src/versions.js';
@@ -12,7 +14,8 @@ import { readDocument } from '../../packages/sdk/src/authoring.js';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
 
 const roots: string[] = [];
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); process.exitCode = 0; roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
+const realSession = learnerAgent.session;
+afterEach(() => { learnerAgent.session = realSession; vi.restoreAllMocks(); vi.unstubAllEnvs(); process.exitCode = 0; roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 
 function setup() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'method-judge-'))); roots.push(root);
@@ -121,61 +124,36 @@ it('method improve and method apply are gone', async () => {
 });
 
 
-// ---------- The fix in the background, with a fake Claude Code and a fake improve.method ----------
+// ---------- The fix in the background, with a stub learner ----------
 
+const ESCALATED = 'Thanks. I escalated the non-compete to Legal.';
+const escalating = `console.log(JSON.stringify({reply: ${JSON.stringify(ESCALATED)}}));\n`;
+/** The person's words as the brief gives them to the learner. */
+const noteOf = (room: string) => readFileSync(join(room, '.fix', 'correction.md'), 'utf8').split('\n\n')[2]!.trim();
 /**
- * A signed-in fake Claude Code on PATH. It writes the sentences of a correction's case, votes as the rubric judge (the
- * sentences fail on the judged run) and as the conflict judge (no conflict), and logs every request.
+ * A stub learner in place of the agent session: it writes the check of the correction (the reply escalates), and then
+ * changes the reply step (change), says no fix (none), asks a question until the person answered (question), or stops.
+ * A Method that already escalates needs no change. It keeps each brief it read.
  */
-function fakeClaude(root: string, { met = false } = {}) {
-  const bin = join(root, 'bin'); mkdirSync(bin);
-  writeFileSync(join(bin, 'claude'), `#!${process.execPath}
-const fs=require('node:fs'),args=process.argv.slice(2);
-if(args[0]==='auth'){console.log(JSON.stringify({loggedIn:true}));process.exit(0);}
-let prompt='';process.stdin.on('data',c=>prompt+=c);process.stdin.on('end',()=>{
-  fs.appendFileSync(${JSON.stringify(join(root, 'claude.log'))},JSON.stringify(prompt)+'\\n');
-  const out=prompt.includes('Write 1 to 3 plain sentences')?{criteria:[{text:'The reply escalates the non-compete clause to Legal.',ref:'result'}],check_script:'',check_says:''}
-    :prompt.includes('Decide whether the text below meets each criterion')?{verdicts:['c1','c2','c3'].map(id=>({id,pass:${met},quote:'',reason:'By the reply.'}))}
-    :prompt.includes('Find conflicts')?{conflicts:[]}:null;
-  console.log(JSON.stringify({type:'result',subtype:'success',structured_output:out}));
-});`, { mode: 0o700 });
-  vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(':')); vi.stubEnv('CLAUDECODE', '1'); vi.stubEnv('CODEX_THREAD_ID', '');
-  return () => existsSync(join(root, 'claude.log')) ? readFileSync(join(root, 'claude.log'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as string) : [];
-}
-
-/**
- * A fake improve.method: one script step that keeps the judgments it gets next to the Method file and returns the
- * outcome it is made with: a fix of the write step, none, a fix that breaks another case, or a question.
- */
-function fakeImprove(root: string, outcome: 'change' | 'none' | 'breaks' | 'question' | 'again' | 'stops') {
-  const folder = join(root, 'improve'); mkdirSync(folder);
-  const text = (description: string) => ({ type: 'text', description, default: '' });
-  writeFileSync(join(folder, 'improve.method'), JSON.stringify({ format: 'method/3.4', name: 'Improve', goal: 'Return a fixed outcome.',
-    inputs: { grant_id: text('g'), judgment_id: text('j'), method_file: text('m'), judgments_file: text('f'), run_folders: { type: 'list', items: 'text', description: 'r', default: [] } },
-    secrets: { IMPROVE_API_KEY: 'Key.', IMPROVE_SERVER: 'Server.' },
-    steps: { decide: { name: 'Decide', purpose: 'Returns the outcome.', in: { method_file: 'inputs.method_file', judgments_file: 'inputs.judgments_file' }, do: { kind: 'run', runtime: 'node', entrypoint: 'decide.mjs' },
-      out: { proposal: { type: 'text', description: 'p' }, kind: { type: 'text', description: 'k' }, proposal_id: { type: 'text', description: 'i' }, outcomes: { type: 'text', description: 'o' },
-        background_cases: { type: 'list', items: 'text', description: 'b' }, summary: { type: 'text', description: 's' } } } },
-    result: { proposal: 'proposal', kind: 'kind', proposal_id: 'proposal_id', outcomes: 'outcomes', background_cases: 'background_cases', summary: 'summary' } }));
-  writeFileSync(join(folder, 'decide.mjs'), `import{readFileSync,writeFileSync,appendFileSync}from'node:fs';import{dirname,join}from'node:path';
-const input=JSON.parse(readFileSync(0,'utf8'));const judgments=JSON.parse(readFileSync(input.judgments_file,'utf8'));
-writeFileSync(join(dirname(input.method_file),'received.json'),JSON.stringify(judgments));
-appendFileSync(join(dirname(input.method_file),'passes.log'),judgments.filter(j=>j.new).length+'\\n');
-const {id,...workflow}=JSON.parse(readFileSync(input.method_file,'utf8'));workflow.steps.write.purpose='Writes the reply and escalates each restriction that the playbook does not cover.';
-const kind=${JSON.stringify(outcome)}, fresh=judgments.filter(j=>j.new);
-if(kind==='stops'){process.stderr.write('Testing the change.\\nClaude Code is not installed or not signed in on this computer. Sign in with claude, then run again.\\n');process.exit(1);}
-const ids=fresh.map(j=>j.case_id).filter(Boolean);
-const outcomes=fresh.map((j,i)=>kind==='again'&&i>0?{id:j.id,outcome:'no_fix_found',again:true,detail:'Another fix changed the same step; this correction is tried again on the new version.'}
-  :kind==='question'&&!j.answer?{id:j.id,outcome:'question',question:'Should every counterparty NDA come back redlined, or only some?'}
-  :kind==='none'?{id:j.id,outcome:'no_fix_found',detail:'I tried 3 changes; none fixed this reliably without breaking another result.',tried:3,subject:'reply'}
-  :{id:j.id,outcome:'fixed',detail:'replies now escalate restrictions that the playbook does not cover',step_id:'write',tests:{case:j.case_id,base:{passes:0,runs:2},candidate:{passes:3,runs:3},guards:[{id:'old-rule',before:'pass',after:'pass'},{id:'older-rule',before:'pass',after:'pass'}]},subject:'reply',tested_output:{result:'Thanks. I escalated the non-compete to Legal.'}});
-const change=outcomes.some(o=>o.outcome==='fixed');
-const evidence=change
-  ?{kind:'change',steps:['write'],candidate:'rule: Escalates restrictions.',cases:[...ids.map(id=>({id,before:'fail',after:'pass',target:true})),{id:'old-rule',before:'pass',after:${JSON.stringify(outcome === 'breaks' ? 'fail' : 'pass')},target:false},{id:'older-rule',before:'pass',after:'pass',target:false}],budget:{model_calls:23,usd:null,minutes:2.4}}
-  :{kind:'none',steps:['write'],candidate:null,cases:[],budget:{model_calls:9,usd:null,minutes:1.1}};
-const proposal=change?{cause:'The reply step did not escalate restrictions that the playbook does not cover.',workflow,evidence}:{cause:'No safe change was found.',evidence};
-console.log(JSON.stringify({proposal:JSON.stringify(proposal),kind:evidence.kind,proposal_id:'',outcomes:JSON.stringify(outcomes),background_cases:[],summary:proposal.cause}));`);
-  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'improve.method'));
+function fakeLearner(root: string, kind: 'change' | 'none' | 'question' | 'stops') {
+  const briefs: string[] = [], models: any[] = [];
+  learnerAgent.session = vi.fn(async ({ room, model }) => {
+    briefs.push(readFileSync(join(room, '.fix', 'correction.md'), 'utf8')); models.push(model);
+    if (kind === 'stops') throw Error('Claude Code is not installed or not signed in on this computer. Sign in with claude, then run again.');
+    const result = (value: unknown) => writeFileSync(join(room, '.fix', 'result.json'), JSON.stringify(value));
+    if (kind === 'question' && !briefs.at(-1)!.includes('the person answered')) { result({ outcome: 'question', question: 'Should every counterparty NDA come back redlined, or only some?' }); return { status: 'completed' as const }; }
+    if (kind === 'none') { result({ outcome: 'no_fix_found', detail: 'the reply needs the playbook, which the agent does not get' }); return { status: 'completed' as const }; }
+    const id = readFileSync(join(room, '.fix', 'correction.md'), 'utf8').match(/has the ID (correction-[a-z0-9]+)/)![1]!;
+    // Escalating already, unless this learner made it so in an earlier try (its notes say so).
+    const done = readFileSync(join(room, 'write.mjs'), 'utf8') === escalating && !existsSync(join(room, '.fix', 'notes.md'));
+    if (!existsSync(join(room, 'cases', id))) await createCase({ methodFile: join(room, 'reply.method'), runDir: join(room, '.fix', 'run'), id, note: noteOf(room), expect: [{ kind: 'equals', ref: 'outputs.reply', value: ESCALATED }] } as any);
+    if (done) { result({ outcome: 'no_change_needed', detail: 'the reply already escalates the non-compete' }); return { status: 'completed' as const }; }
+    writeFileSync(join(room, 'write.mjs'), escalating);
+    writeFileSync(join(room, '.fix', 'notes.md'), 'The reply step now escalates.\n');
+    result({ outcome: 'fixed', summary: 'replies now escalate restrictions that the playbook does not cover' });
+    return { status: 'completed' as const };
+  });
+  return { briefs, models };
 }
 
 /** A Method file that writes a reply, and one finished run of it in the Method cache, as method run leaves them. */
@@ -197,12 +175,11 @@ const noStart = () => vi.spyOn(fixStarter, 'start').mockImplementation(async () 
 const id = 'jdg_' + 'a'.repeat(32);
 
 it('a wrong judgment returns at once; the fix in the background writes the outcome, and method wait prints it with the tested output', async () => {
-  const s = setup(), claude = fakeClaude(s.root), start = noStart();
-  fakeImprove(s.root, 'change');
+  const s = setup(), start = noStart(), learner = fakeLearner(s.root, 'change');
   const { folder, file, run } = await project(s.root);
   const before = methodContent(readDocument(file));
   const client = fakeClient({ judgments: [
-    { id: 'jdg_' + 'e'.repeat(32), run_id: 'run_0', method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: 'Escalate exclusivity.', corrected: null, source: 'agent', created_at: '2026-10-12T10:00:00Z', pending: false },
+    { id: 'jdg_' + 'e'.repeat(32), run_id: 'run_0', method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: 'Escalate exclusivity.', corrected: null, source: 'agent', created_at: '2026-10-12T10:00:00Z', pending: false, outcome: 'no_fix_found' },
     { id: 'jdg_' + 'f'.repeat(32), run_id: 'run_9', method_id: METHOD_ID, step_id: null, verdict: 'right', note: null, corrected: null, source: 'agent', created_at: '2026-10-12T11:00:00Z', pending: false },
   ] });
   await methodMain(['judge', '037a667b-e45d-4461-a319-edc2dc0f64c2', 'wrong', '--note', "it's not even redlined"], () => client);
@@ -211,41 +188,35 @@ it('a wrong judgment returns at once; the fix in the background writes the outco
   expect(start).toHaveBeenCalledWith(file, METHOD_ID, [id], 'https://example.test');
   expect(storedOutcome(METHOD_ID, id)).toMatchObject({ status: 'working', shown: false });
   expect(methodContent(readDocument(file))).toEqual(before);
-  // The background fix: a case from the note, the loop, the change applied and saved as a version.
+  // The background fix: the learner writes the check and the change; Method tests it and applies it as a version.
   await backgroundFix(client, file, [id]);
+  expect(learner.briefs[0]).toContain("it's not even redlined");
   const caseId = correctionCaseId(id);
-  const recorded = JSON.parse(readFileSync(join(folder, 'cases', caseId, 'case.json'), 'utf8'));
-  expect(recorded).toMatchObject({ id: caseId, status: 'active', note: "it's not even redlined", source: { run_dir: run },
-    expect: [{ kind: 'rubric', ref: 'result', criteria: [{ id: 'c1', text: 'The reply escalates the non-compete clause to Legal.' }] }] });
-  const received = JSON.parse(readFileSync(join(folder, 'received.json'), 'utf8'));
-  expect(received.map((j: any) => [j.id.slice(0, 5), j.verdict, !!j.new])).toEqual([['jdg_e', 'wrong', false], ['jdg_f', 'right', false], ['jdg_a', 'wrong', true]]);
-  expect(received[2]).toMatchObject({ note: "it's not even redlined", run_dir: run, case_id: caseId });
-  expect(methodContent(readDocument(file)).steps.write.purpose).toBe('Writes the reply and escalates each restriction that the playbook does not cover.');
+  expect(JSON.parse(readFileSync(join(folder, 'cases', caseId, 'case.json'), 'utf8'))).toMatchObject({ id: caseId, status: 'active', note: "it's not even redlined" });
+  expect(readFileSync(join(folder, 'write.mjs'), 'utf8')).toBe(escalating);
   expect(readDocument(file).id).toBe(METHOD_ID);
-  expect(client.calls.filter((c: any) => c.verb === 'PUT').map((c: any) => c.body.reason)).toContain('Method fixed it from a correction: The reply step did not escalate restrictions that the playbook does not cover.');
+  expect(client.calls.filter((c: any) => c.verb === 'PUT').map((c: any) => c.body.reason)).toContain('Method fixed it from a correction: replies now escalate restrictions that the playbook does not cover');
   expect(client.outcomes).toEqual([{ id, outcome: 'fixed', detail: 'replies now escalate restrictions that the playbook does not cover' }]);
-  expect(storedOutcome(METHOD_ID, id)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed' } });
-  // The case writer and three rubric votes ran on the user's Claude Code; the votes were not paid twice.
-  expect(claude().filter(p => p.includes('Write 1 to 3 plain sentences'))).toHaveLength(1);
-  expect(claude()).toHaveLength(4);
+  expect(storedOutcome(METHOD_ID, id)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed', diff: expect.stringContaining(`+${escalating.trim()}`) } });
+  expect(run).toBeTruthy();
   // method wait prints the person's line and what the fixed agent gives now, from the test.
   s.stdout.mockClear();
   await methodMain(['wait', id], () => client);
   expect(s.printed()).toBe([
-    'Fixed: replies now escalate restrictions that the playbook does not cover. Tested 3 times on this reply and on 2 earlier ones. Undo: method undo.',
-    'What the fixed agent gives now (tested; nothing was sent):', 'Thanks. I escalated the non-compete to Legal.', ''].join('\n'));
+    'Fixed: replies now escalate restrictions that the playbook does not cover. Tested 1 time on this result. Undo: method undo.',
+    'What the fixed agent gives now (tested; nothing was sent):', ESCALATED, ''].join('\n'));
   // Seen once: the next method wait and the next run have nothing more to say about it.
   s.stdout.mockClear();
   await methodMain(['wait'], () => client);
   expect(s.printed()).toBe('Nothing is being fixed on this computer.\n');
   s.stdout.mockClear();
   await methodMain(['wait', id, '--json'], () => client);
-  expect(JSON.parse(s.printed()).outcomes[0]).toMatchObject({ judgment: id, status: 'done', outcome: { outcome: 'fixed', tested: { times: 3, earlier: 2 } } });
-});
+  expect(JSON.parse(s.printed()).outcomes[0]).toMatchObject({ judgment: id, status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 0 } } });
+}, 60_000);
 
 it('method wait stops after its time limit while the fix goes on, and a stopped fix says so', async () => {
   const s = setup(); noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'none');
+  fakeLearner(s.root, 'none');
   await project(s.root);
   await methodMain(['judge', 'run_1', 'wrong', '--note', 'Wrong.'], () => fakeClient());
   // A live fix process: this test process.
@@ -260,9 +231,8 @@ it('method wait stops after its time limit while the fix goes on, and a stopped 
   expect(s.printed()).toBe("The fix stopped before it finished. I'll try again on the next run.\n");
 });
 
-it('says No fix found yet, leaves the file, and keeps the case', async () => {
-  const s = setup(); noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'none');
+it('says No fix found yet in the learner\'s words, and leaves the Method as it was', async () => {
+  const s = setup(); noStart(); fakeLearner(s.root, 'none');
   const { folder, file } = await project(s.root);
   const before = readFileSync(file, 'utf8');
   const client = fakeClient();
@@ -270,72 +240,44 @@ it('says No fix found yet, leaves the file, and keeps the case', async () => {
   await backgroundFix(client, file, [id]);
   s.stdout.mockClear();
   await methodMain(['wait'], () => client);
-  expect(s.printed()).toBe("No fix found yet: I tried 3 changes; none fixed this reply reliably. I'll keep your note.\n");
+  expect(s.printed()).toBe("No fix found yet: the reply needs the playbook, which the agent does not get. I'll keep your note.\n");
   expect(readFileSync(file, 'utf8')).toBe(before);
-  expect(existsSync(join(folder, 'cases', correctionCaseId(id), 'case.json'))).toBe(true);
+  expect(existsSync(join(folder, 'cases', correctionCaseId(id)))).toBe(false);
   expect(client.calls.filter((c: any) => c.verb === 'PUT')).toEqual([]);
-  expect(client.outcomes).toEqual([{ id, outcome: 'no_fix_found', detail: 'I tried 3 changes; none fixed this reliably without breaking another result.' }]);
+  expect(client.outcomes).toEqual([{ id, outcome: 'no_fix_found', detail: 'the reply needs the playbook, which the agent does not get' }]);
 });
 
-it('the fix thinks on the model of the Method\'s own agent steps: a session on Claude Opus 5.5 at high effort gives its fix that model', async () => {
+it('the learner thinks on the model of the Method\'s own agent steps: a session on Claude Opus 5.5 at high effort gives its learner that model', async () => {
   const s = setup();
-  fakeImprove(s.root, 'none');
   const { file } = await project(s.root);
-  const { ownAgentModel, runImprovement } = await import('../../packages/sdk/src/improve.js');
   const doc = JSON.parse(readFileSync(file, 'utf8'));
   doc.steps.work = { name: 'Work', purpose: 'Does the task.', in: { room: 'inputs.room' }, out: 'session', do: { kind: 'session', agent: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high', prompt: 'Do it.', tools: ['read'], room: 'room' } };
-  expect(await ownAgentModel(doc)).toEqual({ backend: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high' });
-  // Steps that name no model, or two models, give no one model: the fix uses the user's own agent as it is.
-  expect(await ownAgentModel(JSON.parse(readFileSync(file, 'utf8')))).toBeUndefined();
-  writeFileSync(file, JSON.stringify(doc));
-  let config: any;
-  await runImprovement(fakeClient(), file, [], [], (async (...args: any[]) => { config = args[5]; return { status: 'completed', result: { proposal: JSON.stringify({ cause: 'None.', evidence: { kind: 'none' } }), outcomes: '[]' } }; }) as any);
-  expect(config.models.default).toEqual({ backend: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high' });
+  expect(await learnerModel(doc)).toEqual({ agent: 'claude', model: 'claude-opus-5-5', reasoning_effort: 'high' });
+  // Steps that name no model give no one model: the learner is the user's own agent on its default model.
+  const bin = join(s.root, 'bin'); mkdirSync(bin);
+  writeFileSync(join(bin, 'claude'), `#!${process.execPath}\nif(process.argv[2]==='auth')console.log(JSON.stringify({loggedIn:true}));\n`, { mode: 0o700 });
+  vi.stubEnv('PATH', [bin, '/usr/bin', '/bin'].join(':')); vi.stubEnv('CLAUDECODE', '1'); vi.stubEnv('CODEX_THREAD_ID', '');
+  expect(await learnerModel(JSON.parse(readFileSync(file, 'utf8')))).toEqual({ agent: 'claude' });
 });
 
-it('an approved run counts against a correction\'s check only for the same inputs: a rule for one date or one party is not blocked by right runs of others', async () => {
-  const s = setup();
-  fakeClaude(s.root);
-  const { file, run } = await project(s.root);
-  const { cpSync } = await import('node:fs');
-  // Approved runs, each judged with the same verdict as the corrected run: the check fails on them too.
-  const approvedAs = (name: string, inputs: unknown) => {
-    const dir = join(s.root, 'cache', 'runs', name);
-    cpSync(run, dir, { recursive: true });
-    const checkpoint = JSON.parse(readFileSync(join(dir, 'checkpoint.json'), 'utf8'));
-    checkpoint.root.inputs = inputs;
-    writeFileSync(join(dir, 'checkpoint.json'), JSON.stringify(checkpoint));
-    return dir;
-  };
-  // A right run of an earlier date (before the rule changed) does not block the check of the new rule.
-  const earlier = approvedAs('approved-earlier', { today: '2026-03-01' });
-  const made = await caseFromCorrection(file, { id: 'jdg_' + 'f'.repeat(32), note: 'Return is 14 days from April.' }, run, { approvedRuns: [earlier] });
-  expect(made.made).toBe(true);
-  // A right run of the same request does: the person approved the other result for it.
-  const same = approvedAs('approved-same', JSON.parse(readFileSync(join(run, 'checkpoint.json'), 'utf8')).root.inputs ?? {});
-  await expect(caseFromCorrection(file, { id: 'jdg_' + '1'.repeat(32), note: 'Return is 14 days from April.' }, run, { approvedRuns: [same] })).rejects.toMatchObject({ code: 'case_not_made' });
-});
-
-it('a correction that the run already meets ends no change needed, without a fix', async () => {
-  const s = setup(); noStart();
-  fakeClaude(s.root, { met: true }); fakeImprove(s.root, 'change');
-  const { folder, file, run } = await project(s.root);
-  await expect(caseFromCorrection(file, { id: 'jdg_' + 'e'.repeat(32), note: 'It needs to escalate the non-compete clause.' }, run)).rejects.toMatchObject({ code: 'case_met' });
-  const before = readFileSync(file, 'utf8');
+it('a correction that the Method already meets ends no change needed: only its check stays, and no version is saved', async () => {
+  const s = setup(); noStart(); fakeLearner(s.root, 'change');
+  const { folder, file } = await project(s.root);
+  writeFileSync(join(folder, 'write.mjs'), escalating);
   const client = fakeClient();
   await methodMain(['judge', 'run_1', 'wrong', '--note', 'It needs to escalate the non-compete clause.'], () => client);
   await backgroundFix(client, file, [id]);
-  expect(client.outcomes).toEqual([{ id, outcome: 'not_reproduced', detail: 'No change needed: the run already does what the correction asks.' }]);
-  // The fix itself did not run, nothing changed, and no case was kept.
-  expect(existsSync(join(folder, 'passes.log'))).toBe(false);
-  expect(readFileSync(file, 'utf8')).toBe(before);
-  expect(existsSync(join(folder, 'cases', correctionCaseId(id)))).toBe(false);
+  expect(client.outcomes).toEqual([{ id, outcome: 'no_change_needed', detail: 'the reply already escalates the non-compete' }]);
+  expect(existsSync(join(folder, 'cases', correctionCaseId(id), 'case.json'))).toBe(true);
+  expect(client.calls.filter((c: any) => c.verb === 'PUT')).toEqual([]);
+  s.stdout.mockClear();
+  await methodMain(['wait'], () => client);
+  expect(s.printed()).toBe('No change needed: the reply already escalates the non-compete. I kept your note as a check for later changes.\n');
 });
 
 it('a question goes to the person word for word; method answer sends their words and the fix starts again with them', async () => {
-  const s = setup(), start = noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'question');
-  const { folder, file } = await project(s.root);
+  const s = setup(), start = noStart(), learner = fakeLearner(s.root, 'question');
+  const { file } = await project(s.root);
   const client = fakeClient();
   await methodMain(['judge', 'run_1', 'wrong', '--note', "it's not even redlined"], () => client);
   await backgroundFix(client, file, [id]);
@@ -346,19 +288,20 @@ it('a question goes to the person word for word; method answer sends their words
     'I have one question before I change anything: Should every counterparty NDA come back redlined, or only some?',
     `Show this question to the person word for word, and do not answer it yourself. Send their answer with: method answer ${id} "THEIR WORDS"`, ''].join('\n'));
   s.stdout.mockClear(); start.mockClear();
+  client.judgments[0].question = 'Should every counterparty NDA come back redlined, or only some?';
   await methodMain(['answer', id, 'Every', 'counterparty', 'NDA.'], () => client);
   expect(client.calls.find((c: any) => c.path === `/api/cli/judgments/${id}/answer`)).toEqual({ path: `/api/cli/judgments/${id}/answer`, verb: 'POST', body: { answer: 'Every counterparty NDA.' } });
   expect(s.printed()).toBe("Thanks. Working on it with your answer. I'll test a fix on this run.\n");
   expect(start).toHaveBeenCalledWith(file, METHOD_ID, [id], 'https://example.test');
-  // The loop gets the answer with the correction, and fixes it.
+  // The learner reads the answer with the correction, and fixes it.
   await backgroundFix(client, file, [id]);
-  expect(JSON.parse(readFileSync(join(folder, 'received.json'), 'utf8')).find((j: any) => j.id === id)).toMatchObject({ new: true, answer: 'Every counterparty NDA.' });
+  expect(learner.briefs[1]).toContain('Asked "Should every counterparty NDA come back redlined, or only some?", the person answered:\n\nEvery counterparty NDA.');
   expect(storedOutcome(METHOD_ID, id)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed' } });
-});
+}, 60_000);
 
 it('keeps the note of a device run on this computer, sends the verdict only, and still fixes the Method here', async () => {
   const s = setup(); noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'change');
+  const learner = fakeLearner(s.root, 'change');
   const { folder, file } = await project(s.root, { device: true });
   const client = fakeClient();
   await methodMain(['judge', 'run_1', 'wrong', '--note', 'You missed the non-compete.', '--json'], () => client);
@@ -369,19 +312,16 @@ it('keeps the note of a device run on this computer, sends the verdict only, and
   expect(readFileSync(join(folder, '.method', '.gitignore'), 'utf8')).toBe('*\n');
   expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ note: 'You missed the non-compete.', file: 'reply.method' });
   await backgroundFix(client, file, [id]);
-  // The account has no note; the loop takes it from this computer.
-  const received = JSON.parse(readFileSync(join(folder, 'received.json'), 'utf8'));
-  expect(received[0]).toMatchObject({ note: 'You missed the non-compete.', new: true });
-  expect(storedOutcome(METHOD_ID, id)?.log).toMatch(/improve\.log$/);
-});
+  // The account has no note; the learner takes it from this computer. Its tries stay as the log.
+  expect(learner.briefs[0]).toContain('You missed the non-compete.');
+  expect(storedOutcome(METHOD_ID, id)?.log).toBe(join(s.root, 'cache', 'fixes', METHOD_ID, 'learn', id));
+}, 60_000);
 
 it('on the next method run: outcomes not yet shown come first, and corrections from the dashboard start a fix in the background', async () => {
-  const s = setup(), start = noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'change');
+  const s = setup(), start = noStart(); fakeLearner(s.root, 'change');
   const { folder, file } = await project(s.root);
   const pending = (n: number, run: string) => ({ id: `jdg_${String(n).repeat(32)}`, run_id: run, method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: `Correction ${n}.`, corrected: null, source: 'dashboard', created_at: `2026-10-1${n}T10:00:00Z`, pending: true, noted_by: 'Gráinne' });
-  const cloud = { id: 'run_cloud', status: 'succeeded', created_at: '2026-10-14T09:00:00Z', workflow_version_id: 'v_1', inspection: { invocations: {} } };
-  const client = fakeClient({ judgments: [pending(2, 'run_1'), pending(3, 'run_cloud'), pending(4, 'run_1')], runs: { run_cloud: cloud } });
+  const client = fakeClient({ judgments: [pending(2, 'run_1'), pending(3, 'run_cloud'), pending(4, 'run_1')] });
   await methodMain(['run', file], () => client);
   const ids = [2, 3, 4].map(n => pending(n, '').id);
   expect(start).toHaveBeenCalledWith(file, METHOD_ID, ids, 'https://example.test');
@@ -389,29 +329,23 @@ it('on the next method run: outcomes not yet shown come first, and corrections f
   // The run did not wait for the fix.
   expect(JSON.parse(s.printed())).toMatchObject({ status: 'completed' });
   await backgroundFix(client, file, ids);
-  const received = JSON.parse(readFileSync(join(folder, 'received.json'), 'utf8'));
-  expect(received.map((j: any) => j.new)).toEqual([true, true, true]);
-  // A run with no folder here comes as its account record; it gets no case, the others do.
-  expect(received[1]).toMatchObject({ run: { id: 'run_cloud', inspection: { invocations: {} } }, noted_by: 'Gráinne' });
-  expect(received[1].case_id).toBeUndefined();
+  // One at a time, oldest first: the first fixes it, a run with no folder here cannot be tested, and the third finds it fixed.
+  expect(client.outcomes.map((o: any) => [o.id, o.outcome])).toEqual([[ids[0], 'fixed'], [ids[1], 'could_not_test'], [ids[2], 'no_change_needed']]);
   expect(JSON.parse(readFileSync(join(folder, 'cases', correctionCaseId(ids[0]!), 'case.json'), 'utf8')).author).toBe('Gráinne');
-  expect(client.outcomes.map((o: any) => [o.id, o.outcome])).toEqual(ids.map(i => [i, 'fixed']));
-  // The next run prints the three outcomes first, once. The fixed corrections are watched on later runs.
-  expect((await import('../../packages/sdk/src/watch.js')).watchedCorrections(file).map(w => w.judgment)).toEqual([ids[0], ids[2]]);
+  // The next run prints the three outcomes first, once. The fixed correction is watched on later runs.
+  expect((await import('../../packages/sdk/src/watch.js')).watchedCorrections(file).map(w => w.judgment)).toEqual([ids[0]]);
   s.stderr.mockClear(); start.mockClear();
   await methodMain(['run', file], () => client);
   const lines = s.stderr.mock.calls.map(c => String(c[0]));
-  expect(lines.slice(0, 3).every(line => line.startsWith('Fixed: replies now escalate restrictions'))).toBe(true);
+  expect(lines.slice(0, 3).map(line => line.split(':')[0])).toEqual(['Fixed', 'Could not test a fix safely', 'No change needed']);
   expect(start).not.toHaveBeenCalled();
   s.stderr.mockClear();
   await methodMain(['run', file], () => client);
   expect(s.stderr.mock.calls.map(c => String(c[0])).filter(line => line.startsWith('Fixed:'))).toEqual([]);
 }, 60_000);
 
-it('gives the corrections back when the loop stops, and method wait prints the error', async () => {
-  const s = setup(); noStart();
-  fakeClaude(s.root);
-  vi.stubEnv('METHOD_IMPROVE_METHOD', join(s.root, 'missing.method'));
+it('gives the corrections back when the learner stops, and method wait prints its cause in plain words', async () => {
+  const s = setup(); noStart(); fakeLearner(s.root, 'stops');
   const { file } = await project(s.root);
   const client = fakeClient();
   await methodMain(['judge', 'run_1', 'wrong', '--note', 'Wrong.'], () => client);
@@ -419,42 +353,12 @@ it('gives the corrections back when the loop stops, and method wait prints the e
   expect(client.judgments[0].pending).toBe(true);
   s.stdout.mockClear();
   await methodMain(['wait'], () => client);
-  expect(s.printed()).toMatch(/^The fix stopped: METHOD_IMPROVE_METHOD names .*\. I'll try again on the next run\.\n$/);
-});
-
-it('a fix that stops says its cause in plain words: what the failing script said, without step or script names', async () => {
-  const s = setup(); noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'stops');
-  const { file } = await project(s.root);
-  const client = fakeClient();
-  await methodMain(['judge', 'run_1', 'wrong', '--note', 'Wrong.'], () => client);
-  await backgroundFix(client, file, [id]);
-  s.stdout.mockClear();
-  await methodMain(['wait'], () => client);
   expect(s.printed()).toBe('The fix stopped: Claude Code is not installed or not signed in on this computer. Sign in with claude, then run again. I\'ll try again on the next run.\n');
-  // A step that stopped without a script says its own error, not the step's name.
-  expect(stopCause({ status: 'failed', failure: { headline: 'In step "Find the step by trying" (task 1 of 1), Claude Code stopped.', details: 'Claude Code reached its usage limit.' } })).toBe('Claude Code reached its usage limit.');
-  expect(stopCause({ status: 'failed', failure: { headline: 'The run stopped.', details: 'Process exited with code 1' } })).toBe('The run stopped.');
-});
-
-it('makes a failing case from a vague note on the user\'s agent, judged on the result', async () => {
-  const s = setup(), claude = fakeClaude(s.root);
-  const { folder, file, run } = await project(s.root);
-  const made = await caseFromCorrection(file, { id: 'jdg_' + 'b'.repeat(32), note: "it's not even redlined" }, run);
-  expect(made).toEqual({ id: correctionCaseId('jdg_' + 'b'.repeat(32)), made: true });
-  const writer = claude().find(p => p.includes('Write 1 to 3 plain sentences'))!;
-  // The writer reads the person's words and what the person saw, by name.
-  expect(writer).toContain("it's not even redlined");
-  expect(writer).toContain('[result]');
-  expect(writer).toContain('No escalation was identified as needed.');
-  expect(existsSync(join(folder, 'cases', made.id, 'recording.json'))).toBe(true);
-  expect(await caseFromCorrection(file, { id: 'jdg_' + 'b'.repeat(32), note: 'x' }, run)).toEqual({ id: made.id, made: false });
 });
 
 it('corrections that arrive during a fix join it: ten corrections of one Method end in two passes, each with its own outcome', async () => {
-  const s = setup(); noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'change');
-  const { folder, file } = await project(s.root);
+  const s = setup(); noStart(); fakeLearner(s.root, 'change');
+  const { file } = await project(s.root);
   const client = fakeClient({ unique: true });
   const ids: string[] = [];
   const judge = async (n: number) => { await methodMain(['judge', 'run_1', 'wrong', '--note', `Correction ${n}.`, '--json'], () => client); ids.push(JSON.parse(s.stdout.mock.calls.at(-1)![0] as string).judgment.id); };
@@ -464,15 +368,14 @@ it('corrections that arrive during a fix join it: ten corrections of one Method 
   while (!existsSync(join(s.root, 'cache', 'fixes', METHOD_ID, 'lock'))) await new Promise(done => setTimeout(done, 20));
   for (let n = 1; n < 10; n++) await judge(n);
   await Promise.all([first, ...ids.slice(1).map(i => backgroundFix(client, file, [i], { pollMs: 50 }))]);
-  expect(readFileSync(join(folder, 'passes.log'), 'utf8')).toBe('1\n9\n');
-  for (const i of ids) expect(storedOutcome(METHOD_ID, i)).toMatchObject({ status: 'done', outcome: { id: i, outcome: 'fixed' } });
+  expect(s.stderr.mock.calls.map(c => String(c[0])).filter(line => line.startsWith('Testing fixes'))).toEqual([`Testing fixes for 1 correction of ${file}.\n`, `Testing fixes for 9 corrections of ${file}.\n`]);
+  for (const i of ids) expect(storedOutcome(METHOD_ID, i)).toMatchObject({ status: 'done', outcome: { id: i, outcome: i === ids[0] ? 'fixed' : 'no_change_needed' } });
   expect(client.judgments.every((j: any) => !j.pending)).toBe(true);
   expect(existsSync(join(s.root, 'cache', 'fixes', METHOD_ID, 'lock'))).toBe(false);
 }, 120_000);
 
 it('a fix whose process stopped does not hold the Method: its lock is taken over', async () => {
-  const s = setup(); noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'none');
+  const s = setup(); noStart(); fakeLearner(s.root, 'none');
   const { file } = await project(s.root);
   mkdirSync(join(s.root, 'cache', 'fixes', METHOD_ID), { recursive: true });
   writeFileSync(join(s.root, 'cache', 'fixes', METHOD_ID, 'lock'), JSON.stringify({ pid: 2 ** 22 + 12345 }));
@@ -482,11 +385,10 @@ it('a fix whose process stopped does not hold the Method: its lock is taken over
   expect(storedOutcome(METHOD_ID, id)).toMatchObject({ status: 'done', outcome: { outcome: 'no_fix_found' } });
 }, 60_000);
 
-// ---------- Several people: a step changed since the run, a fix that breaks another person's case, held pairs ----------
+// ---------- Several people: a step changed since the run, a fix that breaks another person's check, held pairs ----------
 
 it('does not fix a correction of a part that someone changed after the run, and says who', async () => {
-  const s = setup();
-  fakeClaude(s.root); fakeImprove(s.root, 'change');
+  const s = setup(); const learner = fakeLearner(s.root, 'change');
   const { file } = await project(s.root);
   const now = readDocument(file) as any, before = readFileSync(file, 'utf8');
   const old = { ...methodContent(now), steps: { write: { ...now.steps.write, purpose: 'Writes a short reply.' } } };
@@ -495,27 +397,26 @@ it('does not fix a correction of a part that someone changed after the run, and 
     runs: { run_old: { id: 'run_old', status: 'succeeded', workflow_version_id: 'v_old', inspection: { invocations: {} } } },
     versions: { [`/api/cli/methods/${METHOD_ID}?version=v_old`]: { workflow: old }, [`/api/cli/methods/${METHOD_ID}`]: { workflow: methodContent(now), saved_by: 'Gráinne' } } });
   const fix = await fixCorrections(client, file);
-  expect(fix).toMatchObject({ kind: 'none', outcomes: [{ id: 'jdg_' + '5'.repeat(32), outcome: 'already_changed', by: 'Gráinne' }] });
+  expect(fix).toMatchObject({ applied: 0, outcomes: [{ id: 'jdg_' + '5'.repeat(32), outcome: 'already_changed', by: 'Gráinne' }] });
   expect(client.outcomes).toEqual([{ id: 'jdg_' + '5'.repeat(32), outcome: 'already_changed', detail: 'Gráinne changed it after this run.' }]);
   expect(readFileSync(file, 'utf8')).toBe(before);
-  expect(existsSync(join(s.root, 'project', 'received.json'))).toBe(false);
+  expect(learner.briefs).toEqual([]);
 });
 
-it('holds a fix that passes only by breaking another person\'s case, and applies nothing', async () => {
-  const s = setup();
-  fakeClaude(s.root); fakeImprove(s.root, 'breaks');
-  const { folder, file } = await project(s.root);
-  mkdirSync(join(folder, 'cases', 'old-rule'), { recursive: true });
-  writeFileSync(join(folder, 'cases', 'old-rule', 'case.json'), JSON.stringify({ format: 'method-case/1', id: 'old-rule', status: 'active', method_file: 'other.method', note: 'The reply must stay under 100 words.', author: 'Gráinne' }));
+it('holds a fix that passes only by breaking another person\'s check, and applies nothing', async () => {
+  const s = setup(); fakeLearner(s.root, 'change');
+  const { file, run } = await project(s.root);
+  // Gráinne's earlier check: the reply stays as it is.
+  await createCase({ methodFile: file, passingRun: run, id: 'old-rule', note: 'The reply must say that no escalation is needed.', author: 'Gráinne', expect: [{ kind: 'equals', ref: 'outputs.reply', value: 'Thanks. No escalation was identified as needed.' }] } as any);
   const before = readFileSync(file, 'utf8');
   const held = 'jdg_' + '7'.repeat(32);
   const client = fakeClient({ judgments: [{ id: held, run_id: 'run_1', method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: 'Escalate the non-compete.', corrected: null, source: 'dashboard', created_at: '2026-10-12T10:00:00Z', pending: true, noted_by: 'Ryan' }] });
   const fix = await fixCorrections(client, file);
-  expect(fix?.outcomes).toEqual([{ id: held, outcome: 'held', by: 'Gráinne', detail: 'The reply must stay under 100 words.' }]);
-  expect(client.outcomes).toEqual([{ id: held, outcome: 'held', detail: 'Gráinne: The reply must stay under 100 words.' }]);
+  expect(fix?.outcomes).toEqual([{ id: held, outcome: 'held', by: 'Gráinne', detail: 'The reply must say that no escalation is needed.' }]);
+  expect(client.outcomes).toEqual([{ id: held, outcome: 'held', detail: 'Gráinne: The reply must say that no escalation is needed.' }]);
   expect(readFileSync(file, 'utf8')).toBe(before);
   expect(client.calls.filter((c: any) => c.verb === 'PUT')).toEqual([]);
-});
+}, 60_000);
 
 it('shows a held pair with both people and both choices, and method judge RUN keep ID keeps one', async () => {
   const s = setup();
@@ -529,108 +430,3 @@ it('shows a held pair with both people and both choices, and method judge RUN ke
   expect(s.printed()).toBe("Kept Gráinne's view: the result is right.\n");
   expect(client.judgments.find((j: any) => j.id === id).outcome).toBe('set_aside');
 });
-
-// ---------- What improve.method hands back: again, background cases, the pruning sweep ----------
-
-it('a correction given back with again is fixed in the next pass, on the changed file, and is reported once', async () => {
-  const s = setup(); noStart();
-  fakeClaude(s.root); fakeImprove(s.root, 'again');
-  const { folder, file } = await project(s.root);
-  const pending = (n: string) => ({ id: 'jdg_' + n.repeat(32), run_id: 'run_1', method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: `Correction ${n}.`, corrected: null, source: 'dashboard', created_at: '2026-10-12T10:00:00Z', pending: true });
-  const client = fakeClient({ judgments: [pending('7'), pending('8')] });
-  const { fixWaiting } = await import('../../packages/sdk/src/improve.js');
-  const fixes = await fixWaiting(client, file);
-  expect(readFileSync(join(folder, 'passes.log'), 'utf8')).toBe('2\n1\n');
-  expect(fixes!.map(f => f.fixed.map(x => x.id))).toEqual([['jdg_' + '7'.repeat(32)], ['jdg_' + '8'.repeat(32)]]);
-  for (const n of ['7', '8']) expect(storedOutcome(METHOD_ID, 'jdg_' + n.repeat(32))).toMatchObject({ status: 'done', outcome: { outcome: 'fixed' } });
-  // The account hears each correction once, with its real outcome; the given-back one was never reported as retry.
-  expect(client.outcomes.map((o: any) => [o.id.slice(0, 5), o.outcome])).toEqual([['jdg_7', 'fixed'], ['jdg_8', 'fixed']]);
-}, 60_000);
-
-it('the later check: a failing case of a retired rule brings the rule back; another failure undoes the fix and opens its correction again', async () => {
-  const s = setup();
-  fakeClaude(s.root);
-  const { folder, file, run } = await project(s.root);
-  const { checkBackground } = await import('../../packages/sdk/src/improve.js');
-  const { recordChange, snapshot } = await import('../../packages/sdk/src/undo.js');
-  const ruleCase = (await caseFromCorrection(file, { id: 'jdg_' + 'c'.repeat(32), note: 'Escalate exclusivity.' }, run)).id;
-  const otherCase = (await caseFromCorrection(file, { id: 'jdg_' + 'd'.repeat(32), note: 'Escalate non-competes.' }, run)).id;
-  const rule = { id: 'lr_0123456789ab', when: null, then: 'Escalate exclusivity clauses.', by: 'Gráinne', from: { judgment: 'jdg_' + 'c'.repeat(32), case: ruleCase },
-    status: 'retired', created: '2026-10-01T00:00:00Z', retired_at: '2026-10-10T00:00:00Z', retired_reason: 'not needed: every case passes without it' };
-  writeFileSync(join(folder, 'learned.json'), JSON.stringify({ format: 'method-learned/1', steps: { write: [rule] } }, null, 2));
-  // A fix that changed the write step, with its undo record, as fixCorrections leaves it.
-  const fixedId = 'jdg_' + '9'.repeat(32);
-  const client = fakeClient({ judgments: [{ id: fixedId, run_id: 'run_1', method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: 'Escalate restrictions.', corrected: null, source: 'agent', created_at: '2026-10-12T10:00:00Z', pending: false, outcome: 'fixed' }] });
-  const fixedText = () => methodContent(readDocument(file)).steps.write.purpose;
-  const fixAgain = (purpose: string) => {
-    const before = snapshot(file, ['learned.json']);
-    const doc = JSON.parse(readFileSync(file, 'utf8')); doc.steps.write.purpose = purpose; writeFileSync(file, JSON.stringify(doc, null, 2) + '\n');
-    return recordChange(file, 'fix', 'Escalates restrictions.', 'the fix for "Escalate restrictions."', before).id;
-  };
-  const fix = (undoId: string) => ({ background_cases: [ruleCase, otherCase, 'gone-case'], undo_id: undoId, fixed: [{ id: fixedId, note: 'Escalate restrictions.' }], cause: 'Escalates restrictions.' });
-  // The changed file fails `failing`; the copy of the version before the change fails `before`.
-  const verdicts = (failing: string[], before: string[] = []) => async (path: string, _flags: object, options: { ids: string[] }) => {
-    if (path !== file) return { cases: options.ids.map(id => ({ id, verdict: before.includes(id) ? 'fail' : 'pass' })) };
-    expect(options.ids).toEqual([ruleCase, otherCase]);
-    return { cases: options.ids.map(id => ({ id, verdict: failing.includes(id) ? 'fail' : 'pass' })) };
-  };
-  // Only the retired rule's case fails: the rule is active again, and the fix stays.
-  const kept = await checkBackground(client, file, fix(fixAgain('Writes the reply and escalates restrictions.')), { runCases: verdicts([ruleCase]) });
-  expect(kept).toMatchObject({ failed: [ruleCase], restored: ['lr_0123456789ab'], undone: false, reopened: [] });
-  expect(JSON.parse(readFileSync(join(folder, 'learned.json'), 'utf8')).steps.write[0]).toMatchObject({ status: 'active', retired_at: null, retired_reason: null });
-  expect(fixedText()).toBe('Writes the reply and escalates restrictions.');
-  // A case that also failed before the fix (a correction not fixed yet) does not undo it.
-  const stays = await checkBackground(client, file, fix(fixAgain('Writes the reply and escalates restrictions.')), { runCases: verdicts([otherCase], [otherCase]) });
-  expect(stays).toMatchObject({ failed: [otherCase], undone: false, reopened: [] });
-  expect(fixedText()).toBe('Writes the reply and escalates restrictions.');
-  // Another case that passed before fails now: the fix is undone and its correction is open again.
-  const undone = await checkBackground(client, file, fix(fixAgain('Writes the reply, escalates restrictions, and says why.')), { runCases: verdicts([otherCase]) });
-  expect(undone).toMatchObject({ failed: [otherCase], restored: [], undone: true, reopened: [fixedId] });
-  expect(fixedText()).toBe('Writes the reply and escalates restrictions.');
-  expect(client.judgments[0]).toMatchObject({ pending: true, outcome: null });
-  const { unshownLines } = await import('../../packages/sdk/src/fix-outcomes.js');
-  expect(unshownLines(METHOD_ID)).toEqual([
-    'I put back the rule "Escalate exclusivity clauses": without it, a problem you corrected came back.',
-    'I undid the fix for your correction ("Escalate restrictions"): it changed a result that was right before. I\'ll try a new fix on the next run.']);
-  // The next fix of it is undone too: it ends with no fix found, at once, in the account and on this computer.
-  const { storedOutcome } = await import('../../packages/sdk/src/fix-outcomes.js');
-  Object.assign(client.judgments[0], { pending: false, outcome: 'fixed' });
-  const twice = await checkBackground(client, file, fix(fixAgain('Writes the reply, escalates restrictions, and says why.')), { runCases: verdicts([otherCase]), reopen: [] });
-  expect(twice).toMatchObject({ undone: true, reopened: [] });
-  expect(storedOutcome(METHOD_ID, fixedId)).toMatchObject({ status: 'done', outcome: { outcome: 'no_fix_found' } });
-  expect(client.outcomes).toContainEqual(expect.objectContaining({ id: fixedId, outcome: 'no_fix_found' }));
-}, 60_000);
-
-it('the pruning sweep: a change applies with undo and says the summary; a sweep with no change still says what nothing checks', async () => {
-  const s = setup();
-  const { file } = await project(s.root);
-  const folder = join(s.root, 'improve'); mkdirSync(folder);
-  const text = (description: string) => ({ type: 'text', description, default: '' });
-  writeFileSync(join(folder, 'improve.method'), JSON.stringify({ format: 'method/3.4', name: 'Improve', goal: 'Return a sweep.',
-    inputs: { grant_id: text('g'), judgment_id: text('j'), method_file: text('m'), judgments_file: text('f'), run_folders: { type: 'list', items: 'text', description: 'r', default: [] }, mode: text('m') },
-    secrets: { IMPROVE_API_KEY: 'Key.', IMPROVE_SERVER: 'Server.' },
-    steps: { sweep: { name: 'Sweep', purpose: 'Returns the sweep.', in: { method_file: 'inputs.method_file', mode: 'inputs.mode' }, do: { kind: 'run', runtime: 'node', entrypoint: 'sweep.mjs' },
-      out: { proposal: { type: 'text', description: 'p' }, kind: { type: 'text', description: 'k' }, proposal_id: { type: 'text', description: 'i' }, outcomes: { type: 'text', description: 'o' },
-        background_cases: { type: 'list', items: 'text', description: 'b' }, summary: { type: 'text', description: 's' } } } },
-    result: { proposal: 'proposal', kind: 'kind', proposal_id: 'proposal_id', outcomes: 'outcomes', background_cases: 'background_cases', summary: 'summary' } }));
-  writeFileSync(join(folder, 'sweep.mjs'), `import{readFileSync,existsSync}from'node:fs';import{dirname,join}from'node:path';
-const input=JSON.parse(readFileSync(0,'utf8'));if(input.mode!=='prune')throw Error('not a sweep');
-const {id,...workflow}=JSON.parse(readFileSync(input.method_file,'utf8'));const change=!existsSync(join(dirname(input.method_file),'swept'));
-workflow.steps.write.purpose='Writes.';
-const evidence={kind:change?'change':'none',steps:['write'],candidate:null,cases:[],budget:null};
-const proposal=change?{cause:'Removed 2 rules that no longer changed any result.',workflow,evidence}:{cause:'Nothing to prune.',evidence};
-const summary=change?'Removed 2 rules that no longer changed any result.':'1 part of the instructions is not checked by any saved result, so I left it.';
-console.log(JSON.stringify({proposal:JSON.stringify(proposal),kind:evidence.kind,proposal_id:'',outcomes:'[]',background_cases:[],summary}));`);
-  vi.stubEnv('METHOD_IMPROVE_METHOD', join(folder, 'improve.method'));
-  const client = fakeClient();
-  const { pruneMethod } = await import('../../packages/sdk/src/improve.js');
-  const { unshownLines } = await import('../../packages/sdk/src/fix-outcomes.js');
-  expect(await pruneMethod(client, file)).toEqual({ changed: true });
-  expect(methodContent(readDocument(file)).steps.write.purpose).toBe('Writes.');
-  expect(unshownLines(METHOD_ID)).toEqual(['Removed 2 rules that no longer changed any result. Undo: method undo.']);
-  writeFileSync(join(dirname(file), 'swept'), '');
-  expect(await pruneMethod(client, file)).toEqual({ changed: false });
-  expect(unshownLines(METHOD_ID)).toEqual(['1 part of the instructions is not checked by any saved result, so I left it.']);
-  await methodMain(['undo', file], () => client);
-  expect(methodContent(readDocument(file)).steps.write.purpose).toBe('Writes the reply.');
-}, 60_000);

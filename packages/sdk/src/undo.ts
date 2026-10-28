@@ -12,12 +12,12 @@ import { lastChangedFile, recordLastChange } from './fix-outcomes.js';
 import { undoneLine } from './fix-lines.js';
 import { methodIdPattern } from './versions.js';
 
-// The changes that Method made to a Method file on this computer (a fix, a pruning change, a removed learned rule), so
+// The changes that Method made to a Method file on this computer (a fix, or a removed learned rule), so
 // method undo can restore the file and its changed files as they were before the last one. The records are private
 // files in .method/undo/ next to the Method file.
 
 export type UndoRecord = {
-  id: string; file: string; kind: 'fix' | 'prune' | 'learned'; created_at: string; cause: string;
+  id: string; file: string; kind: 'fix' | 'learned'; created_at: string; cause: string;
   /** What the person reads after undo: what is no longer in effect. */
   what: string;
   before: { text: string; files: Record<string, string | null> };
@@ -78,7 +78,7 @@ export function undoLast(file: string, id?: string) {
 
 /**
  * `method undo [FILE] [--json]`: restore the Method file, and the files the change wrote, as they were before the last
- * fix, pruning change, or removed learned rule. The restored file is saved as a new version.
+ * fix or removed learned rule. The restored file is saved as a new version.
  */
 export async function undoCommand(args: string[], clientFactory: (server: string) => MethodClient) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { json: { type: 'boolean' }, server: { type: 'string' } } });

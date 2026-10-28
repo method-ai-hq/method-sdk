@@ -31,8 +31,6 @@ npm run pack
 
 Tests use local scripts and mocked providers. They do not need a Method account or paid model calls. Use `PYTHON=python3.11 npm test` when needed.
 
-To try a change to improve.method before it is published, set `METHOD_IMPROVE_METHOD` to the local `improve.method` file: the improvement loop of `method judge RUN_ID wrong --note TEXT` (and of the waiting corrections that `method run FILE` fixes first) then runs that file from its own folder instead of the published one.
-
 ## Ownership and release
 
 `packages/sdk` owns the JavaScript API and CLI. `packages/sdk-python` owns the Python binding. Shared public modules live under `packages/workflow-language`, `packages/contracts`, and `packages/method-document`; the SDK publishes explicit package exports for them. The private application consumes released packages and does not keep another SDK source copy.

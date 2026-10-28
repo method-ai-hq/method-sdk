@@ -54,6 +54,17 @@ export const firstMethodRules = `# Build a Method
 When a run fails, read failure.headline and failure.next, change what they name, and run again.
 `;
 
+/** The principles of a Method that just works: the guide starts with them, and Method's learner follows them. */
+export const justWorksRules = `# A Method that just works
+
+- **Exact things in code or data.** Put exact rules, values, dates, thresholds and lists in a \`run\` step and a data file, not in a prompt: code does them the same way every time.
+- **A model step only for judgement**: reading, writing, and deciding what a text means.
+- **A check on each output that matters**, so a wrong output is caught and tried again.
+- **One task per prompt.** Split a step that does several things.
+- **Keep the user's words word for word.** Their rules and instructions stay as they wrote them; add your own text beside them, and ask before you change theirs.
+- **Each correction becomes a check** (a case) that fails on the wrong run and passes on a right one, and every earlier check keeps passing.
+`;
+
 /** How to write the prompt inside a call, agent, or classify step. */
 export const promptRules = `# Write each prompt
 

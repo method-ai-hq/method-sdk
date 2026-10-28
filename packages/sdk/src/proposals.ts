@@ -64,12 +64,14 @@ export async function localRuns(file: string) {
 }
 
 const print = (value: unknown) => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
-type Change = { id: string; source: 'account' | 'local'; cause: string; date: string; version_id: string | null; steps: string[] };
+/** A change: what it did (cause), and for a fix on this computer the correction it came from (judgment, note) and its diff. */
+type Change = { id: string; source: 'account' | 'local'; cause: string; date: string; version_id: string | null; steps: string[]; judgment?: string; note?: string | null; diff?: string };
 const changeLine = (change: Change) => `${change.date.slice(0, 10)}  ${change.version_id ?? 'not saved as a version'}  ${change.cause}`;
 
 /** `method changes FILE`: the changes that Method applied in the account and on this computer, newest first. */
 async function changesCommand(file: string, target: string, methodId: string | null, client: MethodClient, json: boolean) {
-  const local: Change[] = localProposals(file).filter(p => p.status === 'applied').map((p: any) => ({ id: p.id, source: 'local', cause: p.cause, date: String(p.applied_at ?? p.created_at), version_id: p.applied_version_id ?? null, steps: p.evidence?.steps ?? [] }));
+  const local: Change[] = localProposals(file).filter(p => p.status === 'applied').map((p: any) => ({ id: p.id, source: 'local', cause: p.cause, date: String(p.applied_at ?? p.created_at), version_id: p.applied_version_id ?? null, steps: p.evidence?.steps ?? [],
+    ...(typeof p.evidence?.judgment === 'string' ? { judgment: p.evidence.judgment, note: p.evidence.note ?? null } : {}), ...(typeof p.evidence?.diff === 'string' ? { diff: p.evidence.diff } : {}) }));
   let account: Change[] = [];
   if (methodId) {
     const { proposals } = await client.request<{ proposals: any[] }>(`/api/methods/${encodeURIComponent(methodId)}/proposals?status=accepted`);

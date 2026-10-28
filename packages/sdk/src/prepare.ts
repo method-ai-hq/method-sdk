@@ -47,7 +47,7 @@ export function pruneCachedRuns(root = join(methodCache(), 'runs'), now = Date.n
 }
 /**
  * A folder with a `method` command that runs this CLI. The SDK puts it first on the PATH that scripts get, so a script
- * that runs `method` (such as improve.method's `method test`) uses the CLI that runs the Method, not an older one.
+ * that runs `method` (such as `method test`) uses the CLI that runs the Method, not an older one.
  */
 export function cliBin() {
   const source = import.meta.url.endsWith('.ts');

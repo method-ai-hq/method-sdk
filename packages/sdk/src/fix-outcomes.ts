@@ -14,8 +14,8 @@ import { type CorrectionOutcome, answerNext, errorLine, heldBackHeading, outcome
 export type StoredOutcome = {
   judgment: string; method_id: string; file: string; status: 'working' | 'done' | 'stopped';
   started_at: string; pid?: number | undefined; finished_at?: string; outcome?: CorrectionOutcome; error?: string; log?: string; shown: boolean;
-  /** A record that is not about one correction: a pruning change, or a fix that stopped holding. */
-  kind?: 'prune' | 'came_back'; line?: string;
+  /** A record that is not about one correction: a fix that stopped holding. */
+  kind?: 'came_back'; line?: string;
 };
 
 export const fixFolder = (methodId: string) => join(methodCache(), 'fixes', methodId);
@@ -44,8 +44,8 @@ export function saveError(methodId: string, file: string, id: string, error: str
   const before = read(recordPath(methodId, id));
   write({ judgment: id, method_id: methodId, file: resolve(file), status: 'stopped', started_at: before?.started_at ?? new Date().toISOString(), finished_at: new Date().toISOString(), error, ...(log ? { log } : {}), shown: false });
 }
-/** A line that is not about one correction (a pruning change; a fix that came back). */
-export function saveNotice(methodId: string, file: string, kind: 'prune' | 'came_back', line: string) {
+/** A line that is not about one correction: a fix that came back. */
+export function saveNotice(methodId: string, file: string, kind: 'came_back', line: string) {
   const id = `${kind}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   write({ judgment: id, method_id: methodId, file: resolve(file), status: 'done', kind, line, started_at: new Date().toISOString(), finished_at: new Date().toISOString(), shown: false });
 }
@@ -100,13 +100,13 @@ export function unshownLines(methodId: string) {
 
 /** Starts the fix of these corrections in its own process; tests replace it. */
 export const fixStarter = {
-  async start(file: string, methodId: string, ids: string[], server: string, options: { prune?: boolean } = {}) {
+  async start(file: string, methodId: string, ids: string[], server: string) {
     const folder = fixFolder(methodId);
     mkdirSync(folder, { recursive: true, mode: 0o700 });
     const out = openSync(join(folder, 'fix.log'), 'a', 0o600);
     const suffix = import.meta.url.endsWith('.ts') ? '.ts' : '.js';
     const entry = fileURLToPath(new URL(`./method${suffix}`, import.meta.url));
-    const child = spawn(process.execPath, [...process.execArgv, entry, '__fix', resolve(file), '--server', server, ...ids.flatMap(id => ['--judgment', id]), ...(options.prune ? ['--prune'] : [])],
+    const child = spawn(process.execPath, [...process.execArgv, entry, '__fix', resolve(file), '--server', server, ...ids.flatMap(id => ['--judgment', id])],
       { detached: true, stdio: ['ignore', out, out], cwd: process.cwd(), env: { ...process.env, METHOD_RUN_WORKER: '' } });
     closeSync(out);
     await new Promise<void>((yes, no) => { child.once('spawn', yes); child.once('error', no); });
@@ -157,8 +157,4 @@ const lastChangeFile = () => join(methodCache(), 'fixes', 'last-change.json');
 export function recordLastChange(file: string) { mkdirSync(join(methodCache(), 'fixes'), { recursive: true, mode: 0o700 }); writePrivateJson(lastChangeFile(), { file: resolve(file) }); }
 export function lastChangedFile(): string | undefined { try { const file = JSON.parse(readFileSync(lastChangeFile(), 'utf8')).file; return existsSync(file) ? file : undefined; } catch { return undefined; } }
 
-/** Fix state of a Method: fixes applied since the last pruning pass, and the agent that ran the last fix. */
-export type FixState = { fixes_since_prune: number; agent: string | null };
-export function readFixState(methodId: string): FixState { try { return { fixes_since_prune: 0, agent: null, ...JSON.parse(readFileSync(join(fixFolder(methodId), 'state.json'), 'utf8')) }; } catch { return { fixes_since_prune: 0, agent: null }; } }
-export function writeFixState(methodId: string, state: FixState) { mkdirSync(fixFolder(methodId), { recursive: true, mode: 0o700 }); writeFileSync(join(fixFolder(methodId), 'state.json'), JSON.stringify(state), { mode: 0o600 }); }
 export function forgetOutcome(methodId: string, id: string) { rmSync(recordPath(methodId, id), { force: true }); }

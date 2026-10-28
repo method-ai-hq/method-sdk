@@ -24,7 +24,7 @@ export function watchedCorrections(file: string, now = Date.now()): Watched[] {
   for (const record of storedOutcomes(id)) {
     const o = record.outcome;
     if (record.status !== 'done' || !o || Date.parse(record.finished_at ?? record.started_at) < since) continue;
-    if (o.outcome === 'fixed' || (o.outcome === 'could_not_test' && o.rule_added)) found.set(o.id, { judgment: o.id, caseId: correctionCaseId(o.id) });
+    if (o.outcome === 'fixed') found.set(o.id, { judgment: o.id, caseId: correctionCaseId(o.id) });
   }
   try {
     for (const { rule } of activeRules(readLearned(file))) {

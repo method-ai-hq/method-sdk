@@ -71,10 +71,8 @@ export function answers(human: any) {
 /**
  * Run a local Method file. The run starts at once: saving and run records go through the outbox and never stop or fail
  * the run. baseConfig is a configuration the SDK made (a saved version's package); otherwise localSetup builds it.
- * runSecrets are values that the SDK gives this run only (such as the signed-in key for improve.method); they come
- * before the shell and the secret store, and are never saved.
  */
-export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, runSecrets: Record<string, string> = {}, savedBy?: string | null) {
+export async function runCurrentFile(file: string, flags: ReturnType<typeof parse>["values"], syncFactory?: () => MethodSync, onEvent?: (event:any)=>Promise<void>, client = new MethodClient(flags.server), baseConfig?: any, savedBy?: string | null) {
   if (flags.resume && !flags['run-dir']) throw Error('Resume needs --run-dir.');
   flags = {...flags, 'run-dir': flags['run-dir'] ?? join(process.cwd(), '.method-runs', randomUUID())};
   mkdirSync(authoringPath(flags['run-dir']!), { recursive: true, mode: 0o700 });
@@ -98,7 +96,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
     try { inputs = json(flags.inputs) ?? {}; } catch { /* the run's setup failure */ }
     await sync?.start(method, inputs, {}, false);
     // Every key that this computer lacks, in one list, before any setup or step.
-    const missingKeys = Object.keys(method.secrets ?? {}).filter(key => !runSecrets[key] && !resolveSecrets([key])[key]);
+    const missingKeys = Object.keys(method.secrets ?? {}).filter(key => !resolveSecrets([key])[key]);
     if (missingKeys.length) throw Object.assign(Error(`This Method needs ${missingKeys.length === 1 ? 'a key that is' : 'keys that are'} not on this computer: ${missingKeys.join(', ')}. Run ${missingKeys.map(key => `\`method secret set ${key}\``).join(', then ')}`), { code: 'missing_secret', owner: 'setup', missing: missingKeys });
     const setup = await localSetup(file, flags, baseConfig);
     let config = setup.config;
@@ -143,7 +141,7 @@ export async function runCurrentFile(file: string, flags: ReturnType<typeof pars
       // A resumed run (after an ask step) also reuses iterations of earlier runs whose key matches.
       cacheFrom: recentRuns(authoringPath(flags['run-dir']!)),
       fresh: flags.fresh ? true : flags.rerun?.length ? flags.rerun.flatMap(step => step.split(',')).map(step => step.trim()).filter(Boolean) : undefined,
-      secrets: { ...resolveSecrets(Object.keys(method.secrets ?? {})), ...Object.fromEntries(Object.entries(runSecrets).filter(([key]) => Object.hasOwn(method.secrets ?? {}, key))) }, ...(hostedModels ? { hostedModels } : {}),
+      secrets: resolveSecrets(Object.keys(method.secrets ?? {})), ...(hostedModels ? { hostedModels } : {}),
       human: answers(readAnswers(authoringPath(flags['run-dir']!))), signal: controller.signal,
       ...(browser ? {connections:browser.connections} : {}),
       sourceRoot, ...(classification ? {classification} : {}),

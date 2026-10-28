@@ -1,6 +1,6 @@
 /**
  * Comparisons: a NAME.compare file asks one question about two or more agents. `method run NAME.compare` checks the
- * file, compiles it into a generated Method (as requestMethod does for a model request) and runs that Method. Its
+ * file, compiles it into a generated Method and runs that Method. Its
  * steps are the stages: trial (with the noise check), approval (an ask step), treatment, full run, grades, decision.
  * Each cell (arm × learner × checkpoint × input) is one iteration of an each step, so the runtime's step cache reuses
  * every finished cell on a rerun, and a changed measure regrades without running any agent again. Each stage reports
@@ -26,6 +26,8 @@ import { configRoot } from './computer-settings.js';
 import { linkCells, readAccount, readAnswers, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PageAnswers, type PlannedCell } from './compare-account.js';
 import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
+import { FIX_LIMIT_MS } from './learner.js';
+import { textDiff } from './text-diff.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
@@ -136,8 +138,8 @@ export function removeFolder(path: string) {
   writable(path);
   rmSync(path, { recursive: true, force: true });
 }
-/** The time that a fix or a builder has for one correction: the run limit of Method's fixer (improve.method), 2 hours. */
-export const FIX_LIMIT_MS = 7_200_000;
+/** The time that Method's learner or a plain builder has for one correction: the learner's own limit, 2 hours. */
+export { FIX_LIMIT_MS };
 /** How many learners of each arm the trial runs at the start, for the noise check. */
 export const NOISE_LEARNERS = 2;
 
@@ -505,7 +507,7 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   const agentName = (agent: string) => agent === 'claude' ? 'Claude Code' : 'Codex';
   if (corrections) {
     for (const [armName, arm] of plain) add('arms', `${capital(settings.labels[armName] ?? armName)}: a ${agentName(arm.agent)} session reads the correction and the wrong output, then edits the agent's instructions file. The edited file is what the agent keeps.`);
-    for (const [armName] of Object.entries(doc.arms).filter(([, arm]) => armIsMethod(arm))) add('arms', `${capital(settings.labels[armName] ?? armName)}: Method marks the wrong run with the correction, changes the agent, and tests the change against earlier corrections.`);
+    for (const [armName] of Object.entries(doc.arms).filter(([, arm]) => armIsMethod(arm))) add('arms', `${capital(settings.labels[armName] ?? armName)}: Method marks the wrong run with the correction. A session of the same agent changes the agent's Method and writes a check of the correction. Method keeps the change only when the check fails before it and passes after it, every earlier check still passes, and the person's own words are unchanged.`);
   }
   if (doc.tested === 'model') add('same_for_both', 'The model is the tested difference, so each agent runs on its own model.');
   else {
@@ -522,7 +524,7 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
     add('trial', `Before approval, the trial gives one copy of each agent its first ${TRIAL_EVENTS} corrections, to show what it received and what changed it, and how long one takes. The full run gives every copy the rest.`);
     add('treatment', `An agent has up to ${FIX_LIMIT_MS / 3_600_000} hours to learn from each correction.`);
     add('treatment', 'A correction counts as received when Method\'s fix ended: it applied a tested change, found that the run already does what the correction asks, or found no fix. For a plain agent it counts as received when the session that edits the instructions finished, edited or not. When Method\'s fix could not test a change or stopped (a usage limit too), the correction is not received, and the comparison stops there.');
-    add('treatment', 'Each agent\'s page counts both: the corrections it received, and those that changed the agent (a tested change applied, or the instructions edited).');
+    add('treatment', 'Each agent\'s page counts both: the corrections it received, and those that changed the agent (a tested change applied, or the instructions edited), and shows what each correction changed.');
   }
   if (feedback) {
     add('treatment', 'A feedback writer reads each agent\'s own output of its training run and the hidden expected answer, and writes the correction that this agent gets. So each agent\'s corrections are about its own work, and their words differ by design. Each agent\'s page lists the words it received.');
@@ -1039,13 +1041,15 @@ const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => 
  * was_right: the feedback writer found nothing wrong, and the arm was told its output was right (received).
  * not_run: the training run failed. not_given: an earlier event of the learner is missing. given: a new input.
  */
-export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'rule_added' | 'not_run' | 'not_given' | 'given';
+export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'not_run' | 'not_given' | 'given';
+/** What a correction changed: Method's summary of its fix, and the diff of the Method's files or of the plain agent's instructions. */
+export type ChangeRecord = { summary?: string; diff: string };
 /** Whether an outcome changed the agent: Method's fix applied a tested change, or the builder edited the instructions. */
-export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited' || outcome === 'rule_added';
+export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited';
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
-  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', rule_added: 'learned rule added, not tested', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
+  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
-type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string;
+type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; change?: ChangeRecord;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
 type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot> };
@@ -1058,7 +1062,7 @@ type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[]
  *
  * How a correction reaches a Method arm. The arm runs the event's input (a training run, saved to the account), then
  * method judge RUN wrong --note TEXT, then method wait until the fix has a final outcome, for at most FIX_LIMIT_MS.
- * Received: fixed, no change needed (the fix did not reproduce the mistake), or no fix found. Not received: could not
+ * Received: fixed, no change needed (the run already does what the correction asks), or no fix found. Not received: could not
  * test, a question, held, or a fix that stopped or ran out of time. A rerun of the comparison waits for the same
  * judgment while its fix is still working or waits for the person's answer (method answer), and never judges the run
  * a second time then. A fix that already ended stopped or could not test is over: the rerun gives the correction again,
@@ -1075,8 +1079,8 @@ type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[]
  * method judge RUN right and the builder reads that the work is right; the event is received as was_right. Each
  * delivery keeps the words the arm received (text).
  */
-type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null };
-type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; instructions?: string; tokens?: number | null };
+type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null; change?: ChangeRecord };
+type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; instructions?: string; tokens?: number | null; change?: ChangeRecord };
 export const delivery = {
   async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered, settings: { web: boolean; folders?: Record<string, string> } = { web: false }): Promise<Delivered> {
     // The training run and its fix run in a clean room, as the arm's cells do: they see none of the user's
@@ -1168,12 +1172,10 @@ const stoppedWhy: Record<string, string> = {
   retry: 'Method gave this correction back to fix it again on the changed agent, and no later fix took it',
 };
 /** A fix's outcome in the comparison's words, and whether the correction counts as received. */
-export function fixOutcome(outcome: string | undefined, ruleAdded = false): { received: boolean; outcome: CorrectionOutcome } {
+export function fixOutcome(outcome: string | undefined): { received: boolean; outcome: CorrectionOutcome } {
   if (outcome === 'fixed') return { received: true, outcome: 'fixed' };
-  // A correction that could not be tested but became a learned rule changed the agent.
-  if (outcome === 'could_not_test' && ruleAdded) return { received: true, outcome: 'rule_added' };
-  if (outcome === 'not_reproduced') return { received: true, outcome: 'no_change_needed' };
-  if (outcome === 'no_fix_found' || outcome === 'not_fixable_here') return { received: true, outcome: 'no_fix_found' };
+  if (outcome === 'no_change_needed') return { received: true, outcome: 'no_change_needed' };
+  if (outcome === 'no_fix_found') return { received: true, outcome: 'no_fix_found' };
   if (outcome === 'could_not_test') return { received: false, outcome: 'could_not_test' };
   if (outcome === 'question') return { received: false, outcome: 'question' };
   if (outcome === 'held') return { received: false, outcome: 'held' };
@@ -1201,9 +1203,9 @@ async function armRoom(file: string, cacheDir: string, fix: boolean, folders: Re
   return room;
 }
 /**
- * Wait for the fix of a correction until it has a final outcome and the fix has ended completely: its later check of
- * the other cases and a pruning pass run after the outcome, and can undo the change, so the outcome is read again
- * when the Method's fix lock is free. For at most FIX_LIMIT_MS. pending: the fix stopped and gave the correction back.
+ * Wait for the fix of a correction until it has a final outcome and the fix has ended completely (its lock is free), so
+ * the next correction learns on the changed Method. For at most FIX_LIMIT_MS. pending: the fix stopped and gave the
+ * correction back.
  */
 async function waitForFix(runId: string, id: string, env: NodeJS.ProcessEnv, file: string): Promise<Delivered & { pending?: boolean }> {
   const deadline = Date.now() + FIX_LIMIT_MS;
@@ -1221,11 +1223,13 @@ async function waitForFix(runId: string, id: string, env: NodeJS.ProcessEnv, fil
         if (fixHolds(file, env)) return late;
         continue;
       }
-      const { received, outcome } = fixOutcome(record.outcome?.outcome, record.outcome?.rule_added === true);
+      const { received, outcome } = fixOutcome(record.outcome?.outcome);
       if (outcome === 'question') return { received, outcome, run_id: runId, judgment_id: id, reason: `Method's fix asks a question: ${record.outcome?.question ?? record.lines?.[0] ?? ''}`, detail: `Answer it with method answer ${id} "THE ANSWER", then run the comparison again` };
       if (outcome === 'could_not_test') return { received, outcome, run_id: runId, judgment_id: id, reason: 'Method\'s fix could not test a change', ...(record.outcome?.detail ? { detail: record.outcome.detail } : {}) };
       if (!received) return { received, outcome, run_id: runId, judgment_id: id, reason: stoppedWhy[record.outcome?.outcome] ?? `Method's fix ended ${outcomeWords[outcome]}` };
-      return { received, outcome, run_id: runId, judgment_id: id, tokens: null };
+      // What the learner changed: its summary for the person and the diff of the Method's files.
+      const change = outcome === 'fixed' && typeof record.outcome?.diff === 'string' ? { ...(record.outcome.summary ? { summary: String(record.outcome.summary) } : {}), diff: record.outcome.diff as string } : undefined;
+      return { received, outcome, run_id: runId, judgment_id: id, tokens: null, ...(change ? { change } : {}) };
     }
     // The fix stopped: its error in its own words (a usage limit says so), with the cause for the CLI.
     const error = typeof record?.error === 'string' && record.error.trim() ? record.error.trim() : null;
@@ -1326,7 +1330,8 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
   if (built.status !== 'completed') return { received: false, outcome: 'stopped', text, reason: `the ${arm.plain?.agent === 'codex' ? 'Codex' : 'Claude Code'} session that edits the instructions did not finish`, detail: `the builder ended ${built.status}${built.failure?.headline ? `: ${built.failure.headline}` : ''}`, tokens: used };
   const edited = sessionFile(build, built.result, 'instructions.md');
   const next = edited !== null && edited !== instructions ? edited : instructions;
-  return { received: true, outcome: next !== instructions ? 'edited' : right ? 'was_right' : 'not_edited', text, instructions: next, tokens: used };
+  return { received: true, outcome: next !== instructions ? 'edited' : right ? 'was_right' : 'not_edited', text, instructions: next, tokens: used,
+    ...(next !== instructions ? { change: { diff: textDiff(instructions, next, 'instructions.md', 'instructions.md') } } : {}) };
 }
 
 /** Copy a folder without its run records. */
@@ -1404,7 +1409,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
     }
     const record = records.get(key);
     done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(typeof record.text === 'string' ? { text: record.text } : {}), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
-      ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
+      ...(record.change ? { change: record.change } : {}), ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
     if (!record.received) { missing.push({ index: event.index, reason: record.reason ?? 'not received', ...(record.detail ? { detail: record.detail } : {}) }); stopped = true; continue; }
     if (arm.plain && typeof record.instructions === 'string') instructions = record.instructions;
     if (plan.checkpoints?.includes(event.index)) freeze(event.index);
@@ -1494,16 +1499,19 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
   if (inputs.planned) lines.push({ what: 'New inputs received', ...inputs });
   const list = (t?.learners ?? []).flatMap(l => l.events.filter(e => e.kind === 'correction').map(e => {
     const event = plan.events.find((x: any) => x.index === e.index);
-    return { index: e.index, input: e.input, text: short(e.text ?? event?.text ?? '', 2000), outcome: e.outcome, received: e.received, changed: e.received && changedAgent(e.outcome), learner: l.learner + 1, ...(e.reason ? { reason: short(e.reason, 500) } : {}) };
+    return { index: e.index, input: e.input, text: short(e.text ?? event?.text ?? '', 2000), outcome: e.outcome, received: e.received, changed: e.received && changedAgent(e.outcome), learner: l.learner + 1, ...(e.reason ? { reason: short(e.reason, 500) } : {}),
+      ...(e.change ? { change: { ...(e.change.summary ? { summary: short(e.change.summary, 500) } : {}), diff: short(e.change.diff, CHANGE_DIFF_CHARS) } } : {}) };
   }));
   return { models: [...new Set(own.flatMap(r => r.models ?? []))].map(modelName).slice(0, 10), lines, corrections: list, details };
 }
 /** The outcomes that the account shows; a correction that ended otherwise is named in its line's missing. */
-const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right', 'no_feedback', 'rule_added']);
-/** What each arm received, as the account takes it: each correction with {index, input, text, outcome, learner}. */
+const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right', 'no_feedback']);
+/** The most of one change's diff that the page shows. */
+const CHANGE_DIFF_CHARS = 20_000;
+/** What each arm received, as the account takes it: each correction with {index, input, text, outcome, learner, change?}. */
 function accountReceived(received: Record<string, ReturnType<typeof receivedOf>>) {
   return Object.fromEntries(Object.entries(received).map(([arm, r]) => [arm, { models: r.models, lines: r.lines.map(l => ({ ...l, missing: l.missing.map(m => m.slice(0, 500)) })),
-    corrections: r.corrections.filter(c => accountOutcomes.has(c.outcome) && c.text).map(c => ({ index: c.index, input: c.input, text: c.text, outcome: c.outcome, learner: c.learner })) }]));
+    corrections: r.corrections.filter(c => accountOutcomes.has(c.outcome) && c.text).map(c => ({ index: c.index, input: c.input, text: c.text, outcome: c.outcome, learner: c.learner, ...(c.change ? { change: c.change } : {}) })) }]));
 }
 /** The received record as lines of text: "Model: … · Inputs run: 2 of 2 · Corrections received: 5 of 5 (3 fixed, …)", then what is missing. */
 function receivedText(received: ReturnType<typeof receivedOf>) {
