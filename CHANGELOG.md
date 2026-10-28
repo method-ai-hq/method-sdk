@@ -1,3 +1,8 @@
+# 0.22.7
+
+- **A feedback writer writes each correction from the arm's own output.** In a `.compare` treatment, an event can name a feedback writer (`{feedback: WRITER, input}`, with `treatment.feedback_writers`) in place of fixed words. After the event's training run, the writer reads that arm's own handed-in file and the input's hidden expected answer, and never which arm it is, and writes the correction that the arm gets: the note of `method judge RUN wrong` for a Method arm, the correction that a plain arm's builder edits from. A writer is a script (it reads `{input, values, output, expected}` on stdin and prints `{"correction": TEXT}` or `{"correction": null}`) or one Claude judge with your instruction. When it finds nothing wrong, the Method arm gets `method judge RUN right` and the builder reads that the work is right; the event is received as "was right". The page lists the words each copy received. Run, grade and treatment keys include the writer's hash; fixed-text corrections work as before.
+- **`decided_by_you` names notes.** `notes.PART` marks the notes of a part as the user's.
+
 # 0.22.6
 
 - **Several Method accounts on one computer.** `method login` always opens the approval page. The account that approves becomes the current account: a new account is added, and an account that this computer already has gets a new credential. The other accounts stay signed in. The single sign-in of an earlier CLI becomes the first account, with nothing to do.
