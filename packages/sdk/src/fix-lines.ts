@@ -35,7 +35,9 @@ export const workingAnswerLine = 'Thanks. Working on it with your answer. I\'ll 
 export const waitingLine = (n: number) => n === 1 ? 'Working on a correction that was waiting. I\'ll test a fix for it.' : `Working on ${n} corrections that were waiting. I'll test a fix for each.`;
 export const stillWorkingLine = 'Still working on it. Run method wait again.';
 export const nothingWaitingLine = 'Nothing is being fixed on this computer.';
-export const notHereLine = 'Noted. The agent is not on this computer, so the next time it runs on a computer I\'ll test a fix there.';
+/** A correction that no computer here is fixing now: a computer with Claude Code or Codex fixes it on the Method's next run. */
+export const waitsForComputerLine = 'This correction will be fixed the next time this Method runs on a computer with Claude Code or Codex.';
+export const notHereLine = `Noted. ${waitsForComputerLine}`;
 export const approvedLine = 'Noted: this result is right.';
 export const stoppedLine = 'The fix stopped before it finished. I\'ll try again on the next run.';
 export const errorLine = (message: string) => `The fix stopped: ${sentence(message)}. I'll try again on the next run.`;

@@ -51,3 +51,7 @@ it('the source of the lines has no internal words in any quoted text', () => {
   // Keys of the outcome kinds and reasons are code, not text.
   for (const text of quoted.filter(q => /\s/.test(q))) check(text.slice(1, -1).replace(/\$\{[^}]*\}/g, ''));
 });
+
+it('a correction that no fix here takes waits for a computer, in plain words', () => {
+  expect(lines.notHereLine).toBe('Noted. This correction will be fixed the next time this Method runs on a computer with Claude Code or Codex.');
+});

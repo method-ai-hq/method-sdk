@@ -209,6 +209,7 @@ it('a wrong judgment returns at once; the fix in the background writes the outco
   s.stdout.mockClear();
   await methodMain(['wait'], () => client);
   expect(s.printed()).toBe('Nothing is being fixed on this computer.\n');
+  await expect(methodMain(['wait', 'jdg_' + '9'.repeat(32)], () => client)).rejects.toThrow('This correction will be fixed the next time this Method runs on a computer with Claude Code or Codex.');
   s.stdout.mockClear();
   await methodMain(['wait', id, '--json'], () => client);
   expect(JSON.parse(s.printed()).outcomes[0]).toMatchObject({ judgment: id, status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 0 } } });

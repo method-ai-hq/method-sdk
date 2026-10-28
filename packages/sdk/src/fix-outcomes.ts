@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
 import { valueText } from '@withmethod/runtime/rubric.js';
-import { type CorrectionOutcome, answerNext, errorLine, heldBackHeading, outcomeLine, stoppedLine, testedOutputHeading, workingLine } from './fix-lines.js';
+import { type CorrectionOutcome, answerNext, errorLine, heldBackHeading, outcomeLine, stoppedLine, testedOutputHeading, waitsForComputerLine, workingLine } from './fix-lines.js';
 
 // What a fix in the background did with each correction, kept on this computer:
 // ~/.cache/method/fixes/<methodId>/outcomes/<judgmentId>.json. method judge writes a working record and starts the fix;
@@ -138,7 +138,7 @@ export async function waitCommand(args: string[], options: { pollMs?: number } =
   const deadline = Date.now() + timeout * 1000;
   const chosen = () => storedOutcomes().filter(r => id ? r.judgment === id : !r.shown);
   let records = chosen();
-  if (id && !records.length) throw Error(`This computer is not fixing ${id}. Its outcome is on the run's page on the dashboard.`);
+  if (id && !records.length) throw Error(`This computer is not fixing ${id} now. ${waitsForComputerLine} Its outcome will be on the run's page on the dashboard.`);
   while (records.some(r => r.status === 'working') && Date.now() < deadline) {
     await new Promise(done => setTimeout(done, options.pollMs ?? 500));
     records = chosen();
