@@ -55,9 +55,14 @@ const armSchema = z.union([
 ]);
 const eventSchema = z.strictObject({
   correction: text.optional().describe('The words of a correction, as the expert would say them: "It needs to be X because Y". The arm runs the input, and gets this correction about that run.'),
+  feedback: name.optional().describe('Instead of correction: the name of a feedback writer (feedback_writers). The arm runs the input; the writer reads that arm\'s own output and the input\'s hidden expected answer, and writes the correction that the arm gets, or finds nothing wrong (the arm is told the output was right).'),
   input: text.optional().describe('The input (case ID or file) that the arm runs for this event.'),
   model: text.optional().describe('A new model for the arm from this point on.'),
 });
+const feedbackWriterSchema = z.strictObject({
+  code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, values, output, expected} as JSON on stdin (output: the text of the file that the arm handed in, or null) and prints {"correction": TEXT}, or {"correction": null} when nothing is wrong.'),
+  judge: text.optional().describe('A written instruction for one Claude judge, which reads the task, the output and the hidden expected answer and writes the correction, or none when nothing is wrong.'),
+}).describe('What writes the correction from an arm\'s own output. Give exactly one of code or judge.');
 const assumptionSchema = z.union([text, z.strictObject({
   text: text.describe('What must be true for the answer to mean something.'),
   if_false: text.optional().describe('What the answer would show if it is false.'),
@@ -84,6 +89,7 @@ export const comparisonSchema = z.strictObject({
   trial: z.number().int().min(1).optional().describe('How many inputs each arm runs in the trial before the full run. 2 when not given.'),
   treatment: z.strictObject({
     events: z.array(eventSchema).min(1).describe('What each arm gets, in order, one at a time.'),
+    feedback_writers: z.record(name, feedbackWriterSchema).optional().describe('Feedback writers by name, for events with feedback: each writes the correction from the arm\'s own output and the hidden expected answer. Use one when the expert\'s feedback depends on what the agent did.'),
     checkpoints: z.array(z.number().int().min(0)).min(1).describe('The number of events after which the arms are measured.'),
     seed: z.number().int().optional().describe('Shuffle the events once with this seed: one order, the same for every arm. Without it the events come in the order given.'),
   }).optional().describe('A list of events that each arm gets in order, with checkpoints.'),
@@ -99,7 +105,7 @@ export const comparisonSchema = z.strictObject({
   assumptions: z.array(assumptionSchema).optional().describe('Statements that must be true for the answer to mean something: text, or {text, if_false, check}. Method shows its own checks as checked by Method; these are not checked.'),
   notes: z.strictObject(Object.fromEntries(noteParts.map(part => [part, z.array(text).min(1).optional()])) as Record<(typeof noteParts)[number], z.ZodOptional<z.ZodArray<typeof text>>>)
     .optional().describe(`Notes that the page shows with their part: ${noteParts.join(', ')}.`),
-  decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin, arms.plain (which agent the arm is) or arms.plain.instructions (its starting instructions). Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
+  decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin, arms.plain (which agent the arm is), arms.plain.instructions (its starting instructions) or notes.PART (the notes of a part). Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
 }).describe('A comparison: one question about two or more agents.');
 export type Comparison = z.infer<typeof comparisonSchema>;
 type Measure = Comparison['measure'];
@@ -131,6 +137,8 @@ function inputValue(root: string, id: string): unknown {
   const value = JSON.parse(readFileSync(path, 'utf8'));
   return isFileInput(id) ? value : value.inputs ?? {};
 }
+/** A treatment event that corrects the arm: fixed words, or the words that a feedback writer writes from the arm's own output. */
+const isCorrection = (event: { correction?: string | undefined; feedback?: string | undefined }) => event.correction !== undefined || event.feedback !== undefined;
 const armIsMethod = (arm: Comparison['arms'][string]): arm is string => typeof arm === 'string';
 /**
  * The folder of an input's own files, or null: inputs/ID/ beside the file inputs/ID.json, or a case's recorded copy of
@@ -228,8 +236,10 @@ export function readComparison(file: string): Comparison {
   const values = new Map<string, unknown>();
   for (const id of [...inputs, ...teaching]) { try { values.set(id, inputValue(root, id)); } catch (error) { problems.push((error as Error).message); } }
   for (const id of teaching) if (inputs.includes(id)) problems.push(`The input ${id} is both a teaching input and a measured input. Keep them apart.`);
+  // An expected answer is for a measured input, or the hidden answer of an input whose run a feedback writer reads.
+  const feedbackInputs = (doc.treatment?.events ?? []).flatMap(event => event.feedback !== undefined && event.input !== undefined ? [event.input] : []);
   for (const [id, expected] of Object.entries(doc.expected ?? {})) {
-    if (!inputs.includes(id)) problems.push(`The expected answer for ${id} names no measured input.`);
+    if (!inputs.includes(id) && !feedbackInputs.includes(id)) problems.push(`The expected answer for ${id} names no measured input and no input of a feedback event.`);
     if (!existsSync(resolve(root, expected))) problems.push(`The expected answer for ${id} (${expected}) is not there.`);
   }
   // An input's own folder (measured or teaching): each folder in it is named after a files connection, and no expected
@@ -261,17 +271,29 @@ export function readComparison(file: string): Comparison {
       if (!existsSync(resolve(root, p))) continue;
       const items = checklistOf(expectedValue(root, p));
       if (!items.length) problems.push(`The expected answer of ${id} (${p}) lists no items. Write one item per line ("- item"), or a JSON list of items.`);
-      for (const item of items) for (const n of item.covered_by) if (!events[n - 1]?.correction) problems.push(`An item of ${p} is covered by event ${n}, which is not a correction of the treatment.`);
+      for (const item of items) for (const n of item.covered_by) if (!events[n - 1] || !isCorrection(events[n - 1]!)) problems.push(`An item of ${p} is covered by event ${n}, which is not a correction of the treatment.`);
     }
     if (m.covered && !doc.treatment) problems.push(`The measure ${m.name} scores the items that corrections cover, and there is no treatment over time.`);
   }
   if (doc.treatment) {
     const { checkpoints } = doc.treatment;
+    const writers = doc.treatment.feedback_writers ?? {};
+    for (const [writerName, writer] of Object.entries(writers)) {
+      if ([writer.code, writer.judge].filter(v => v !== undefined).length !== 1) problems.push(`The feedback writer ${writerName} needs exactly one of code or judge.`);
+      if (writer.code && !existsSync(resolve(root, writer.code))) problems.push(`The code of the feedback writer ${writerName} (${writer.code}) is not there.`);
+      if (writer.code && !['.mjs', '.js', '.py'].includes(extname(writer.code))) problems.push(`The code of the feedback writer ${writerName} must be a .mjs, .js or .py file.`);
+      if (!events.some(event => event.feedback === writerName)) problems.push(`No event uses the feedback writer ${writerName}.`);
+    }
     events.forEach((event, i) => {
-      const kinds = [event.correction !== undefined ? 'correction' : null, event.model !== undefined ? 'model' : null].filter(Boolean);
-      if (event.model !== undefined && (event.correction !== undefined || event.input !== undefined)) problems.push(`Event ${i + 1}: a model event names only the model.`);
-      else if (!kinds.length && event.input === undefined) problems.push(`Event ${i + 1} needs a correction with its input, an input, or a model.`);
-      else if (event.correction !== undefined && event.input === undefined) problems.push(`Event ${i + 1}: a correction needs the input whose run it corrects.`);
+      const kinds = [event.correction !== undefined ? 'correction' : null, event.feedback !== undefined ? 'feedback' : null, event.model !== undefined ? 'model' : null].filter(Boolean);
+      if (event.model !== undefined && (event.correction !== undefined || event.feedback !== undefined || event.input !== undefined)) problems.push(`Event ${i + 1}: a model event names only the model.`);
+      else if (event.correction !== undefined && event.feedback !== undefined) problems.push(`Event ${i + 1} has both a correction and a feedback writer. Give one: fixed words, or the writer that writes them from the arm's own output.`);
+      else if (!kinds.length && event.input === undefined) problems.push(`Event ${i + 1} needs a correction with its input, a feedback writer with its input, an input, or a model.`);
+      else if ((event.correction !== undefined || event.feedback !== undefined) && event.input === undefined) problems.push(`Event ${i + 1}: a correction needs the input whose run it corrects.`);
+      if (event.feedback !== undefined) {
+        if (!writers[event.feedback]) problems.push(`Event ${i + 1} names the feedback writer ${event.feedback}, which is not one of treatment.feedback_writers${Object.keys(writers).length ? ` (${Object.keys(writers).join(', ')})` : ''}.`);
+        if (event.input !== undefined && !doc.expected?.[event.input]) problems.push(`Event ${i + 1}: the feedback writer reads the hidden expected answer of ${event.input}, and it has none. Add expected: {${event.input}: FILE}.`);
+      }
       if (event.input !== undefined) {
         if (teaching.length && !teaching.includes(event.input)) problems.push(`Event ${i + 1} uses ${event.input}, which is not a teaching input.`);
         else if (!teaching.length) {
@@ -290,8 +312,9 @@ export function readComparison(file: string): Comparison {
   }
   for (const id of Object.keys(doc.about_inputs?.names ?? {})) if (!inputs.includes(id) && !teaching.includes(id)) problems.push(`about_inputs names ${id}, which is not an input.`);
   for (const entry of doc.decided_by_you ?? []) {
-    const part = entry.split('.')[0]!;
-    if (['id', 'notes', 'decided_by_you'].includes(part) || raw[part] === undefined) problems.push(`decided_by_you names ${entry}, which is not a part of this file.`);
+    const [part, field] = entry.split('.');
+    // A note is decided by part: notes.PART names the notes of that part.
+    if (part === 'notes' ? !field || !(raw.notes && typeof raw.notes === 'object' && raw.notes[field] !== undefined) : ['id', 'decided_by_you'].includes(part!) || raw[part!] === undefined) problems.push(`decided_by_you names ${entry}, which is not a part of this file.`);
   }
   if (problems.length) throw Error(`${basename(path)} cannot run. ${problems.join(' ')}`);
   return doc;
@@ -436,7 +459,9 @@ export function decisions(doc: Comparison): Decision[] {
   add('inputs', 'inputs', doc.inputs.join(', '), all(['inputs']));
   if (doc.teaching?.length) add('inputs', 'teaching inputs', doc.teaching.join(', '), all(['teaching']));
   if (doc.treatment) {
-    const corrections = doc.treatment.events.filter(e => e.correction !== undefined).length;
+    const corrections = doc.treatment.events.filter(isCorrection).length;
+    for (const [writerName, writer] of Object.entries(doc.treatment.feedback_writers ?? {}))
+      add('treatment', 'feedback writer', `${writerName}: ${writer.code ? `the script ${writer.code}` : `one Claude judge with the instruction: ${writer.judge}`}`, all(['treatment']));
     add('treatment', 'treatment', `${plural(doc.treatment.events.length, 'event')}${corrections ? ` (${plural(corrections, 'correction')})` : ''}, ${doc.treatment.seed !== undefined ? `shuffled once with seed ${doc.treatment.seed}` : 'in the given order'}, measured after ${[...doc.treatment.checkpoints].sort((a, b) => a - b).join(', ')}`, all(['treatment']));
   }
   const how = (m: Measure) => m.code ? `the script ${m.code}` : m.rubric ? `a rubric of ${plural(m.rubric.length, 'sentence')}` : m.checklist ? `each input's checklist from its expected answer${m.covered ? ', only the items that corrections cover so far' : ''}` : `a person answers: ${m.person}`;
@@ -463,7 +488,8 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   const rules: Array<{ part: PagePart; text: string }> = [];
   const add = (part: PagePart, text: string) => rules.push({ part, text });
   const plain = Object.entries(doc.arms).filter(([, arm]) => !armIsMethod(arm)) as Array<[string, Exclude<Comparison['arms'][string], string>]>;
-  const corrections = (doc.treatment?.events ?? []).some(e => e.correction !== undefined);
+  const corrections = (doc.treatment?.events ?? []).some(isCorrection);
+  const feedback = (doc.treatment?.events ?? []).some(e => e.feedback !== undefined);
   const web = doc.tested === 'tools';
   const agentName = (agent: string) => agent === 'claude' ? 'Claude Code' : 'Codex';
   if (corrections) {
@@ -484,6 +510,11 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
     add('treatment', 'Corrections arrive one at a time: an agent finishes learning from one correction before it gets the next.');
     add('treatment', `An agent has up to ${FIX_LIMIT_MS / 3_600_000} hours to learn from each correction.`);
     add('treatment', 'A correction counts as received when Method\'s fix found a change, found that no change was needed, or found no fix, or when the session that edits the instructions finished, edited or not. When Method\'s fix could not test a change or stopped, the correction is not received, and the comparison stops there.');
+  }
+  if (feedback) {
+    add('treatment', 'A feedback writer reads each agent\'s own output of its training run and the hidden expected answer, and writes the correction that this agent gets. So each agent\'s corrections are about its own work, and their words differ by design. Each agent\'s page lists the words it received.');
+    add('treatment', 'Every agent has the same feedback writer and the same hidden answer. The writer is not told which agent did the work.');
+    add('treatment', 'When the feedback writer finds nothing wrong, the agent is told that its output was right, and the event counts as received (was right).');
   }
   add('runs_per_point', `Runs count separate copies of each agent: each copy${doc.treatment ? ' gets the full treatment and' : ''} is measured once per input at each point.`);
   if ([doc.measure, ...(doc.other_measures ?? [])].some(m => m.rubric || m.checklist)) {
@@ -647,14 +678,14 @@ function assumptionsOf(doc: Comparison) {
  * of the definition, each input's name and uploaded content, the checklists, who decided each value, and Method's rules.
  * upload: puts a text in the account and returns its reference (null when signed out).
  */
-async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain }>, events: Array<{ input: { id: string }; text?: string }>,
+async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string } }>,
   checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>) {
   const measure = async (m: Measure) => ({ name: m.name, how: m.code ? 'code' : m.rubric || m.checklist ? 'model' : 'person', ...(m.description ? { description: m.description } : {}),
     ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}),
     ...(m.checklist ? { checklists: Object.fromEntries(doc.inputs.map(id => [id, (checklists[id] ?? []).map(item => short(item.text, 2000))])) } : {}) });
   const kinds = doc.treatment?.events ?? [];
-  const kind = kinds.every(e => e.correction !== undefined) ? 'Corrections' : kinds.every(e => e.correction === undefined) ? 'New inputs' : 'Events';
-  const corrections = kinds.some(e => e.correction !== undefined);
+  const kind = kinds.every(isCorrection) ? 'Corrections' : kinds.every(e => !isCorrection(e)) ? 'New inputs' : 'Events';
+  const corrections = kinds.some(isCorrection);
   const about = doc.about_inputs;
   // Each input's name and content (its JSON values), uploaded first: the account refuses a name whose content it lacks.
   const details: Record<string, { name: string; file?: { sha256: string; bytes: number } }> = {};
@@ -676,7 +707,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     rule: doc.rule, runs_per_point: doc.runs, learners: doc.runs, ...(doc.trial ? { trial: doc.trial } : {}),
     ...(doc.treatment ? { treatment: { kind, items: kinds.length, checkpoints: [...doc.treatment.checkpoints].sort((a, b) => a - b),
       order: doc.treatment.seed !== undefined ? 'shuffled' : 'given', ...(doc.treatment.seed !== undefined ? { seed: doc.treatment.seed } : {}),
-      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? `New input: ${e.input.id}`, 4000) })) } } : {}),
+      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name) : `New input: ${e.input.id}`), 4000) })) } } : {}),
     ...(doc.expected ? { expected_answers: true } : {}),
     judge: { agent: settings.judge.agent, model: settings.judge.model ?? 'Claude Code\'s default model' },
     assumptions: assumptionsOf(doc),
@@ -685,6 +716,9 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     method_rules: methodRules(doc, { ...settings, labels: Object.fromEntries(arms.map(arm => [arm.name, arm.label])) }),
   };
 }
+
+/** A feedback event in the treatment list: the words differ for each agent, so the list names the writer. */
+const feedbackWords = (writer: string) => `The feedback writer ${writer} reads the agent's own output and the hidden expected answer, and writes this correction.`;
 
 /** A list in one order made from a seed (the same every time), or as it is without a seed. */
 export function shuffled<T>(list: T[], seed: number | undefined): T[] {
@@ -723,13 +757,79 @@ export function taskPrompt(value: unknown, deliverable: string | null) {
   return deliverable ? `${input}\n\nHand in your work as the file ${deliverable} in your working folder.` : input;
 }
 const builderPrompt = `You maintain the instructions of an agent. Its instructions are in instructions.md.
-The agent did the task in task.md and handed in the file in wrong-output/. A person corrected that work; the correction is in correction.md.
+The agent did the task in task.md and handed in the file in wrong-output/. A person corrected that work, or said that it is right; their words are in correction.md.
 Edit instructions.md so that the agent follows this correction on later tasks and still follows everything the instructions already say. The agent reads only instructions.md and each new task: it never sees this correction or this task again.
 Change only instructions.md. When the instructions already make the agent do what the correction asks, leave the file as it is.`;
+/** What the plain arm's builder reads when the feedback writer found nothing wrong. */
+const RIGHT_WORDS = 'Right: the person checked this work and found nothing wrong.';
+/** The version of the feedback writer's judge: a new prompt writes every feedback again. */
+const FEEDBACK_VERSION = 'feedback-writer/1';
+const feedbackPrompt = `You write an expert's feedback on one piece of work. The task is in task.md. The work that the agent handed in is in output/. The correct answer, which the agent never sees, is in expected-answer.md. How to write the feedback is in instruction.md.
+Read each file in full. Then write the feedback that instruction.md asks for, about this work only.
+Answer with one JSON object and nothing else: {"correction": "THE FEEDBACK"}, or {"correction": null} when nothing in the work is wrong.`;
 const judgePrompt = `You are the judge of one handed-in document. Mark each item of checklist.json for the document in document/.
 First read, in full, every file that read-files.txt lists (the sources the agent read; they are in sources/), the document, and expected-answer.md when it is there. Read each file to its end: use more than one read for a long file.
 For each item, decide whether the document meets it: met, partly, or not_met. Judge only the document; the sources and the expected answer are for checking it.
 Answer with one JSON object and nothing else: {"verdicts": [{"id": ITEM_ID, "verdict": "met" | "partly" | "not_met", "quote": WORDS COPIED EXACTLY FROM THE DOCUMENT THAT DECIDE IT (or "" when no passage decides it), "reason": ONE SHORT SENTENCE}]}, with one verdict for each item.`;
+
+/** A feedback writer as the plan keeps it: a script, or one Claude judge with the writer's instruction. hash: what it is. */
+type Writer = { name: string; hash: string; code?: string; judge?: string; method?: string };
+/** Run a script (.py with python3, else Node) with a JSON value on stdin, in its own folder. */
+function runScript(path: string, input: unknown) {
+  return new Promise<{ code: number; stdout: string; stderr: string }>(done => {
+    const child = spawn(extname(path) === '.py' ? 'python3' : process.execPath, [path], { cwd: dirname(path), stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', c => { stdout += c; }); child.stderr.on('data', c => { stderr += c; });
+    child.on('error', error => done({ code: 1, stdout, stderr: error.message }));
+    child.on('close', code => done({ code: code ?? 1, stdout, stderr }));
+    child.stdin.end(JSON.stringify(input));
+  });
+}
+/** The correction in a feedback writer's answer {"correction": TEXT | null}: the words, null for nothing wrong, or undefined when the answer is not that. */
+function correctionOf(answer: string): string | null | undefined {
+  const from = answer.indexOf('{'), to = answer.lastIndexOf('}');
+  if (from < 0 || to < from) return undefined;
+  let value: any;
+  try { value = JSON.parse(answer.slice(from, to + 1)); } catch { return undefined; }
+  if (!value || typeof value !== 'object' || !('correction' in value)) return undefined;
+  if (value.correction === null || typeof value.correction === 'string' && !value.correction.trim()) return null;
+  return typeof value.correction === 'string' ? value.correction.trim() : undefined;
+}
+export const feedbackWriting = {
+  /**
+   * Write the correction for one training run: the writer reads the input, the arm's own output (null when it handed in
+   * nothing) and the hidden expected answer, and nothing about the arm. Returns the words, or null when nothing is wrong.
+   * A judge works in a folder whose path names no arm, with one retry when its answer is not the JSON it asks for.
+   */
+  async write(writer: Writer & { expected: unknown; work: string }, request: { input: { id: string; value: unknown }; task: string; output: string | null; outputName: string }): Promise<string | null> {
+    if (writer.code) {
+      const result = await runScript(writer.code, { input: request.input.id, values: request.input.value, output: request.output, expected: writer.expected });
+      const correction = result.code === 0 ? correctionOf(result.stdout) : undefined;
+      if (correction === undefined) throw Error(`The feedback writer ${writer.name} (${basename(writer.code)}) gave no correction for ${request.input.id}${result.stderr.trim() ? `: ${result.stderr.trim().split('\n').at(-1)}` : '; it must print {"correction": TEXT} or {"correction": null}'}.`);
+      return correction;
+    }
+    mkdirSync(writer.work, { recursive: true, mode: 0o700 });
+    const work = mkdtempSync(join(writer.work, 'w-')), room = join(work, 'room');
+    try {
+      mkdirSync(join(room, 'output'), { recursive: true, mode: 0o700 });
+      if (request.output !== null) writeFileSync(join(room, 'output', request.outputName), request.output);
+      else writeFileSync(join(room, 'output', 'NOT-HANDED-IN.md'), 'The agent did not hand in the file that the task asks for.\n');
+      writeFileSync(join(room, 'task.md'), `${request.task}\n`);
+      writeFileSync(join(room, 'expected-answer.md'), outputText(writer.expected));
+      writeFileSync(join(room, 'instruction.md'), `${writer.judge}\n`);
+      const { runMethod } = await import('@withmethod/runtime/runner.js');
+      let last = '';
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result: any = await runMethod(writer.method!, { allow_local_processes: true }, { runDir: join(work, `run-${attempt + 1}`), inputs: { room }, fresh: true });
+        if (result.status !== 'completed') throw Error(`The feedback writer ${writer.name} did not finish: ${result.failure?.headline ?? result.status}.`);
+        last = String(result.result?.final_text ?? '');
+        const correction = correctionOf(last);
+        if (correction !== undefined) return correction;
+      }
+      throw Error(`The feedback writer ${writer.name} did not answer {"correction": TEXT} or {"correction": null}: ${last.slice(0, 300)}`);
+    } finally { rmSync(work, { recursive: true, force: true }); }
+  },
+};
 
 /**
  * Check a .compare file and write its generated Method, the stage script and the inputs into the comparison folder.
@@ -787,12 +887,28 @@ export async function compileComparison(file: string, options: { strict?: boolea
   const measure = (m: Measure, main: boolean) => ({ name: m.name, main,
     ...(m.code ? { code: { path: resolve(root, m.code), hash: sha(readFileSync(resolve(root, m.code))) } } : {}),
     ...(m.rubric ? { rubric: m.rubric } : {}), ...(m.checklist ? { checklist: m.checklist, covered: m.covered === true } : {}), ...(m.person ? { person: m.person } : {}) });
-  const expected = Object.fromEntries(Object.entries(doc.expected ?? {}).map(([inputId, p]) => [inputId, expectedValue(root, p)]));
+  // The measures read the expected answers of the measured inputs; a feedback event carries its own input's.
+  const expected = Object.fromEntries(Object.entries(doc.expected ?? {}).filter(([inputId]) => doc.inputs.includes(inputId)).map(([inputId, p]) => [inputId, expectedValue(root, p)]));
   // The events in the order that every arm gets them: as given, or shuffled once with the seed. index is the place in
   // that order; an item of a checklist names its events by their place in the file, so its covered_by is mapped.
   const order = shuffled((doc.treatment?.events ?? []).map((event, i) => ({ event, file_index: i + 1 })), doc.treatment?.seed);
   const place = new Map(order.map((e, i) => [e.file_index, i + 1]));
-  const events = order.map(({ event, file_index }, i) => ({ index: i + 1, file_index, kind: event.correction !== undefined ? 'correction' : 'input', ...(event.correction ? { text: event.correction } : {}), input: resolveInput(event.input!) }));
+  // A feedback writer: a script, or one Claude judge with the writer's instruction (feedback.method, on the judge's model).
+  const writers = doc.treatment?.feedback_writers ?? {};
+  const feedbackMethod = join(folder, 'feedback.method');
+  if (Object.values(writers).some(w => w.judge !== undefined)) writeFileSync(feedbackMethod, JSON.stringify(sessionMethod('Feedback writer', 'Write an expert\'s feedback on one piece of work from the hidden expected answer.', 'claude', { agent: 'claude', model: judge.model, effort: models.shared?.agent === 'claude' ? models.shared.effort : null }, ['read', 'search'], feedbackPrompt, [], 1_800_000), null, 2) + '\n', { mode: 0o600 });
+  const writerOf = (writerName: string): Writer => {
+    const w = writers[writerName]!;
+    return w.code ? { name: writerName, code: resolve(root, w.code), hash: sha({ code: sha(readFileSync(resolve(root, w.code))) }) }
+      : { name: writerName, judge: w.judge!, method: feedbackMethod, hash: sha({ judge: w.judge, model: judge.model, version: FEEDBACK_VERSION }) };
+  };
+  // A feedback event carries its writer and the input's hidden answer, which only the writer reads. Its hash is both.
+  const events = order.map(({ event, file_index }, i) => {
+    const feedback = event.feedback !== undefined ? (() => { const writer = writerOf(event.feedback!), expected = expectedValue(root, doc.expected![event.input!]!);
+      return { ...writer, expected, hash: sha({ writer: writer.hash, expected }), work: join(folder, 'feedback-work') }; })() : null;
+    return { index: i + 1, file_index, kind: isCorrection(event) ? 'correction' : 'input', ...(event.correction ? { text: event.correction } : {}), ...(feedback ? { feedback } : {}), input: resolveInput(event.input!) };
+  });
+  const feedbackHash = events.some(e => e.feedback) ? sha(events.map(e => e.feedback?.hash ?? null)) : null;
   const checklists = Object.fromEntries(Object.entries(expected).map(([inputId, value]) => [inputId, checklistOf(value).map(item => ({ ...item, covered_by: item.covered_by.map(n => place.get(n) ?? n) }))]));
   const spec = await accountSpec(doc, root, arms, events, checklists, { model: models.shared, judge, device }, uploadSignedIn);
   // The approval holds for the definition, whether or not the inputs' content went up.
@@ -802,7 +918,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
   const plan = {
     file: path, folder, question: doc.question, difference: doc.difference, other_differences: doc.other_differences ?? [],
     arms, inputs: doc.inputs.map(id => resolveInput(id)),
-    events,
+    events, feedback_hash: feedbackHash,
     checkpoints: doc.treatment ? [...doc.treatment.checkpoints].sort((a, b) => a - b) : null,
     measures: [measure(doc.measure, true), ...(doc.other_measures ?? []).map(m => measure(m, false))],
     expected, checklists,
@@ -854,7 +970,7 @@ type Plan = ReturnType<typeof JSON.parse>;
 type Plain = { agent: 'claude' | 'codex'; instructions: string; model: string | null; effort: string | null };
 /** An arm at one point: a Method folder and file, or a plain agent. */
 type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } | { plain: Plain; hash: string };
-type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean;
+type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean; feedback?: string;
   input: { id: string; value: unknown; hash: string; room: string | null; deliverable: string | null }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
 /** An arm's name on the page (armLabels), by its key. */
@@ -863,13 +979,14 @@ const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => 
 /**
  * What happened to one correction for one learner. Method: fixed, no_change_needed, no_fix_found (received), or
  * could_not_test, question, held, stopped (not received). Plain builder: edited, not_edited (received), or stopped.
+ * was_right: the feedback writer found nothing wrong, and the arm was told its output was right (received).
  * not_run: the training run failed. not_given: an earlier event of the learner is missing. given: a new input.
  */
-export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'not_run' | 'not_given' | 'given';
+export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'not_run' | 'not_given' | 'given';
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
-  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
-/** What one event did for one learner, as the record and the account keep it. */
-type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; reason?: string; detail?: string;
+  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
+/** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
+type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
 type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot> };
@@ -892,9 +1009,15 @@ type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[]
  * How a correction reaches a plain arm (build): the plain agent runs the event's input with its current instructions
  * (a training run), then a builder session gets the correction, the task and the wrong output, and edits the agent's
  * instructions file. Received when the builder finished, edited or not. Tests replace deliver and build.
+ *
+ * A feedback event: after the training run, the event's feedback writer reads the arm's own output (the deliverable
+ * file, or a Method arm's result without one) and the hidden expected answer, and writes the words that this arm gets:
+ * the --note of method judge RUN wrong, or the builder's correction. When it finds nothing wrong, a Method arm gets
+ * method judge RUN right and the builder reads that the work is right; the event is received as was_right. Each
+ * delivery keeps the words the arm received (text).
  */
-type Delivered = { received: boolean; outcome: CorrectionOutcome; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null };
-type Built = { received: boolean; outcome: CorrectionOutcome; reason?: string; detail?: string; instructions?: string; tokens?: number | null };
+type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null };
+type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string; instructions?: string; tokens?: number | null };
 export const delivery = {
   async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered, settings: { web: boolean; folders?: Record<string, string> } = { web: false }): Promise<Delivered> {
     // The training run and its fix run in a clean room, as the arm's cells do: they see none of the user's
@@ -927,7 +1050,7 @@ function placeFolders(dir: string, folders: Record<string, string>) {
 async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: string; file: string }, workDir: string, before?: Delivered): Promise<Delivered> {
   if (before?.judgment_id && before.run_id) {
     const earlier = await waitForFix(before.run_id, before.judgment_id, env);
-    if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return earlier;
+    if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return { ...earlier, ...(before.text ? { text: before.text } : {}) };
   }
   const runDir = join(workDir, 'run');
   rmSync(workDir, { recursive: true, force: true });
@@ -942,12 +1065,29 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   let runId: string | undefined;
   try { runId = JSON.parse(readFileSync(join(runDir, 'method-sync.json'), 'utf8')).dashboard_id; } catch { /* not saved */ }
   if (!runId) return { received: false, outcome: 'not_run', reason: 'the training run is not in your Method account, so Method cannot take the correction', detail: 'Sign in with method login, then run the comparison again' };
-  const judged = await command(['judge', runId, 'wrong', '--note', event.text, '--json'], env);
+  let text: string = event.text;
+  if (event.feedback) {
+    // The arm's own output of this training run: the file it handed in beside its Method, or its result.
+    let output: string | null = null;
+    try { output = event.input.deliverable ? readFileSync(join(learner.dir, event.input.deliverable), 'utf8') : outputText(JSON.parse(readFileSync(join(runDir, 'result.json'), 'utf8'))); } catch { /* handed in nothing */ }
+    let written: string | null;
+    try { written = await feedbackWriting.write(event.feedback, { input: event.input, task: taskPrompt(event.input.value, event.input.deliverable), output, outputName: event.input.deliverable ? basename(event.input.deliverable) : 'output.md' }); }
+    catch (error) { return { received: false, outcome: 'stopped', run_id: runId, reason: 'the feedback writer gave no correction', detail: (error as Error).message }; }
+    if (written === null) {
+      const right = await command(['judge', runId, 'right', '--json'], env);
+      let id: string | undefined;
+      try { id = JSON.parse(right.stdout)?.judgment?.id; } catch { /* below */ }
+      if (!id) return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method could not take the verdict right', detail: `method judge failed: ${right.stderr.trim() || right.stdout.trim()}` };
+      return { received: true, outcome: 'was_right', run_id: runId, judgment_id: id, text: 'right', tokens: null };
+    }
+    text = written;
+  }
+  const judged = await command(['judge', runId, 'wrong', '--note', text, '--json'], env);
   let judgment: any;
   try { judgment = JSON.parse(judged.stdout); } catch { return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method could not take the correction', detail: `method judge failed: ${judged.stderr.trim() || judged.stdout.trim()}` }; }
   const id = judgment?.judgment?.id;
-  if (!id || !judgment.fix) return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method started no fix for this correction', ...(judgment?.stopped?.failure?.headline ? { detail: judgment.stopped.failure.headline } : {}) };
-  return waitForFix(runId, id, env);
+  if (!id || !judgment.fix) return { received: false, outcome: 'stopped', run_id: runId, text, reason: 'Method started no fix for this correction', ...(judgment?.stopped?.failure?.headline ? { detail: judgment.stopped.failure.headline } : {}) };
+  return { ...await waitForFix(runId, id, env), text };
 }
 
 /** A fix's outcome in the comparison's words, and whether the correction counts as received. */
@@ -1059,10 +1199,19 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
   const trained: any = await runSession(arm.method, train, folders, { instructions, task: taskPrompt(event.input.value, event.input.deliverable) });
   if (trained.status !== 'completed') return { received: false, outcome: 'not_run', reason: 'the training run did not finish', detail: `the training run on ${event.input.id} ended ${trained.status}${trained.failure?.headline ? `: ${trained.failure.headline}` : ''}` };
   const wrong = event.input.deliverable ? sessionFile(train, trained.result, event.input.deliverable) : null;
+  // A feedback writer writes the correction from this output; nothing wrong means the builder reads that it is right.
+  let text: string = event.text, right = false;
+  if (event.feedback) {
+    let written: string | null;
+    try { written = await feedbackWriting.write(event.feedback, { input: event.input, task: taskPrompt(event.input.value, event.input.deliverable), output: wrong, outputName: event.input.deliverable ? basename(event.input.deliverable) : 'output.md' }); }
+    catch (error) { return { received: false, outcome: 'stopped', reason: 'the feedback writer gave no correction', detail: (error as Error).message }; }
+    right = written === null;
+    text = written ?? RIGHT_WORDS;
+  }
   const room = join(workDir, 'builder-room');
   mkdirSync(join(room, 'wrong-output'), { recursive: true, mode: 0o700 });
   writeFileSync(join(room, 'instructions.md'), instructions);
-  writeFileSync(join(room, 'correction.md'), `${event.text}\n`);
+  writeFileSync(join(room, 'correction.md'), `${text}\n`);
   writeFileSync(join(room, 'task.md'), `${taskPrompt(event.input.value, event.input.deliverable)}\n`);
   if (wrong !== null) writeFileSync(join(room, 'wrong-output', basename(event.input.deliverable)), wrong);
   else writeFileSync(join(room, 'wrong-output', 'NOT-HANDED-IN.md'), `The agent did not hand in ${event.input.deliverable ?? 'a file'}.\n`);
@@ -1070,9 +1219,10 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
   const built: any = await runSession(arm.builder, build, room, {});
   const tokens = [tokensOfRun(train), tokensOfRun(build)];
   const used = tokens.every(t => t !== null) ? (tokens[0]! + tokens[1]!) : null;
-  if (built.status !== 'completed') return { received: false, outcome: 'stopped', reason: `the ${arm.plain?.agent === 'codex' ? 'Codex' : 'Claude Code'} session that edits the instructions did not finish`, detail: `the builder ended ${built.status}${built.failure?.headline ? `: ${built.failure.headline}` : ''}`, tokens: used };
+  if (built.status !== 'completed') return { received: false, outcome: 'stopped', text, reason: `the ${arm.plain?.agent === 'codex' ? 'Codex' : 'Claude Code'} session that edits the instructions did not finish`, detail: `the builder ended ${built.status}${built.failure?.headline ? `: ${built.failure.headline}` : ''}`, tokens: used };
   const edited = sessionFile(build, built.result, 'instructions.md');
-  return edited !== null && edited !== instructions ? { received: true, outcome: 'edited', instructions: edited, tokens: used } : { received: true, outcome: 'not_edited', instructions, tokens: used };
+  const next = edited !== null && edited !== instructions ? edited : instructions;
+  return { received: true, outcome: right ? 'was_right' : next !== instructions ? 'edited' : 'not_edited', text, instructions: next, tokens: used };
 }
 
 /** Copy a folder without its run records. */
@@ -1083,7 +1233,7 @@ const readRecords = (file: string) => {
   return records;
 };
 /** The folder of one learner's treatment: its own copy of the arm, its own cache and its record. */
-const learnerFolder = (plan: Plan, arm: any, learner: number) => join(plan.folder, 'arms', arm.name, `treatment-${arm.hash.slice(0, 12)}`, `learner-${learner + 1}`);
+const learnerFolder = (plan: Plan, arm: any, learner: number) => join(plan.folder, 'arms', arm.name, `treatment-${(plan.feedback_hash ? sha({ arm: arm.hash, feedback: plan.feedback_hash }) : arm.hash).slice(0, 12)}`, `learner-${learner + 1}`);
 
 /**
  * Give each learner of each arm its events in order, up to its limit (limits[learner]), one at a time, and freeze a
@@ -1125,7 +1275,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
   const done: EventRecord[] = [], missing: LearnerTreatment['missing'] = [];
   let stopped = false;
   for (const event of events) {
-    const key = sha({ index: event.index, kind: event.kind, text: event.text ?? null, input: event.input.hash, builder: arm.plain ? sha(arm.plain) : null });
+    const key = sha({ index: event.index, kind: event.kind, text: event.text ?? null, input: event.input.hash, builder: arm.plain ? sha(arm.plain) : null, ...(event.feedback ? { feedback: event.feedback.hash } : {}) });
     if (stopped) {
       missing.push({ index: event.index, reason: 'not given', after: missing[0]!.index });
       done.push({ key, index: event.index, kind: event.kind, input: event.input.id, learner, received: false, outcome: 'not_given', tokens: null, duration_ms: 0, at: new Date().toISOString() });
@@ -1148,7 +1298,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       }
     }
     const record = records.get(key);
-    done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
+    done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(typeof record.text === 'string' ? { text: record.text } : {}), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
       ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
     if (!record.received) { missing.push({ index: event.index, reason: record.reason ?? 'not received', ...(record.detail ? { detail: record.detail } : {}) }); stopped = true; continue; }
     if (arm.plain && typeof record.instructions === 'string') instructions = record.instructions;
@@ -1163,9 +1313,12 @@ function treatmentNote(plan: Plan, arm: any, checkpoint: number | null, learner?
   const given = plan.events.filter((e: any) => e.index <= checkpoint);
   if (!given.length) return 'Nothing was given to the agent before this run.';
   const how = arm.plain ? `After each correction a ${arm.plain.agent === 'codex' ? 'Codex' : 'Claude Code'} session edited the agent's instructions. The corrections, one at a time, in this order` : 'Method learned from each correction, one at a time, in this order';
-  const outcome = (e: any) => { const r = learner?.events.find(x => x.index === e.index); return r && e.kind === 'correction' ? ` (${outcomeWords[r.outcome]})` : ''; };
+  const record = (e: any) => learner?.events.find(x => x.index === e.index);
+  const outcome = (e: any) => { const r = record(e); return r && e.kind === 'correction' ? ` (${outcomeWords[r.outcome]})` : ''; };
   const name = (id: string) => plan.names?.[id] ?? id.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, '');
-  return [`Copy ${(learner?.learner ?? 0) + 1}. ${how}:`, ...given.map((e: any) => `${e.index}. ${e.kind === 'correction' ? `Correction on ${name(e.input.id)}: ${e.text}${outcome(e)}` : `New input: ${name(e.input.id)}`}`)].join('\n');
+  // A feedback writer's words are this copy's own.
+  const words = (e: any) => record(e)?.text ?? e.text ?? (e.feedback ? `(from the feedback writer ${e.feedback.name})` : '');
+  return [`Copy ${(learner?.learner ?? 0) + 1}. ${how}:`, ...given.map((e: any) => `${e.index}. ${e.kind === 'correction' ? `Correction on ${name(e.input.id)}: ${words(e)}${outcome(e)}` : `New input: ${name(e.input.id)}`}`)].join('\n');
 }
 
 /** A reason as the end of a sentence: one period, never two. */
@@ -1235,12 +1388,12 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
   if (inputs.planned) lines.push({ what: 'New inputs received', ...inputs });
   const list = (t?.learners ?? []).flatMap(l => l.events.filter(e => e.kind === 'correction').map(e => {
     const event = plan.events.find((x: any) => x.index === e.index);
-    return { index: e.index, input: e.input, text: short(event?.text ?? '', 2000), outcome: e.outcome, received: e.received, learner: l.learner + 1, ...(e.reason ? { reason: short(e.reason, 500) } : {}) };
+    return { index: e.index, input: e.input, text: short(e.text ?? event?.text ?? '', 2000), outcome: e.outcome, received: e.received, learner: l.learner + 1, ...(e.reason ? { reason: short(e.reason, 500) } : {}) };
   }));
   return { models: [...new Set(own.flatMap(r => r.models ?? []))].map(modelName).slice(0, 10), lines, corrections: list, details };
 }
 /** The outcomes that the account shows; a correction that ended otherwise is named in its line's missing. */
-const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited']);
+const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right']);
 /** What each arm received, as the account takes it: each correction with {index, input, text, outcome, learner}. */
 function accountReceived(received: Record<string, ReturnType<typeof receivedOf>>) {
   return Object.fromEntries(Object.entries(received).map(([arm, r]) => [arm, { models: r.models, lines: r.lines.map(l => ({ ...l, missing: l.missing.map(m => m.slice(0, 500)) })),
@@ -1285,8 +1438,8 @@ export function usagePerCorrection(plan: Plan, treated: ArmTreatment[] | null) {
 // The cells
 
 /** The key of a run cell: its content (the arm as it was at that point, the input, the learner and the checkpoint, and how it runs). */
-const runKey = (c: { arm: string; hash: string; input: { hash: string; deliverable?: string | null }; repeat: number; checkpoint: number | null; web: boolean }) =>
-  sha({ arm: c.arm, hash: c.hash, input: c.input.hash, repeat: c.repeat, checkpoint: c.checkpoint, ...(c.web ? { web: true } : {}), ...(c.input.deliverable ? { deliverable: c.input.deliverable } : {}) });
+const runKey = (c: { arm: string; hash: string; input: { hash: string; deliverable?: string | null }; repeat: number; checkpoint: number | null; web: boolean; feedback?: string | null }) =>
+  sha({ arm: c.arm, hash: c.hash, input: c.input.hash, repeat: c.repeat, checkpoint: c.checkpoint, ...(c.web ? { web: true } : {}), ...(c.input.deliverable ? { deliverable: c.input.deliverable } : {}), ...(c.feedback ? { feedback: c.feedback } : {}) });
 /** The version of the judge: a new judge grades every run again. */
 const JUDGE_VERSION = 'session-judge/1';
 /** The grader: every measure, as the comparison defines it, and the judge. A changed measure is a new grader, and every run is graded again. */
@@ -1302,7 +1455,7 @@ function gradeKeys(plan: Plan, list: Array<{ key: string; arm: string; checkpoin
   return new Map(list.map(c => {
     const reads = list.filter(o => o.arm === c.arm && (o.checkpoint ?? 0) <= (c.checkpoint ?? 0)).map(o => [o.key, finished.get(o.key)]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
     const input = typeof c.input === 'string' ? c.input : c.input.id;
-    return [c.key, sha({ target: c.key, grader, expected: sha(plan.expected[input] ?? null), reads })];
+    return [c.key, sha({ target: c.key, grader, expected: sha(plan.expected[input] ?? null), reads, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}) })];
   }));
 }
 
@@ -1332,7 +1485,7 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, stage: 'trial' | 'ful
     const snapshot: Snapshot | undefined = checkpoint === null ? (arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : own?.snapshots[checkpoint];
     if (!snapshot) continue;
     for (const input of inputs) {
-      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain ? { method: arm.method } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, input, repeat: learner, checkpoint,
+      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain ? { method: arm.method } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}), input, repeat: learner, checkpoint,
         trial: trialInputs.has(input.id) && learner < NOISE_LEARNERS && checkpoint === start, treatment_note: treatmentNote(plan, arm, checkpoint, own) };
       out.push({ key: runKey(cell), ...cell });
     }
@@ -1895,16 +2048,7 @@ async function linkGrade(folder: string, record: any) {
   await linkCells(folder, [{ key: record.key, measures, ...(record.verdicts.length ? { verdicts: record.verdicts } : {}), ...(seen ? { seen } : {}) }]);
 }
 async function codeScore(m: any, run: any, expected: unknown) {
-  const isPython = extname(m.code.path) === '.py';
-  const input = JSON.stringify({ input: run.input, output: run.result, expected: expected ?? null, run_dir: run.run_dir, artifacts: run.artifacts });
-  const result = await new Promise<{ code: number; stdout: string; stderr: string }>(done => {
-    const child = spawn(isPython ? 'python3' : process.execPath, [m.code.path], { cwd: dirname(m.code.path), stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', c => { stdout += c; }); child.stderr.on('data', c => { stderr += c; });
-    child.on('error', error => done({ code: 1, stdout, stderr: error.message }));
-    child.on('close', code => done({ code: code ?? 1, stdout, stderr }));
-    child.stdin.end(input);
-  });
+  const result = await runScript(m.code.path, { input: run.input, output: run.result, expected: expected ?? null, run_dir: run.run_dir, artifacts: run.artifacts });
   let score: unknown;
   try { const value = JSON.parse(result.stdout); score = typeof value === 'number' ? value : value?.score; } catch { /* below */ }
   if (result.code !== 0 || typeof score !== 'number' || !Number.isFinite(score))

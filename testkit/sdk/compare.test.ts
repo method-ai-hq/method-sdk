@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, fixOutcome, judging, noiseCheck, tooEasyCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
+import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, feedbackWriting, fixOutcome, judging, noiseCheck, tooEasyCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { baselineAnswer } from '../../packages/sdk/src/quality.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
@@ -87,6 +87,11 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
     const document = fs.readdirSync(path.join(cwd, 'document')).map(f => fs.readFileSync(path.join(cwd, 'document', f), 'utf8')).join('');
     fs.appendFileSync(${JSON.stringify(join(root, 'judge-seen.jsonl'))}, JSON.stringify({ sizes, document, expected: fs.existsSync(path.join(cwd, 'expected-answer.md')) }) + '\\n');
     result = 'Here are the verdicts. ' + JSON.stringify({ verdicts: items.map(i => ({ id: i.id, verdict: i.text.includes('(met)') ? 'met' : i.text.includes('(partly)') ? 'partly' : 'not_met', quote: '', reason: 'By the word.' })) });
+  } else if (prompt.startsWith('You write an expert')) {
+    log('writer');
+    const output = fs.readdirSync(path.join(cwd, 'output')).map(f => fs.readFileSync(path.join(cwd, 'output', f), 'utf8')).join('');
+    const expected = JSON.parse(fs.readFileSync(path.join(cwd, 'expected-answer.md'), 'utf8')).answer;
+    result = JSON.stringify({ correction: Number(output) === expected ? null : fs.readFileSync(path.join(cwd, 'instruction.md'), 'utf8').trim() + ' ' + output });
   } else if (prompt.startsWith('You maintain the instructions')) {
     log('builder');
     const correction = fs.readFileSync(path.join(cwd, 'correction.md'), 'utf8').trim();
@@ -309,6 +314,96 @@ it('a plain arm with corrections is a builder: after each correction a session g
   expect(cells.find((c: any) => c.checkpoint === 3).plain.instructions).toContain('- Add one');
   expect(cells.find((c: any) => c.checkpoint === 3).treatment_note).toBe('Copy 1. After each correction a Claude Code session edited the agent\'s instructions. The corrections, one at a time, in this order:\n1. Correction on three: Add one, because the count starts at one. (edited)\n2. New input: three\n3. Correction on three: Keep it. [keep] (not edited)');
 }, 600_000);
+
+it('a feedback writer writes each arm\'s correction from its own training-run output and the hidden answer; nothing wrong is received as was right', async () => {
+  // Expected answer of the teaching input: 9. The writer says what is wrong with the number, or nothing when it is right.
+  const { root, file } = plainFixture();
+  writeFileSync(join(root, 'expected-three.json'), JSON.stringify({ answer: 9 }));
+  writeFileSync(join(root, 'writer.mjs'), `import{appendFileSync,readFileSync}from'node:fs';const raw=readFileSync(0,'utf8');appendFileSync(${JSON.stringify(join(root, 'writer-seen.jsonl'))},raw+'\\n');const{output,expected}=JSON.parse(raw);console.log(JSON.stringify({correction:Number(output)===expected.answer?null:'The number '+output+' is wrong.'}))`);
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(file, JSON.stringify({ ...doc, teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 3 }, expected: { 'inputs/three.json': 'expected-three.json' },
+    treatment: { feedback_writers: { expert: { code: 'writer.mjs' } }, checkpoints: [0, 3],
+      events: [{ feedback: 'expert', input: 'inputs/three.json' }, { feedback: 'expert', input: 'inputs/three.json' }, { correction: 'Fixed words.', input: 'inputs/three.json' }] } }));
+  const claude = claudeStub(root);
+  // A stand-in for the method CLI: the Method arm hands in 3n + 1 until it is first judged wrong, then 3n.
+  writeFileSync(join(root, 'bin', 'method'), `#!/usr/bin/env node
+const fs = require('fs'), path = require('path');
+const argv = process.argv.slice(2), log = ${JSON.stringify(join(root, 'method-calls.jsonl'))};
+const before = fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '';
+fs.appendFileSync(log, JSON.stringify(argv) + '\\n');
+if (argv[0] === 'run') {
+  const runDir = argv[argv.indexOf('--run-dir') + 1], n = JSON.parse(fs.readFileSync(argv[argv.indexOf('--inputs') + 1], 'utf8')).n;
+  fs.writeFileSync(path.join(path.dirname(argv[1]), 'work', 'answer.txt'), String(3 * n + (before.includes('"wrong"') ? 0 : 1)));
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'summary.json'), JSON.stringify({ status: 'completed' }));
+  fs.writeFileSync(path.join(runDir, 'method-sync.json'), JSON.stringify({ dashboard_id: 'run_' + before.split('\\n').length }));
+} else if (argv[0] === 'judge') console.log(JSON.stringify({ judgment: { id: 'jdg_' + before.split('\\n').length }, fix: { status: 'working' } }));
+else if (argv[0] === 'wait') console.log(JSON.stringify({ outcomes: [{ status: 'done', outcome: { outcome: 'fixed' } }] }));
+`, { mode: 0o700 });
+  const compiled = await compileComparison(file);
+  expect(compiled.spec.treatment!.list![0]!.text).toBe('The feedback writer expert reads the agent\'s own output and the hidden expected answer, and writes this correction.');
+  expect(compiled.spec.decisions.find((d: any) => d.what === 'feedback writer')).toMatchObject({ part: 'treatment', value: 'expert: the script writer.mjs', by: 'writer' });
+  expect(compiled.spec.method_rules.map((r: any) => r.text)).toEqual(expect.arrayContaining(['When the feedback writer finds nothing wrong, the agent is told that its output was right, and the event counts as received (was right).']));
+  const comparison = await stagePlan(file);
+  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  const events = (arm: string) => treated.find((t: any) => t.arm === arm).learners[0].events.map((e: any) => [e.outcome, e.text]);
+  // The Method arm handed in 10, then 9: it was judged wrong with the writer's words about its own output, then right.
+  expect(events('a')).toEqual([['fixed', 'The number 10 is wrong.'], ['was_right', 'right'], ['fixed', 'Fixed words.']]);
+  const judged = lines(join(root, 'method-calls.jsonl')).filter((c: string[]) => c[0] === 'judge').map((c: string[]) => c.slice(2));
+  expect(judged).toEqual([['wrong', '--note', 'The number 10 is wrong.', '--json'], ['right', '--json'], ['wrong', '--note', 'Fixed words.', '--json']]);
+  // The plain arm handed in 9 (right: the builder reads that it is right), then 10 (one line more in its instructions).
+  expect(events('plain')).toEqual([['was_right', 'Right: the person checked this work and found nothing wrong.'], ['edited', 'The number 10 is wrong.'], ['edited', 'Fixed words.']]);
+  expect(claude.built().map(b => [b.correction, b.wrong])).toEqual([['Right: the person checked this work and found nothing wrong.', { 'answer.txt': '9' }],
+    ['The number 10 is wrong.', { 'answer.txt': '10' }], ['Fixed words.', { 'answer.txt': '11' }]]);
+  // The writer read the input, the arm's output and the hidden answer, and nothing about the arm; the arms never got the answer.
+  const seen = lines(join(root, 'writer-seen.jsonl'));
+  expect(seen).toHaveLength(4);
+  for (const s of seen) expect(Object.keys(s).sort()).toEqual(['expected', 'input', 'output', 'values']);
+  expect(seen.map(s => [s.input, s.values, s.expected])).toEqual(Array(4).fill(['inputs/three.json', { n: 3 }, { answer: 9 }]));
+  expect(claude.calls().filter(c => c.kind === 'task').map(c => c.prompt).join('')).not.toContain('answer":9');
+  // Each copy's page and run notes show the words that it received.
+  const result = decide(JSON.parse(comparison), [], treated);
+  expect(result.received.a.corrections.map((c: any) => [c.index, c.text, c.outcome])).toEqual([[1, 'The number 10 is wrong.', 'fixed'], [2, 'right', 'was_right'], [3, 'Fixed words.', 'fixed']]);
+  expect(result.received.plain.corrections.map((c: any) => c.text)).toEqual(['Right: the person checked this work and found nothing wrong.', 'The number 10 is wrong.', 'Fixed words.']);
+  expect(result.text).toContain('Corrections received: 3 of 3 (2 fixed, 1 was right)');
+  const cells = ((await compareStage('plan', { comparison, go: true, treated: JSON.stringify(treated) })).cells as string[]).map(c => JSON.parse(c));
+  expect(cells.find((c: any) => c.arm === 'a' && c.checkpoint === 3).treatment_note).toContain('1. Correction on three: The number 10 is wrong. (fixed)\n2. Correction on three: right (was right)');
+  // A rerun gives nothing again; a changed writer is a new treatment, with new run keys.
+  await compareStage('treat', { comparison, go: true });
+  expect(lines(join(root, 'writer-seen.jsonl'))).toHaveLength(4);
+  appendFileSync(join(root, 'writer.mjs'), '\n// changed\n');
+  const changed = await stagePlan(file);
+  expect(JSON.parse(changed).feedback_hash).not.toBe(JSON.parse(comparison).feedback_hash);
+  const keys = async (plan: string) => ((await compareStage('trial_plan', { comparison: plan, treated: JSON.stringify(treated) })).trial_cells as string[]).map(c => JSON.parse(c).key).sort();
+  expect(await keys(changed)).not.toEqual(await keys(comparison));
+  // A feedback event needs its writer and the input's hidden answer.
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, 'utf8')), expected: {}, treatment: { feedback_writers: { expert: { code: 'writer.mjs' } }, checkpoints: [0, 1], events: [{ feedback: 'other', input: 'inputs/three.json' }] } }));
+  expect(() => readComparison(file)).toThrow(/Event 1 names the feedback writer other, which is not one of treatment\.feedback_writers \(expert\)\. Event 1: the feedback writer reads the hidden expected answer of inputs\/three\.json, and it has none\./);
+}, 600_000);
+
+it('a judge feedback writer is one Claude session that reads the task, the output, the hidden answer and the instruction, in a folder that names no arm', async () => {
+  const { root, file } = plainFixture();
+  writeFileSync(join(root, 'expected-three.json'), JSON.stringify({ answer: 9 }));
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(file, JSON.stringify({ ...doc, teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 1 }, expected: { 'inputs/three.json': 'expected-three.json' },
+    treatment: { feedback_writers: { expert: { judge: 'Say which number is wrong:' } }, checkpoints: [0, 1], events: [{ feedback: 'expert', input: 'inputs/three.json' }] } }));
+  const claude = claudeStub(root);
+  const event = JSON.parse(await stagePlan(file)).events[0];
+  const write = (output: string | null) => feedbackWriting.write(event.feedback, { input: event.input, task: 'Do it.', output, outputName: 'answer.txt' });
+  expect(await write('10')).toBe('Say which number is wrong: 10');
+  expect(await write('9')).toBeNull();
+  const call = claude.calls().find(c => c.kind === 'writer')!;
+  expect(call.files).toEqual(['expected-answer.md', 'instruction.md', 'output', 'output/answer.txt', 'task.md']);
+  expect(JSON.stringify(call)).not.toMatch(/arms|plain|learner/);
+}, 600_000);
+
+it('decided_by_you names the notes of a part as notes.PART', () => {
+  const { file } = fixture({ notes: { inputs: ['Each input runs alone.'] }, decided_by_you: ['notes.inputs'] });
+  expect(decisions(readComparison(file)).find(d => d.what === 'note')).toMatchObject({ part: 'inputs', by: 'you' });
+  const raw = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(file, JSON.stringify({ ...raw, decided_by_you: ['notes.rule'] }));
+  expect(() => readComparison(file)).toThrow(/decided_by_you names notes\.rule, which is not a part of this file/);
+});
 
 it('a teaching input with its own folder gives its training runs that folder in place of the arms\' folders of that name, for a Method arm and a builder alike', async () => {
   const { root, file } = plainFixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 2 },
