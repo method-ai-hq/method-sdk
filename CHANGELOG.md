@@ -1,3 +1,9 @@
+# 0.22.6
+
+- **Several Method accounts on one computer.** `method login` always opens the approval page. The account that approves becomes the current account: a new account is added, and an account that this computer already has gets a new credential. The other accounts stay signed in. The single sign-in of an earlier CLI becomes the first account, with nothing to do.
+- **Each command uses the account that owns its Method.** A Method or comparison file with an `id:` line uses the account that owns it, whichever account is current: its runs, judgments, fixes, publishes, comparisons, arm copies and learners. Method remembers the owner when it saves an ID, and asks the server once with each account for an ID it does not know yet. A new file uses the current account.
+- **`method status` names the accounts.** It shows the current account (person, email and workspace) and lists the other signed-in accounts. `method logout` signs out of the current account only, and says which account is current after it.
+
 # 0.22.5
 
 - **Publish a comparison as a draft for review.** `method publish NAME.compare` saves the comparison to your account as a draft, with its inputs, and prints its page. Nothing runs. The person reviews every part, then a `method run` of the same file continues from that draft. The comparisons guide says to publish the draft and give the user the link before any run.

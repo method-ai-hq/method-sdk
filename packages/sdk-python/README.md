@@ -1,10 +1,10 @@
 # method-ai
 
-MIT-licensed Python binding to the same installed Node Method runtime. Requires Python 3.9+ and the JavaScript SDK 0.22.5.
+MIT-licensed Python binding to the same installed Node Method runtime. Requires Python 3.9+ and the JavaScript SDK 0.22.6.
 
 ```sh
-npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.22.5/method-ai-hq-sdk-0.22.5.tgz
-pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.22.5/method_ai-0.22.5-py3-none-any.whl
+npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.22.6/method-ai-hq-sdk-0.22.6.tgz
+pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.22.6/method_ai-0.22.6-py3-none-any.whl
 withmethod authoring
 ```
 
