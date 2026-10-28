@@ -62,8 +62,8 @@ const eventSchema = z.strictObject({
   source: text.optional().describe('Where the correction\'s words come from, such as "her reply of 22 Oct, word for word" or "written by us: a rule kind she called realistic". When it says "written by us", the comparison page asks the expert whether they would give it. For a feedback event, say here what the writer\'s words are when the agent is wrong.'),
 });
 const feedbackWriterSchema = z.strictObject({
-  code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, values, output, expected} as JSON on stdin (output: the text of the file that the arm handed in, or null) and prints {"correction": TEXT}, or {"correction": null} when nothing is wrong.'),
-  judge: text.optional().describe('A written instruction for one Claude judge, which reads the task, the output and the hidden expected answer and writes the correction, or none when nothing is wrong.'),
+  code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, values, output, expected} as JSON on stdin (output: the text of the file that the arm handed in, or null) and prints {"correction": TEXT or null, "checked": "all" or the part it checked}. correction is null when nothing that it checked is wrong. A null correction with checked "all" tells the arm its output was right; with a part, the arm gets no feedback.'),
+  judge: text.optional().describe('A written instruction for one Claude judge, which reads the task, the output and the hidden expected answer and writes the correction, or none when nothing is wrong, and says what it checked.'),
 }).describe('What writes the correction from an arm\'s own output. Give exactly one of code or judge.');
 const assumptionSchema = z.union([text, z.strictObject({
   text: text.describe('What must be true for the answer to mean something.'),
@@ -527,7 +527,7 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   if (feedback) {
     add('treatment', 'A feedback writer reads each agent\'s own output of its training run and the hidden expected answer, and writes the correction that this agent gets. So each agent\'s corrections are about its own work, and their words differ by design. Each agent\'s page lists the words it received.');
     add('treatment', 'Every agent has the same feedback writer and the same hidden answer. The writer is not told which agent did the work.');
-    add('treatment', 'When the feedback writer finds nothing wrong, the agent is told that its output was right, and the event counts as received (was right).');
+    add('treatment', 'A feedback writer says what it checked. When it checked the whole output and found nothing wrong, the agent is told that its output was right (was right). When it checked only a part and found nothing wrong there, the agent gets no feedback (no feedback): nothing tells it the rest is right.');
   }
   add('runs_per_point', `Runs count separate copies of each agent: each copy${doc.treatment ? ' gets the full treatment and' : ''} is measured once per input at each point.`);
   if ([doc.measure, ...(doc.other_measures ?? [])].some(m => m.rubric || m.checklist)) {
@@ -789,10 +789,10 @@ Read the task's files and the earlier corrections as you need them, and do not c
 /** What the plain arm's builder reads when the feedback writer found nothing wrong. */
 const RIGHT_WORDS = 'Right: the person checked this work and found nothing wrong.';
 /** The version of the feedback writer's judge: a new prompt writes every feedback again. */
-const FEEDBACK_VERSION = 'feedback-writer/1';
+const FEEDBACK_VERSION = 'feedback-writer/2';
 const feedbackPrompt = `You write an expert's feedback on one piece of work. The task is in task.md. The work that the agent handed in is in output/. The correct answer, which the agent never sees, is in expected-answer.md. How to write the feedback is in instruction.md.
 Read each file in full. Then write the feedback that instruction.md asks for, about this work only.
-Answer with one JSON object and nothing else: {"correction": "THE FEEDBACK"}, or {"correction": null} when nothing in the work is wrong.`;
+Answer with one JSON object and nothing else: {"correction": "THE FEEDBACK" or null, "checked": WHAT YOU CHECKED}. correction is null when nothing that you checked is wrong. checked is "all" when you checked the whole work against the correct answer, else the part that you checked, in a few words.`;
 const judgePrompt = `You are the judge of one handed-in document. Mark each item of checklist.json for the document in document/.
 First read, in full, every file that read-files.txt lists (the sources the agent read; they are in sources/), the document, and expected-answer.md when it is there. Read each file to its end: use more than one read for a long file.
 For each item, decide whether the document meets it: met, partly, or not_met. Judge only the document; the sources and the expected answer are for checking it.
@@ -811,28 +811,37 @@ function runScript(path: string, input: unknown) {
     child.stdin.end(JSON.stringify(input));
   });
 }
-/** The correction in a feedback writer's answer {"correction": TEXT | null}: the words, null for nothing wrong, or undefined when the answer is not that. */
-function correctionOf(answer: string): string | null | undefined {
+/**
+ * What a feedback writer said: the correction (null when it found nothing wrong in what it checked) and what it checked:
+ * "all" for the whole output, else the part it checked, in words. Undefined when the answer is not
+ * {"correction": TEXT | null, "checked": "all" | TEXT}.
+ */
+export type Feedback = { correction: string | null; checked: string };
+function feedbackOf(answer: string): Feedback | undefined {
   const from = answer.indexOf('{'), to = answer.lastIndexOf('}');
   if (from < 0 || to < from) return undefined;
   let value: any;
   try { value = JSON.parse(answer.slice(from, to + 1)); } catch { return undefined; }
-  if (!value || typeof value !== 'object' || !('correction' in value)) return undefined;
-  if (value.correction === null || typeof value.correction === 'string' && !value.correction.trim()) return null;
-  return typeof value.correction === 'string' ? value.correction.trim() : undefined;
+  if (!value || typeof value !== 'object' || !('correction' in value) || typeof value.checked !== 'string' || !value.checked.trim()) return undefined;
+  const checked = value.checked.trim();
+  if (value.correction === null || typeof value.correction === 'string' && !value.correction.trim()) return { correction: null, checked };
+  return typeof value.correction === 'string' ? { correction: value.correction.trim(), checked } : undefined;
 }
+/** Whether a writer checked the whole output, so that "nothing wrong" means the work is right. */
+const checkedAll = (feedback: Feedback) => /^all$/i.test(feedback.checked);
 export const feedbackWriting = {
   /**
    * Write the correction for one training run: the writer reads the input, the arm's own output (null when it handed in
-   * nothing) and the hidden expected answer, and nothing about the arm. Returns the words, or null when nothing is wrong.
-   * A judge works in a folder whose path names no arm, with one retry when its answer is not the JSON it asks for.
+   * nothing) and the hidden expected answer, and nothing about the arm. Returns the correction (null when nothing is
+   * wrong in what it checked) and what it checked ("all", or the part). A judge works in a folder whose path names no
+   * arm, with one retry when its answer is not the JSON it asks for.
    */
-  async write(writer: Writer & { expected: unknown; work: string }, request: { input: { id: string; value: unknown }; task: string; output: string | null; outputName: string }): Promise<string | null> {
+  async write(writer: Writer & { expected: unknown; work: string }, request: { input: { id: string; value: unknown }; task: string; output: string | null; outputName: string }): Promise<Feedback> {
     if (writer.code) {
       const result = await runScript(writer.code, { input: request.input.id, values: request.input.value, output: request.output, expected: writer.expected });
-      const correction = result.code === 0 ? correctionOf(result.stdout) : undefined;
-      if (correction === undefined) throw Error(`The feedback writer ${writer.name} (${basename(writer.code)}) gave no correction for ${request.input.id}${result.stderr.trim() ? `: ${result.stderr.trim().split('\n').at(-1)}` : '; it must print {"correction": TEXT} or {"correction": null}'}.`);
-      return correction;
+      const feedback = result.code === 0 ? feedbackOf(result.stdout) : undefined;
+      if (feedback === undefined) throw Error(`The feedback writer ${writer.name} (${basename(writer.code)}) gave no correction for ${request.input.id}${result.stderr.trim() ? `: ${result.stderr.trim().split('\n').at(-1)}` : '; it must print {"correction": TEXT or null, "checked": "all" or what it checked}'}.`);
+      return feedback;
     }
     mkdirSync(writer.work, { recursive: true, mode: 0o700 });
     const work = mkdtempSync(join(writer.work, 'w-')), room = join(work, 'room');
@@ -849,10 +858,10 @@ export const feedbackWriting = {
         const result: any = await runMethod(writer.method!, { allow_local_processes: true }, { runDir: join(work, `run-${attempt + 1}`), inputs: { room }, fresh: true });
         if (result.status !== 'completed') throw Error(`The feedback writer ${writer.name} did not finish: ${result.failure?.headline ?? result.status}.`);
         last = String(result.result?.final_text ?? '');
-        const correction = correctionOf(last);
-        if (correction !== undefined) return correction;
+        const feedback = feedbackOf(last);
+        if (feedback !== undefined) return feedback;
       }
-      throw Error(`The feedback writer ${writer.name} did not answer {"correction": TEXT} or {"correction": null}: ${last.slice(0, 300)}`);
+      throw Error(`The feedback writer ${writer.name} did not answer {"correction": TEXT or null, "checked": "all" or what it checked}: ${last.slice(0, 300)}`);
     } finally { rmSync(work, { recursive: true, force: true }); }
   },
 };
@@ -1029,11 +1038,11 @@ const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => 
  * was_right: the feedback writer found nothing wrong, and the arm was told its output was right (received).
  * not_run: the training run failed. not_given: an earlier event of the learner is missing. given: a new input.
  */
-export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'not_run' | 'not_given' | 'given';
+export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'not_run' | 'not_given' | 'given';
 /** Whether an outcome changed the agent: Method's fix applied a tested change, or the builder edited the instructions. */
 export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited';
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
-  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
+  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
 type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
@@ -1128,17 +1137,19 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
     // The arm's own output of this training run: the file it handed in beside its Method, or its result.
     let output: string | null = null;
     try { output = event.input.deliverable ? readFileSync(join(learner.dir, event.input.deliverable), 'utf8') : outputText(JSON.parse(readFileSync(join(runDir, 'result.json'), 'utf8'))); } catch { /* handed in nothing */ }
-    let written: string | null;
+    let written: Feedback;
     try { written = await feedbackWriting.write(event.feedback, { input: event.input, task: taskPrompt(event.input.value, event.input.deliverable), output, outputName: event.input.deliverable ? basename(event.input.deliverable) : 'output.md' }); }
     catch (error) { return { received: false, outcome: 'stopped', run_id: runId, reason: 'the feedback writer gave no correction', detail: (error as Error).message }; }
-    if (written === null) {
+    // Nothing wrong in one part says nothing about the rest: the arm gets no feedback, and Method keeps no approved run.
+    if (written.correction === null && !checkedAll(written)) return { received: true, outcome: 'no_feedback', run_id: runId, text: `No feedback (the writer checked ${written.checked} and found nothing wrong).`, tokens: null };
+    if (written.correction === null) {
       const right = await command(['judge', runId, 'right', '--json'], env);
       let id: string | undefined;
       try { id = JSON.parse(right.stdout)?.judgment?.id; } catch { /* below */ }
       if (!id) return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method could not take the verdict right', detail: `method judge failed: ${right.stderr.trim() || right.stdout.trim()}` };
       return { received: true, outcome: 'was_right', run_id: runId, judgment_id: id, text: 'right', tokens: null };
     }
-    text = written;
+    text = written.correction;
   }
   const judged = await command(['judge', runId, 'wrong', '--note', text, '--json'], env);
   let judgment: any;
@@ -1278,11 +1289,13 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
   // A feedback writer writes the correction from this output; nothing wrong means the builder reads that it is right.
   let text: string = event.text, right = false;
   if (event.feedback) {
-    let written: string | null;
+    let written: Feedback;
     try { written = await feedbackWriting.write(event.feedback, { input: event.input, task: taskPrompt(event.input.value, event.input.deliverable), output: wrong, outputName: event.input.deliverable ? basename(event.input.deliverable) : 'output.md' }); }
     catch (error) { return { received: false, outcome: 'stopped', reason: 'the feedback writer gave no correction', detail: (error as Error).message }; }
-    right = written === null;
-    text = written ?? RIGHT_WORDS;
+    // Nothing wrong in one part: the builder gets nothing, as the Method arm does.
+    if (written.correction === null && !checkedAll(written)) return { received: true, outcome: 'no_feedback', text: `No feedback (the writer checked ${written.checked} and found nothing wrong).`, instructions, tokens: tokensOfRun(train) };
+    right = written.correction === null;
+    text = written.correction ?? RIGHT_WORDS;
   }
   const room = join(workDir, 'builder-room');
   mkdirSync(join(room, 'wrong-output'), { recursive: true, mode: 0o700 });
@@ -1474,7 +1487,7 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
   return { models: [...new Set(own.flatMap(r => r.models ?? []))].map(modelName).slice(0, 10), lines, corrections: list, details };
 }
 /** The outcomes that the account shows; a correction that ended otherwise is named in its line's missing. */
-const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right']);
+const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right', 'no_feedback']);
 /** What each arm received, as the account takes it: each correction with {index, input, text, outcome, learner}. */
 function accountReceived(received: Record<string, ReturnType<typeof receivedOf>>) {
   return Object.fromEntries(Object.entries(received).map(([arm, r]) => [arm, { models: r.models, lines: r.lines.map(l => ({ ...l, missing: l.missing.map(m => m.slice(0, 500)) })),
