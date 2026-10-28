@@ -76,7 +76,8 @@ const unreachable = (error: any) => error?.code === 'network' || error?.code ===
 /**
  * Before a run, a fix or a publish of a Method file: bring the file to the newest version of its Method. base is the
  * version this computer last saved or got, ours the file, theirs the newest version. An unchanged file takes theirs;
- * a changed one combines step by step and file by file (an empty base when this computer has none). A part that both
+ * a changed one combines step by step and file by file (when this computer has none, the base is the saved version
+ * nearest to the file). A part that both
  * sides changed in different ways is a conflict: nothing changes, and the result has both texts. Offline, the file
  * runs as it is. Signed out, a file with no id: line, or a Method with no version yet: nothing.
  */
@@ -115,8 +116,29 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
     try { const saved = await client.request<Saved>(`${methodPath}?version=${encodeURIComponent(baseId)}`, 'GET', undefined, true, options); base = { workflow: saved.workflow, files: saved.package?.files ?? [] }; }
     catch (error) { if (unreachable(error)) return { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` }; base = { workflow: record.workflow ?? {}, files: [] }; }
   }
-  const { mergeMethod, mergeFiles, changedSteps } = await import('./merge.js');
+  const { mergeMethod, mergeFiles, changedSteps, changedParts } = await import('./merge.js');
   const { currentFormat } = await import('./legacy.js');
+  const fileChanges = (from: Array<{ path: string; sha256: string }>, to: Array<{ path: string; sha256: string }>) => [...new Set([...from, ...to].map(f => f.path))].filter(at => from.find(f => f.path === at)?.sha256 !== to.find(f => f.path === at)?.sha256);
+  // This computer never saved or got a version of the Method (a clone, or a file that a run with another cache saved):
+  // the base is the saved version nearest to the file, the one with the fewest parts and files that differ from it.
+  if (!record?.version_id) {
+    try {
+      const { versions } = await client.request<{ versions: Array<{ id: string }> }>(`/api/workspace/methods/${encodeURIComponent(id)}/versions`, 'GET', undefined, true, { signal: AbortSignal.timeout(5000), stallMs: 5000 });
+      let nearest: { workflow: any; files: Array<{ path: string; sha256: string }>; distance: number } | undefined;
+      // Newest first, eight at a time; on a tie the newer version is the base.
+      for (let index = 0; index < versions.length && nearest?.distance !== 0; index += 8) {
+        const saved = await Promise.all(versions.slice(index, index + 8).map(v => v.id === theirs.version_id ? theirs
+          : client.request<Saved>(`${methodPath}?version=${encodeURIComponent(v.id)}`, 'GET', undefined, true, { signal: AbortSignal.timeout(5000), stallMs: 5000 })));
+        for (const v of saved) {
+          const workflow = currentFormat(v.workflow), files = v.package?.files ?? [];
+          const distance = changedParts(workflow, ours.workflow).length + fileChanges(files, ours.files).length;
+          if (!nearest || distance < nearest.distance) nearest = { workflow: v.workflow, files, distance };
+        }
+      }
+      if (nearest) base = nearest;
+    }
+    catch (error) { if (unreachable(error)) return { status: 'offline', line: `Could not check for a newer version; ${doing} this file.` }; }
+  }
   const theirFiles = theirs.package?.files ?? [];
   const steps = mergeMethod(currentFormat(base.workflow), ours.workflow, currentFormat(theirs.workflow)), files = mergeFiles(base.files, ours.files, theirFiles);
   const ourHashes = new Map(ours.files.map(f => [f.path, f.sha256]));
@@ -176,11 +198,12 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   }
   if (!isDeepStrictEqual(steps.workflow, ours.workflow)) (await import('./proposals.js')).writeMethodFile(path, id, steps.workflow);
   (await import('./legacy.js')).convertLegacy(path);
-  const fileChanges = (from: Array<{ path: string; sha256: string }>, to: Array<{ path: string; sha256: string }>) => [...new Set([...from, ...to].map(f => f.path))].filter(at => from.find(f => f.path === at)?.sha256 !== to.find(f => f.path === at)?.sha256);
   const yours = parts(changedSteps(base.workflow, ours.workflow), fileChanges(base.files, ours.files));
   const kept = !isDeepStrictEqual(ours.workflow, base.workflow) || fileChanges(base.files, ours.files).length > 0;
   // theirs is the parent of the next save; a side version of this computer that the file now combines goes with it.
   recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy, ...(kept && (record?.side_version_id ?? beside) ? { merged_version_id: (record?.side_version_id ?? beside)! } : {}) });
+  // The base is the newest version itself: nothing came in.
+  if (!changedParts(currentFormat(base.workflow), currentFormat(theirs.workflow)).length && !fileChanges(base.files, theirFiles).length) return { status: 'current' };
   const changed = parts(changedSteps(base.workflow, theirs.workflow), fileChanges(base.files, theirFiles));
   return { status: 'updated', line: `Updated to ${savedBy ? `${savedBy}'s` : 'the newest'} version${clock(theirs.saved_at)}${changed ? ` (changed ${changed})` : ''}.${kept ? ` Your changes${yours ? ` to ${yours}` : ''} are kept.` : ''}` };
 }

@@ -56,6 +56,8 @@ function setup() {
       const id = address.searchParams.get('version') ?? server.current.get(method[1]!), v = id ? server.versions.get(id) : undefined;
       return v ? Response.json(answer(v, id!)) : Response.json({ message: 'Method not found.' }, { status: 404 });
     }
+    const history = /^\/api\/workspace\/methods\/([^/]+)\/versions$/.exec(path);
+    if (history) return Response.json({ versions: [...server.versions].filter(([, v]) => v.method_id === history[1]).sort(([, x], [, y]) => y.number - x.number).map(([id, v]) => ({ id, version_number: v.number })) });
     if (/^\/api\/cli\/methods\/[^/]+\/judgments$/.test(path)) return Response.json({ judgments: [] });
     if (/^\/api\/cli\/methods\/[^/]+\/state$/.test(path)) return Response.json({ enabled: false });
     if (/^\/api\/cli\/methods\/[^/]+\/bindings$/.test(path)) return Response.json({});
@@ -136,6 +138,38 @@ it('combines changes of different steps and different script files, and the next
   await s.grainne.run();
   expect(readFileSync(s.grainne.file, 'utf8')).toBe(readFileSync(s.ryan.file, 'utf8'));
   expect(readFileSync(join(s.grainne.folder, 'second.mjs'), 'utf8')).toBe(readFileSync(join(s.ryan.folder, 'second.mjs'), 'utf8'));
+}, 60_000);
+
+/** This computer forgets every version it saved or got, as when a run with another cache saved the file. */
+const forget = (s: { root: string }, name: string) => rmSync(join(s.root, name, 'cache', 'versions'), { recursive: true, force: true });
+
+it('a file of the newest version with no record on this computer keeps its changes and does not stop', async () => {
+  const s = await shared();
+  s.grainne.edit(doc => { doc.steps.first.purpose = 'Gráinne: returns the first text.'; });
+  await s.grainne.run();
+  const hers = s.server.current.get(s.id)!;
+  await s.ryan.run();
+  forget(s, 'ryan');
+  s.ryan.edit(doc => { doc.steps.second.purpose = 'Ryan: returns the second text.'; });
+  s.ryan.script('second.mjs', 'b', 'B from Ryan');
+  const { summary } = await s.ryan.run();
+  expect(process.exitCode).toBeFalsy();
+  expect(s.text()).not.toContain('Updated to');
+  expect(summary).toMatchObject({ status: 'completed', result: { a: 'A', b: 'B from Ryan' } });
+  expect(s.server.versions.get(s.server.current.get(s.id)!)).toMatchObject({ parent: hers, saved_by: 'Ryan' });
+}, 60_000);
+
+it('an older copy with no record on this computer takes the newer parts and keeps its own changes', async () => {
+  const s = await shared();
+  s.grainne.edit(doc => { doc.steps.first.purpose = 'Gráinne: returns the first text.'; });
+  s.grainne.script('first.mjs', 'a', 'A from Gráinne');
+  await s.grainne.run();
+  s.ryan.use(); forget(s, 'ryan');
+  s.ryan.edit(doc => { doc.steps.second.purpose = 'Ryan: returns the second text.'; });
+  const { summary } = await s.ryan.run();
+  expect(s.text()).toMatch(/Updated to Gráinne's version from \d\d:\d\d \(changed step first and file first\.mjs\)\. Your changes to step second are kept\./);
+  expect(summary).toMatchObject({ status: 'completed', result: { a: 'A from Gráinne', b: 'B' } });
+  expect([purpose(s.ryan.file, 'first'), purpose(s.ryan.file, 'second')]).toEqual(['Gráinne: returns the first text.', 'Ryan: returns the second text.']);
 }, 60_000);
 
 it('the same step changed on both sides: no run, no file change, both texts in the result, exit code 2', async () => {
@@ -246,9 +280,9 @@ it('the save race: a save beside a newer version says so, and the next run combi
   expect(methodContent(readDocument(s.ryan.file)).steps).toMatchObject({ first: { purpose: 'Gráinne: returns the first text.' }, second: { purpose: 'Ryan: returns the second text.' } });
 }, 60_000);
 
-it('a file that came without method get combines with an empty base', async () => {
+it('a file that came without method get combines on the saved version nearest to it', async () => {
   const s = await shared();
-  // Ryan adds a step and saves. Gráinne's copy has no record of a version on her computer.
+  // Ryan adds a step and saves. Gráinne's copy has no record of a version on her computer: its base is version 1.
   s.ryan.use(); s.ryan.edit(doc => { doc.steps.third = step('third.mjs', 'c'); doc.result.c = 'c'; }); s.ryan.script('third.mjs', 'c', 'C');
   await s.ryan.run();
   s.grainne.use(); rmSync(join(s.root, 'gráinne', 'cache', 'versions'), { recursive: true, force: true });

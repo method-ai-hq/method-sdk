@@ -65,6 +65,11 @@ export function mergeFiles<T extends PackageFile>(base: T[], ours: T[], theirs: 
   return { clean: !conflicts.length, files, conflicts };
 }
 
+/** The parts that differ between two documents, as mergeMethod divides them: each top-level key and each step. */
+export function changedParts(before: any, after: any) {
+  const keys = [...new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})])].filter(key => key !== 'steps' && !isDeepStrictEqual(before?.[key], after?.[key]));
+  return [...keys, ...changedSteps(before, after).map(id => `steps.${id}`)];
+}
 /** The steps whose definition differs between two documents. */
 export function changedSteps(before: any, after: any) {
   return [...new Set([...Object.keys(before?.steps ?? {}), ...Object.keys(after?.steps ?? {})])].filter(id => !isDeepStrictEqual(before?.steps?.[id], after?.steps?.[id]));
