@@ -7,7 +7,9 @@
  * every arm, and no web unless the comparison tests the tools. The chat works in a copy of the project in a folder of
  * its own outside every repository and the comparison's folder, as a person's own project is: Claude Code reads no
  * instructions of the folders around the comparison (CLAUDE.md, AGENTS.md), keys its memory by that folder, and the
- * agent finds no hidden answers beside it. The account's cloud plugins and skills are not synced into the room. A project with the Method plugin also gets the plugin
+ * agent finds no hidden answers beside it. The Method cache of a project with the Method plugin is copied beside it.
+ * Other chats cannot be found from it: the folder that holds every project's folder, and each room, cannot be listed.
+ * The account's cloud plugins and skills are not synced into the room. A project with the Method plugin also gets the plugin
  * (loaded with --plugin-dir, as Claude Code loads a plugin for one session) and the method CLI on PATH, signed in to the
  * comparison's Method account. A project without it has no plugin and no method command on PATH.
  */
@@ -104,8 +106,11 @@ const projectSlug = (path: string) => path.replace(/[^a-zA-Z0-9]/g, '-');
  * project (so paths that the agent writes down still hold), outside every repository and the comparison's folder.
  */
 export function projectDesk(project: string) {
-  const root = realpathSync(process.platform === 'win32' ? tmpdir() : '/tmp');
-  return join(root, 'method-projects', createHash('sha256').update(resolve(project)).digest('hex').slice(0, 16), 'project');
+  const root = join(realpathSync(process.platform === 'win32' ? tmpdir() : '/tmp'), 'method-projects');
+  mkdirSync(root, { recursive: true });
+  // It can be entered but not listed, so a chat does not find the folders of other chats.
+  chmodSync(root, 0o300);
+  return join(root, createHash('sha256').update(resolve(project)).digest('hex').slice(0, 16), 'project');
 }
 /**
  * Open one chat in a project folder. Each send is one message of the same chat (the first starts it, the next resume
@@ -119,13 +124,18 @@ export async function openChat(project: string, settings: ChatSettings, artifact
   const { cleanRoomEnv } = await import('@withmethod/runtime/clean-room.js');
   const { claudeTranscript } = await import('@withmethod/runtime/transcript.js');
   const room = await cleanRoomEnv('claude', process.env);
+  // The room can be entered but not listed, so a chat that searches the temporary folder finds no other chat's room.
+  chmodSync(room.root, 0o300);
   const claude = findProgram('claude', process.env.PATH ?? '');
   // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the account's cloud plugins and skills are not synced into the room.
   const env: NodeJS.ProcessEnv = { ...room.env, PATH: pathWithoutMethod(process.env.PATH ?? '', room.root), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
   // The chat works in the project's desk; after each message the desk is copied back to the project.
   const desk = projectDesk(project);
   copyTree(project, desk);
-  const keep = () => copyTree(desk, project);
+  // A project with the Method plugin: its Method cache is beside the desk, so no path in the chat names the comparison's folder.
+  const deskCache = settings.method ? join(dirname(desk), 'cache') : null;
+  if (settings.method && deskCache) copyTree(settings.method.cache, deskCache);
+  const keep = () => { copyTree(desk, project); if (settings.method && deskCache) copyTree(deskCache, settings.method.cache); };
   // The memory folder of this project (by its path, and by its real path when they differ).
   let real = desk;
   try { real = realpathSync(desk); } catch { /* the path itself */ }
@@ -143,7 +153,7 @@ export async function openChat(project: string, settings: ChatSettings, artifact
     const plugin = join(room.root, 'plugins', 'method');
     cpSync(methodPluginFolder(), plugin, { recursive: true });
     pluginArgs.push('--plugin-dir', plugin);
-    Object.assign(env, { PATH: `${bin}${delimiter}${env.PATH}`, METHOD_CONFIG_DIR: m.config, METHOD_CACHE_DIR: m.cache,
+    Object.assign(env, { PATH: `${bin}${delimiter}${env.PATH}`, METHOD_CONFIG_DIR: m.config, METHOD_CACHE_DIR: deskCache!,
       // The plugin's start hook installs the method CLI when it finds none; here it is installed, and nothing is downloaded.
       METHOD_INSTALL_URL: 'file:///dev/null',
       ...(settings.web ? {} : { METHOD_WEB: 'off' }), ...(m.account ? { METHOD_ACCOUNT: m.account } : {}), ...(m.server ? { METHOD_SERVER: m.server } : {}) });
@@ -187,7 +197,7 @@ export async function openChat(project: string, settings: ChatSettings, artifact
   };
   const close = async () => {
     try {
-      if (settings.method) await waitForFixes(settings.method.cache);
+      if (deskCache) await waitForFixes(deskCache);
       keep();
       if (memory) {
         // The memory that Claude Code kept for this project: the folder it named, else its folder for the desk (of
@@ -202,7 +212,7 @@ export async function openChat(project: string, settings: ChatSettings, artifact
           .filter(dir => existsSync(dir) && ![own, ...memoryFolders].some(o => o && resolve(o) === resolve(dir)) && Object.keys(projectFiles(dir)).length) : [];
         for (const dir of others) cpSync(dir, memory, { recursive: true, force: false, errorOnExist: false });
       }
-    } finally { await room.remove(); removeTree(dirname(desk)); }
+    } finally { chmodSync(room.root, 0o700); await room.remove(); removeTree(dirname(desk)); }
   };
   return { send, close };
 }

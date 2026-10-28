@@ -76,7 +76,8 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   const hasMethod = (process.env.PATH || '').split(':').some(dir => fs.existsSync(path.join(dir, 'method')));
   fs.appendFileSync(${JSON.stringify(join(root, 'claude-calls.jsonl'))}, JSON.stringify({ args: argv, prompt, cwd, files: fs.readdirSync(cwd, { recursive: true }).sort(), home: process.env.HOME,
     hasMethod, config: process.env.METHOD_CONFIG_DIR || null, memory: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY || null,
-    traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC || null, instructions: above(cwd).filter(d => fs.existsSync(path.join(d, 'AGENTS.md'))) }) + '\\n');
+    traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC || null, cache: process.env.METHOD_CACHE_DIR || null,
+    listed: [path.dirname(path.dirname(cwd)), path.dirname(process.env.HOME)].filter(dir => { try { fs.readdirSync(dir); return true; } catch { return false; } }), instructions: above(cwd).filter(d => fs.existsSync(path.join(d, 'AGENTS.md'))) }) + '\\n');
   const repo = above(cwd).find(d => fs.existsSync(path.join(d, '.git'))) || cwd;
   const memoryDir = path.join(process.env.HOME, '.claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'), 'memory');
   out({ type: 'system', subtype: 'init', model: argv[argv.indexOf('--model') + 1], memory_paths: { auto: memoryDir + '/' } });
@@ -146,6 +147,11 @@ it('each event is a new chat in the project folder: the task, then the correctio
     expect([root, realpathSync(root)].some(r => first.cwd.startsWith(r))).toBe(false);
     expect(first.instructions).toEqual([]);
     expect(first.traffic).toBe('1');
+    // No other chat can be found from it: the folder of all projects and its room cannot be listed, and its Method
+    // cache is beside its folder, not in the comparison's folder.
+    expect(first.listed).toEqual([]);
+    expect(first.cache === null).toBe(arm === 'plain');
+    if (first.cache) expect([root, realpathSync(root)].some(r => first.cache.startsWith(r))).toBe(false);
     expect(first.args[first.args.indexOf('--model') + 1]).toBe('claude-opus-5-5');
     expect(first.args[first.args.indexOf('--disallowedTools') + 1]).toBe('WebSearch,WebFetch');
     expect(first.args[first.args.indexOf('--allowedTools') + 1]).toContain('Bash');
