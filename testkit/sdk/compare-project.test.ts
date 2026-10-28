@@ -76,7 +76,8 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   const hasMethod = (process.env.PATH || '').split(':').some(dir => fs.existsSync(path.join(dir, 'method')));
   fs.appendFileSync(${JSON.stringify(join(root, 'claude-calls.jsonl'))}, JSON.stringify({ args: argv, prompt, cwd, files: fs.readdirSync(cwd, { recursive: true }).sort(), home: process.env.HOME,
     hasMethod, config: process.env.METHOD_CONFIG_DIR || null, memory: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY || null,
-    traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC || null, cache: process.env.METHOD_CACHE_DIR || null,
+    traffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC || null,
+    methodId: (() => { try { return JSON.parse(fs.readFileSync(path.join(cwd, 'review.method'), 'utf8')).id; } catch { return null; } })(), cache: process.env.METHOD_CACHE_DIR || null,
     listed: [path.dirname(path.dirname(cwd)), path.dirname(process.env.HOME)].filter(dir => { try { fs.readdirSync(dir); return true; } catch { return false; } }), instructions: above(cwd).filter(d => fs.existsSync(path.join(d, 'AGENTS.md'))) }) + '\\n');
   const repo = above(cwd).find(d => fs.existsSync(path.join(d, '.git'))) || cwd;
   const memoryDir = path.join(process.env.HOME, '.claude', 'projects', repo.replace(/[^a-zA-Z0-9]/g, '-'), 'memory');
@@ -90,7 +91,7 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   else if (argv.includes('--resume')) {
     if (!prompt.startsWith("That's right")) { fs.mkdirSync(path.dirname(notes), { recursive: true }); fs.appendFileSync(notes, prompt + '\\n'); }
     if (hasMethod) {
-      fs.writeFileSync(path.join(cwd, 'review.method'), 'name: Review\\n');
+      if (!fs.existsSync(path.join(cwd, 'review.method'))) fs.writeFileSync(path.join(cwd, 'review.method'), JSON.stringify({ format: 'method/3.4', id: 'wf_' + 'b'.repeat(32), name: 'Review' }) + '\\n');
       out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'method judge run_1 wrong --note "' + prompt.slice(0, 20) + '"' } }] } });
       out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'ok' }] } });
     }
@@ -214,6 +215,15 @@ it('a checkpoint is measured in fresh copies of the project: one new chat per ch
   expect(runs[0].transcript).toBeTruthy();
   expect(runs[2].did).toMatchObject({ added: [], changed: [] });
   expect(runs[0].models).toEqual(['claude-opus-5-5']);
+  // A Method-arm copy at a checkpoint runs its Method under a new ID of its own, so it cannot catch up to versions that
+  // the learner saved later under the learner's ID, and nothing it saves reaches the learner's Method.
+  const methodCell = ((await compareStage('plan', { comparison, go: true, treated })).cells as string[]).map(c => JSON.parse(c)).find((c: any) => c.arm === 'method' && c.checkpoint === 2);
+  const before = calls().length;
+  await compareStage('cell', { cell: JSON.stringify(methodCell) });
+  const seen = calls().slice(before).map(c => c.methodId);
+  expect(seen[0]).toMatch(/^wf_[0-9a-f]{32}$/);
+  expect(seen[0]).not.toBe('wf_' + 'b'.repeat(32));
+  expect(readFileSync(join(methodCell.copy.dir, 'review.method'), 'utf8')).toContain('wf_' + 'b'.repeat(32));
 }, 600_000);
 
 it('runs a comparison of two projects from the trial to the answer', async () => {

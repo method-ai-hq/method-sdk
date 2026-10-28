@@ -28,7 +28,7 @@ import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS } from './learner.js';
 import { textDiff } from './text-diff.js';
-import { RIGHT_MESSAGE, copyTree, didSummary, fillMessage, handedIn as handedInFile, keptSomething, methodPluginFolder, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
+import { RIGHT_MESSAGE, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, methodPluginFolder, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
 import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
 
@@ -1519,6 +1519,7 @@ async function freezeProject(arm: any, learner: { project: string; cache: string
     if (!existsSync(answer)) {
       const work = join(dir, 'probe');
       for (const part of ['project', 'cache', 'memory']) copyTree(join(dir, part), join(work, part));
+      ownMethodIds(join(work, 'project'));
       const chat = await openChat(join(work, 'project'), chatSettings(arm.project, join(work, 'cache'), plan.folder), join(work, 'artifacts'), join(work, 'memory'));
       let reply: string;
       try { reply = (await chat.send(arm.project.probe)).reply; } finally { await chat.close(); }
@@ -1942,6 +1943,8 @@ async function runCell(cell: Cell) {
       // with the input's folders put in: measuring never changes the learner's project.
       const work = join(runDir, 'folders', 'project'), cache = join(runDir, 'cache'), memory = join(runDir, 'memory');
       copyTree(cell.copy!.dir, work); copyTree(cell.copy!.cache ?? join(runDir, 'no-cache'), cache); copyTree(cell.copy!.memory ?? join(runDir, 'no-memory'), memory);
+      // Its Methods run as they were at the checkpoint, not as the learner saved them later.
+      ownMethodIds(work);
       placeInput(work, cell.input, cell.input.deliverable);
       folders = { project: work };
       request = JSON.stringify({ project: work, memory, deliverable: cell.input.deliverable, settings: chatSettings(cell.project, cache, cell.folder),

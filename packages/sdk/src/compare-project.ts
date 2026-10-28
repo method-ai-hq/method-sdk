@@ -20,6 +20,8 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { textDiff } from './text-diff.js';
+import { readDocument } from './authoring.js';
+import { methodIdPattern, newMethodId, writeMethodId } from './versions.js';
 
 /** The plugins that a project arm can have. method: Method's own plugin (its skill and hooks, and the method CLI). */
 export const projectPlugins = ['method'] as const;
@@ -215,6 +217,28 @@ export async function openChat(project: string, settings: ChatSettings, artifact
     } finally { chmodSync(room.root, 0o700); await room.remove(); removeTree(dirname(desk)); }
   };
   return { send, close };
+}
+
+/**
+ * Give every Method in a copy of a project a new Method ID of its own. A measuring or probe copy then runs each Method
+ * as it was at its checkpoint: it does not catch up to newer versions that the learner saved later under the same ID,
+ * and nothing that the copy saves reaches the learner's Method.
+ */
+export function ownMethodIds(project: string) {
+  const walk = (dir: string) => {
+    let entries: import('node:fs').Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory() && !['.method-runs', 'node_modules', '.git'].includes(entry.name)) walk(path);
+      else if (entry.isFile() && entry.name.endsWith('.method')) {
+        let id: unknown;
+        try { id = readDocument(path).id; } catch { continue; }
+        if (typeof id === 'string' && methodIdPattern.test(id)) writeMethodId(path, newMethodId());
+      }
+    }
+  };
+  walk(project);
 }
 
 /** Wait until no Method fix in a Method cache still runs (its lock names a live process), for at most MESSAGE_LIMIT_MS. */
