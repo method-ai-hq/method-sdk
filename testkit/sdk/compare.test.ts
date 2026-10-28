@@ -276,6 +276,22 @@ it('runs a plain arm as one session in a clean room with the same task prompt an
   expect(question(root, 'first')).toContain('Noise at the start: two learners of the same arm differ by up to 0 on size');
 }, 600_000);
 
+it('a Method arm whose agent is one session step runs in a room with its agent\'s sign-in, and hands in the file that the session wrote', async () => {
+  const { root, file } = plainFixture({ runs: 2 });
+  const armFile = join(root, 'a', 'agent.method');
+  writeFileSync(armFile, JSON.stringify({ format: 'method/3.4', name: 'Agent a', goal: 'Answer with a number in a file.',
+    inputs: { n: { type: 'number' } }, environment: { work: { type: 'files', description: 'Where the answer goes.' }, docs: { type: 'files', description: 'The briefs.' } },
+    steps: { answer: { in: { n: 'inputs.n', room: 'environment.work' }, out: 'session',
+      do: { kind: 'session', agent: 'claude', prompt: 'Input:\n{"n": {{n}}}\n\nHand in your work as the file answer.txt in your working folder.', tools: ['read', 'write'], room: 'room' } } }, result: 'session' }));
+  const claude = claudeStub(root);
+  const comparison = await stagePlan(file);
+  const cell = ((await compareStage('trial_plan', { comparison })).trial_cells as string[]).find(c => JSON.parse(c).arm === 'a')!;
+  const run = JSON.parse((await compareStage('trial_cell', { cell })).trial_run as string);
+  expect(run.handed_in).toBe(true);
+  expect(Number(run.result)).toBe(3 * JSON.parse(cell).input.value.n);
+  expect(claude.calls().filter(c => c.kind === 'task')).toHaveLength(1);
+}, 600_000);
+
 it('a Codex plain arm hands in its file too, and has no web search', async () => {
   const { root, file } = plainFixture({ runs: 2 }, 'codex');
   codexStub(root);
@@ -359,7 +375,8 @@ else if (argv[0] === 'wait') console.log(JSON.stringify({ outcomes: [{ status: '
   const judged = lines(join(root, 'method-calls.jsonl')).filter((c: string[]) => c[0] === 'judge').map((c: string[]) => c.slice(2));
   expect(judged).toEqual([['wrong', '--note', 'The number 10 is wrong.', '--json'], ['right', '--json'], ['wrong', '--note', 'Fixed words.', '--json']]);
   // The plain arm handed in 9 (right: the builder reads that it is right), then 10 (one line more in its instructions).
-  expect(events('plain')).toEqual([['was_right', 'Right: the person checked this work and found nothing wrong.'], ['edited', 'The number 10 is wrong.'], ['edited', 'Fixed words.']]);
+  // The stand-in builder writes every message into the instructions, also "right": that changed the agent, so it is edited.
+  expect(events('plain')).toEqual([['edited', 'Right: the person checked this work and found nothing wrong.'], ['edited', 'The number 10 is wrong.'], ['edited', 'Fixed words.']]);
   expect(claude.built().map(b => [b.correction, b.wrong])).toEqual([['Right: the person checked this work and found nothing wrong.', { 'answer.txt': '9' }],
     ['The number 10 is wrong.', { 'answer.txt': '10' }], ['Fixed words.', { 'answer.txt': '11' }]]);
   // The writer read the input, the arm's output and the hidden answer, and nothing about the arm; the arms never got the answer.
@@ -501,6 +518,8 @@ it('runs counts separate learners: each Method learner has its own Method ID, fo
 }, 600_000);
 
 it('says what happened to each correction for each learner; could not test and a stopped fix are not received, and the trial stops', async () => {
+  // A correction that could not be tested but became a learned rule changed the agent.
+  expect(fixOutcome('could_not_test', true)).toEqual({ received: true, outcome: 'rule_added' });
   expect([fixOutcome('fixed'), fixOutcome('not_reproduced'), fixOutcome('no_fix_found'), fixOutcome('could_not_test'), fixOutcome('question'), fixOutcome(undefined)]).toEqual([
     { received: true, outcome: 'fixed' }, { received: true, outcome: 'no_change_needed' }, { received: true, outcome: 'no_fix_found' },
     { received: false, outcome: 'could_not_test' }, { received: false, outcome: 'question' }, { received: false, outcome: 'stopped' }]);

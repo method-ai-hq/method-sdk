@@ -1,3 +1,12 @@
+# 0.23.3
+
+- **A Method arm whose agent is a session step runs its measured runs.** The clean room of a Method arm gets the sign-in of each session step's agent, not only of call and agent steps.
+- **A run is evidence for a correction only for the same inputs.** The watch after a run judges only the corrections whose case was made from the same inputs, so a correction of another date or party is not reopened and fixed again by runs it does not apply to.
+- **A comparison's training run reuses nothing.** Each training run of a Method learner runs fresh, as a plain arm's does.
+- **A learned rule added without a test counts.** A correction that could not be tested but became a learned rule is received and changed the agent (rule added, not tested).
+- **Plain reasons.** A fix that ended because the step changed after the run, because no fix here took the correction, or because it was given back, says so.
+- **The builder's records.** A builder that edits the instructions after "right" is recorded as edited; corrections that gave no feedback stay out of its log.
+
 # 0.23.2
 
 Use runtime 0.16.8.

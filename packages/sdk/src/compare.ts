@@ -1039,11 +1039,11 @@ const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => 
  * was_right: the feedback writer found nothing wrong, and the arm was told its output was right (received).
  * not_run: the training run failed. not_given: an earlier event of the learner is missing. given: a new input.
  */
-export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'not_run' | 'not_given' | 'given';
+export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'rule_added' | 'not_run' | 'not_given' | 'given';
 /** Whether an outcome changed the agent: Method's fix applied a tested change, or the builder edited the instructions. */
-export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited';
+export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited' || outcome === 'rule_added';
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
-  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
+  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', rule_added: 'learned rule added, not tested', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
 type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; reason?: string; detail?: string;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
@@ -1124,7 +1124,8 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   removeFolder(workDir);
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
   writePrivateJson(join(workDir, 'inputs.json'), event.input.value);
-  const run = await command(['run', join(learner.dir, learner.file), '--inputs', join(workDir, 'inputs.json'), '--run-dir', runDir], env);
+  // A training run reuses nothing: its output is this learner's work now, as a plain arm's training run is.
+  const run = await command(['run', join(learner.dir, learner.file), '--inputs', join(workDir, 'inputs.json'), '--run-dir', runDir, '--fresh'], env);
   let summary: any = {};
   try { summary = JSON.parse(readFileSync(join(runDir, 'summary.json'), 'utf8')); } catch { /* the run did not start */ }
   if (summary.status !== 'completed') return { received: false, outcome: 'not_run', reason: 'the training run did not finish',
@@ -1160,9 +1161,17 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   return { ...await waitForFix(runId, id, env, file), text };
 }
 
+/** Why a fix ended without an outcome for this correction, in words, by the loop's outcome. */
+const stoppedWhy: Record<string, string> = {
+  already_changed: 'The step that this correction is about changed after its training run, so Method did not fix it',
+  elsewhere: 'No fix on this computer took this correction',
+  retry: 'Method gave this correction back to fix it again on the changed agent, and no later fix took it',
+};
 /** A fix's outcome in the comparison's words, and whether the correction counts as received. */
-export function fixOutcome(outcome: string | undefined): { received: boolean; outcome: CorrectionOutcome } {
+export function fixOutcome(outcome: string | undefined, ruleAdded = false): { received: boolean; outcome: CorrectionOutcome } {
   if (outcome === 'fixed') return { received: true, outcome: 'fixed' };
+  // A correction that could not be tested but became a learned rule changed the agent.
+  if (outcome === 'could_not_test' && ruleAdded) return { received: true, outcome: 'rule_added' };
   if (outcome === 'not_reproduced') return { received: true, outcome: 'no_change_needed' };
   if (outcome === 'no_fix_found' || outcome === 'not_fixable_here') return { received: true, outcome: 'no_fix_found' };
   if (outcome === 'could_not_test') return { received: false, outcome: 'could_not_test' };
@@ -1183,6 +1192,8 @@ async function armRoom(file: string, cacheDir: string, fix: boolean, folders: Re
   const method = readDocument(file);
   const models = Object.values(method.steps ?? {}).flatMap((step: any) => [step.do, step.check]).filter((exec: any) => ['call', 'agent'].includes(exec?.kind));
   const agents = new Set<string>(Object.values(methodProfiles(method)).map((profile: any) => profile.backend));
+  // A session step runs its own agent, which needs that agent's sign-in in the room.
+  for (const step of Object.values(method.steps ?? {}) as any[]) if (step.do?.kind === 'session') agents.add(step.do.agent);
   if (fix || models.length) { const local = await localAgent(); if (local) agents.add(local); }
   const room = await cleanRoomEnv([...agents].filter((agent): agent is 'claude' | 'codex' => agent === 'claude' || agent === 'codex'), process.env, { folders });
   Object.assign(room.env, { METHOD_CONFIG_DIR: configRoot(), METHOD_CACHE_DIR: cacheDir, ...(web ? {} : { METHOD_WEB: 'off' }), ...(process.env.METHOD_SERVER ? { METHOD_SERVER: process.env.METHOD_SERVER } : {}),
@@ -1210,10 +1221,10 @@ async function waitForFix(runId: string, id: string, env: NodeJS.ProcessEnv, fil
         if (fixHolds(file, env)) return late;
         continue;
       }
-      const { received, outcome } = fixOutcome(record.outcome?.outcome);
+      const { received, outcome } = fixOutcome(record.outcome?.outcome, record.outcome?.rule_added === true);
       if (outcome === 'question') return { received, outcome, run_id: runId, judgment_id: id, reason: `Method's fix asks a question: ${record.outcome?.question ?? record.lines?.[0] ?? ''}`, detail: `Answer it with method answer ${id} "THE ANSWER", then run the comparison again` };
       if (outcome === 'could_not_test') return { received, outcome, run_id: runId, judgment_id: id, reason: 'Method\'s fix could not test a change', ...(record.outcome?.detail ? { detail: record.outcome.detail } : {}) };
-      if (!received) return { received, outcome, run_id: runId, judgment_id: id, reason: `Method's fix ended ${outcomeWords[outcome]}` };
+      if (!received) return { received, outcome, run_id: runId, judgment_id: id, reason: stoppedWhy[record.outcome?.outcome] ?? `Method's fix ended ${outcomeWords[outcome]}` };
       return { received, outcome, run_id: runId, judgment_id: id, tokens: null };
     }
     // The fix stopped: its error in its own words (a usage limit says so), with the cause for the CLI.
@@ -1315,7 +1326,7 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
   if (built.status !== 'completed') return { received: false, outcome: 'stopped', text, reason: `the ${arm.plain?.agent === 'codex' ? 'Codex' : 'Claude Code'} session that edits the instructions did not finish`, detail: `the builder ended ${built.status}${built.failure?.headline ? `: ${built.failure.headline}` : ''}`, tokens: used };
   const edited = sessionFile(build, built.result, 'instructions.md');
   const next = edited !== null && edited !== instructions ? edited : instructions;
-  return { received: true, outcome: right ? 'was_right' : next !== instructions ? 'edited' : 'not_edited', text, instructions: next, tokens: used };
+  return { received: true, outcome: next !== instructions ? 'edited' : right ? 'was_right' : 'not_edited', text, instructions: next, tokens: used };
 }
 
 /** Copy a folder without its run records. */
@@ -1379,7 +1390,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       let result: Delivered | Built;
       try {
         if (arm.plain) result = event.kind === 'correction' ? await delivery.build(event, arm, instructions, join(base, 'events', String(event.index)), plan,
-          done.filter(e => e.kind === 'correction' && e.received).map(e => ({ index: e.index, input: plan.names?.[e.input] ?? e.input.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, ''), text: e.text ?? plan.events.find((x: any) => x.index === e.index)?.text ?? '' }))) : { received: true, outcome: 'given', instructions };
+          done.filter(e => e.kind === 'correction' && e.received && e.outcome !== 'no_feedback').map(e => ({ index: e.index, input: plan.names?.[e.input] ?? e.input.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, ''), text: e.text ?? plan.events.find((x: any) => x.index === e.index)?.text ?? '' }))) : { received: true, outcome: 'given', instructions };
         else result = await delivery.deliver(event, method!, method!.cache, join(base, 'events', String(event.index)), records.get(key), { web: plan.web, folders: cellFolders(arm, event.input) });
       } catch (error) { result = { received: false, outcome: 'stopped', reason: 'it stopped with an error', detail: (error as Error).message }; }
       const before = records.get(key);
@@ -1488,7 +1499,7 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
   return { models: [...new Set(own.flatMap(r => r.models ?? []))].map(modelName).slice(0, 10), lines, corrections: list, details };
 }
 /** The outcomes that the account shows; a correction that ended otherwise is named in its line's missing. */
-const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right', 'no_feedback']);
+const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right', 'no_feedback', 'rule_added']);
 /** What each arm received, as the account takes it: each correction with {index, input, text, outcome, learner}. */
 function accountReceived(received: Record<string, ReturnType<typeof receivedOf>>) {
   return Object.fromEntries(Object.entries(received).map(([arm, r]) => [arm, { models: r.models, lines: r.lines.map(l => ({ ...l, missing: l.missing.map(m => m.slice(0, 500)) })),

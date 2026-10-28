@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { MethodClient } from './method-client.js';
 import { readDocument } from './authoring.js';
 import { methodIdPattern } from './versions.js';
@@ -8,8 +9,8 @@ import { saveNotice, storedOutcomes } from './fix-outcomes.js';
 import { cameBackLine } from './fix-lines.js';
 import { activeRules, readLearned } from './learned.js';
 
-// Watching fixes: after a normal run, the output that the run already made is judged against the corrections that
-// fixes and learned rules of the last 30 days answered. Nothing runs again. The account gets {held, run_id} per
+// Watching fixes: after a normal run of the same inputs as a correction's case, the output that the run already made
+// is judged against the corrections that fixes and learned rules of the last 30 days answered. Nothing runs again. The account gets {held, run_id} per
 // correction and opens a correction again when its problem came back on 2 runs; the next run of the Method says so.
 
 const watchDays = 30;
@@ -59,6 +60,10 @@ export async function watchRun(client: MethodClient, file: string, runDir: strin
   for (const w of watched) {
     const caseDir = join(dirname(file), 'cases', w.caseId);
     const made = JSON.parse(readFileSync(join(caseDir, 'case.json'), 'utf8'));
+    // A case speaks for runs of its own inputs: a run of other inputs may be right where the corrected rule does not apply.
+    let recorded: any;
+    try { recorded = JSON.parse(readFileSync(join(caseDir, 'recording.json'), 'utf8')).inputs ?? {}; } catch { continue; }
+    if (!isDeepStrictEqual(recorded, outcome.inputs ?? {})) continue;
     let judged: { status: string };
     try { judged = await judge(made.expect ?? [], outcome, caseDir, file); } catch { continue; }
     if (judged.status === 'unverifiable') continue;

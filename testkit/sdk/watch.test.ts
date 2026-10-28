@@ -22,6 +22,8 @@ it('after a run, judges its output against each recently fixed correction, sends
   for (const j of [fixed, old, other]) {
     mkdirSync(join(folder, 'cases', correctionCaseId(j)), { recursive: true });
     writeFileSync(join(folder, 'cases', correctionCaseId(j), 'case.json'), JSON.stringify({ id: correctionCaseId(j), note: 'it is not even redlined', expect: [{ kind: 'rubric', ref: 'result', criteria: [{ id: 'c1', text: 'Redlined.' }] }] }));
+    // The run that each case was made from had no inputs, as the runs below.
+    writeFileSync(join(folder, 'cases', correctionCaseId(j), 'recording.json'), JSON.stringify({ inputs: {} }));
   }
   saveOutcome(METHOD_ID, file, { id: fixed, outcome: 'fixed', summary: 'replies are redlined' });
   saveOutcome(METHOD_ID, file, { id: other, outcome: 'no_fix_found' });
@@ -51,4 +53,10 @@ it('after a run, judges its output against each recently fixed correction, sends
   await watchRun(client, file, join(root, 'run-3'), async () => ({ status: 'pass' }));
   await watchRun(client, file, join(root, 'run-4'), async () => ({ status: 'unverifiable' }));
   expect(calls).toEqual([{ path: `/api/cli/judgments/${fixed}/watch`, verb: 'POST', body: { held: true } }]);
+  // A run of other inputs says nothing about a case of these inputs: the rule may not apply to it.
+  calls.length = 0;
+  const { outcomeOfRun } = await import('@withmethod/runtime/cases.js');
+  vi.mocked(outcomeOfRun).mockResolvedValueOnce({ status: 'completed', result: 'Thanks.', outputs: {}, inputs: { today: '2026-05-01' } } as any);
+  expect(await watchRun(client, file, join(root, 'run-5'), fails)).toEqual([]);
+  expect(calls).toEqual([]);
 });
