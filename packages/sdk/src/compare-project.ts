@@ -3,12 +3,12 @@
  * one project folder. Each piece of work is a new chat in that folder: the first message is the task, the agent works,
  * and a second message in the same chat may correct it. When the chat ends, only the project folder carries over.
  *
- * Every chat runs in a clean room: a fresh HOME with only the Claude Code sign-in, the same model, effort and tools for
+ * Every chat runs in a clean room: a fresh HOME with only the Claude Code sign-in and the learner's Claude Code memory, the same model, effort and tools for
  * every arm, and no web unless the comparison tests the tools. A project with the Method plugin also gets the plugin
  * (loaded with --plugin-dir, as Claude Code loads a plugin for one session) and the method CLI on PATH, signed in to the
  * comparison's Method account. A project without it has no plugin and no method command on PATH.
  */
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -93,19 +93,27 @@ export type ChatSettings = { plugins: ProjectPlugin[]; model: string | null; eff
 /** One message of a chat and what came back: the agent's last words, its transcript entries, and the tokens it reported. */
 export type Turn = { message: string; reply: string; model: string | null; entries: any[]; tokens: number | null; attempt: string };
 
+/** Claude Code's folder for a project in HOME/.claude/projects: the project's path with every other character than a letter or digit as -. */
+const projectSlug = (path: string) => path.replace(/[^a-zA-Z0-9]/g, '-');
 /**
  * Open one chat in a project folder. Each send is one message of the same chat (the first starts it, the next resume
- * it). close() waits for every Method fix that the chat started to end, then removes the room. artifacts: where each
- * message keeps its prompt, events and transcript (session/attempt-N), as a Method session step keeps them.
+ * it). close() waits for every Method fix that the chat started to end, puts Claude Code's memory back, and removes the
+ * room. artifacts: where each message keeps its prompt, events and transcript (session/attempt-N), as a Method session
+ * step keeps them. memory: the folder that keeps the learner's Claude Code memory between chats (auto-memory is on, as
+ * in the desktop app). Claude Code finds it at HOME/.claude/projects/SLUG/memory for the chat's project folder, so it
+ * is put there before the chat and taken back from there after it.
  */
-export async function openChat(project: string, settings: ChatSettings, artifacts: string) {
+export async function openChat(project: string, settings: ChatSettings, artifacts: string, memory: string | null = null) {
   const { cleanRoomEnv } = await import('@withmethod/runtime/clean-room.js');
   const { claudeTranscript } = await import('@withmethod/runtime/transcript.js');
   const room = await cleanRoomEnv('claude', process.env);
   const claude = findProgram('claude', process.env.PATH ?? '');
-  const env: NodeJS.ProcessEnv = { ...room.env, PATH: pathWithoutMethod(process.env.PATH ?? '', room.root),
-    // Only the project folder carries over between chats: Claude Code's memory in HOME would not.
-    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1' };
+  const env: NodeJS.ProcessEnv = { ...room.env, PATH: pathWithoutMethod(process.env.PATH ?? '', room.root) };
+  // The memory folder of this project (by its path, and by its real path when they differ).
+  let real = project;
+  try { real = realpathSync(project); } catch { /* the path itself */ }
+  const memoryFolders = [...new Set([real, project].map(path => join(env.HOME!, '.claude', 'projects', projectSlug(path), 'memory')))];
+  if (memory && existsSync(memory)) for (const folder of memoryFolders) copyTree(memory, folder);
   const pluginArgs: string[] = [];
   if (settings.plugins.includes('method')) {
     const m = settings.method;
@@ -156,7 +164,18 @@ export async function openChat(project: string, settings: ChatSettings, artifact
     return { message, reply: typeof last.result === 'string' ? last.result : '', model, entries, tokens, attempt };
   };
   const close = async () => {
-    try { if (settings.method) await waitForFixes(settings.method.cache); } finally { await room.remove(); }
+    try {
+      if (settings.method) await waitForFixes(settings.method.cache);
+      if (memory) {
+        // The memory that Claude Code kept for this project: its own folder, or else the only project folder it wrote.
+        const projects = join(env.HOME!, '.claude', 'projects');
+        // With two copies (the path and the real path), the one with the latest change.
+        const newest = (dir: string) => Math.max(0, ...Object.keys(projectFiles(dir)).map(p => statSync(join(dir, p)).mtimeMs));
+        const own = memoryFolders.filter(existsSync).sort((a, b) => newest(b) - newest(a))[0];
+        const written = own ?? (existsSync(projects) ? readdirSync(projects).map(name => join(projects, name, 'memory')).find(existsSync) : undefined);
+        if (written) copyTree(written, memory);
+      }
+    } finally { await room.remove(); }
   };
   return { send, close };
 }
@@ -176,7 +195,9 @@ export async function waitForFixes(cache: string) {
 }
 
 /** What a chat did with the project: the files it added, changed or removed, the Methods it built or changed, and its method commands. */
-export type Did = { added: string[]; changed: string[]; removed: string[]; methods_built: string[]; methods_changed: string[]; commands: string[]; judged: string[]; skills: string[] };
+export type Did = { added: string[]; changed: string[]; removed: string[]; methods_built: string[]; methods_changed: string[]; commands: string[]; judged: string[]; skills: string[];
+  /** The files of Claude Code's memory that the chat added, changed or removed. */
+  memory: string[] };
 /** Files that say nothing about what the agent kept: run records and caches. */
 const ignored = (path: string) => /(^|\/)(\.method-runs|node_modules|__pycache__|\.git)\//.test(path) || /(^|\/)\.DS_Store$/.test(path);
 /** The method commands of a transcript: "method judge", "method run", by their first word after method. */
@@ -192,7 +213,8 @@ export function methodCommands(entries: any[]) {
   }
   return { commands, judged };
 }
-export function whatItDid(before: Record<string, string>, after: Record<string, string>, entries: any[], deliverable: string | null): Did {
+export function whatItDid(before: Record<string, string>, after: Record<string, string>, entries: any[], deliverable: string | null, memory: { before: Record<string, string>; after: Record<string, string> } = { before: {}, after: {} }): Did {
+  const memoryChanged = [...new Set([...Object.keys(memory.before), ...Object.keys(memory.after)])].filter(p => memory.before[p] !== memory.after[p]).sort();
   const keep = (p: string) => p !== deliverable && !ignored(p);
   const added = Object.keys(after).filter(p => keep(p) && !(p in before)).sort();
   const changed = Object.keys(after).filter(p => keep(p) && p in before && before[p] !== after[p]).sort();
@@ -200,7 +222,7 @@ export function whatItDid(before: Record<string, string>, after: Record<string, 
   const { commands, judged } = methodCommands(entries);
   const skills = entries.filter(e => e.tool === 'Skill' && e.role === 'assistant').map(e => { try { return String(JSON.parse(e.text).skill ?? JSON.parse(e.text).command ?? ''); } catch { return ''; } }).filter(Boolean);
   return { added, changed, removed, methods_built: added.filter(p => p.endsWith('.method')), methods_changed: changed.filter(p => p.endsWith('.method')),
-    commands: [...new Set(commands)], judged, skills: [...new Set(skills)] };
+    commands: [...new Set(commands)], judged, skills: [...new Set(skills)], memory: memoryChanged };
 }
 const list = (paths: string[]) => paths.length <= 3 ? paths.join(', ') : `${paths.slice(0, 3).join(', ')} and ${paths.length - 3} more`;
 /** What a chat did, in short sentences for the page: "Saved notes to CLAUDE.md. Built a Method (nda.method). Ran method judge (wrong)." */
@@ -218,15 +240,17 @@ export function didSummary(did: Did) {
   if (did.judged.length) out.push(`Ran method judge (${did.judged.join(', ')})`);
   const others = did.commands.filter(c => c !== 'method judge');
   if (others.length) out.push(`Ran ${others.join(', ')}`);
+  if (did.memory.length) out.push(`Saved to Claude memory (${list(did.memory)})`);
   if (did.skills.length) out.push(`Used the ${did.skills.join(', ')} skill`);
   return out.length ? `${out.join('. ')}.` : 'Changed nothing in the project.';
 }
 /** Whether a chat changed what the project keeps: a file other than the handed-in one. */
-export const keptSomething = (did: Did) => did.added.length + did.changed.length + did.removed.length > 0;
+export const keptSomething = (did: Did) => did.added.length + did.changed.length + did.removed.length + (did.memory?.length ?? 0) > 0;
 /** The diff of the text files that a chat added, changed or removed (not the handed-in file), from a copy of the project before it. */
-export function projectDiff(beforeDir: string, afterDir: string, did: Did) {
+export function projectDiff(beforeDir: string, afterDir: string, did: Did, memory?: { before: string; after: string }) {
   const read = (dir: string, p: string) => { try { const b = readFileSync(join(dir, p)); return b.includes(0) ? '(a binary file)' : b.toString('utf8'); } catch { return ''; } };
-  return [...did.added, ...did.changed, ...did.removed].sort().map(p => textDiff(read(beforeDir, p), read(afterDir, p), p, p)).filter(Boolean).join('\n');
+  return [...[...did.added, ...did.changed, ...did.removed].sort().map(p => textDiff(read(beforeDir, p), read(afterDir, p), p, p)),
+    ...(memory ? did.memory.map(p => textDiff(read(memory.before, p), read(memory.after, p), `Claude memory/${p}`, `Claude memory/${p}`)) : [])].filter(Boolean).join('\n');
 }
 
 /**

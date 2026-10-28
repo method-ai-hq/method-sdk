@@ -52,10 +52,11 @@ function fixture() {
 }
 
 /**
- * A stand-in for Claude Code on PATH, as a project chat runs it. A task message: it reads NOTES.md and answers n plus
- * the number of "add one" lines in it, in the file the message names. A second message (a resumed chat): it saves the
- * words in NOTES.md, and when method is on its PATH it also builds a Method and runs method judge (as a Bash call it
- * does not run). The probe: it answers with NOTES.md. Each call is logged with its arguments, prompt and environment.
+ * A stand-in for Claude Code on PATH, as a project chat runs it. A task message: it reads NOTES.md and its Claude Code
+ * memory (HOME/.claude/projects/SLUG/memory/MEMORY.md) and answers n plus the number of "add one" lines in them, in the
+ * file the message names. A second message (a resumed chat): without method on its PATH it saves the words in its
+ * memory; with method it saves them in NOTES.md, builds a Method and runs method judge (as a Bash call it does not run).
+ * The probe: it answers with what it saved. Each call is logged with its arguments, prompt and environment.
  */
 function claudeStub(root: string) {
   const bin = join(root, 'bin');
@@ -71,13 +72,14 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   fs.appendFileSync(${JSON.stringify(join(root, 'claude-calls.jsonl'))}, JSON.stringify({ args: argv, prompt, cwd, files: fs.readdirSync(cwd, { recursive: true }).sort(), home: process.env.HOME,
     hasMethod, config: process.env.METHOD_CONFIG_DIR || null, memory: process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY || null }) + '\\n');
   out({ type: 'system', subtype: 'init', model: argv[argv.indexOf('--model') + 1] });
-  const notes = path.join(cwd, 'NOTES.md'), known = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : '';
+  const memory = path.join(process.env.HOME, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), 'memory', 'MEMORY.md');
+  const notes = hasMethod ? path.join(cwd, 'NOTES.md') : memory, known = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : '';
   let result = 'Done.';
   const task = /task (\\d+)\\. Save your answer as (\\S+)\\./.exec(prompt);
   if (task) fs.writeFileSync(path.join(cwd, task[2]), String(Number(task[1]) + known.split('\\n').filter(l => l.includes('add one')).length));
-  else if (prompt.startsWith('Which rules')) result = known || 'None yet.';
+  else if (prompt.startsWith('Which rules')) { result = known || 'None yet.'; fs.mkdirSync(path.dirname(memory), { recursive: true }); fs.appendFileSync(memory, 'I was asked about my rules.\\n'); }
   else if (argv.includes('--resume')) {
-    if (!prompt.startsWith("That's right")) fs.appendFileSync(notes, prompt + '\\n');
+    if (!prompt.startsWith("That's right")) { fs.mkdirSync(path.dirname(notes), { recursive: true }); fs.appendFileSync(notes, prompt + '\\n'); }
     if (hasMethod) {
       fs.writeFileSync(path.join(cwd, 'review.method'), 'name: Review\\n');
       out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'method judge run_1 wrong --note "' + prompt.slice(0, 20) + '"' } }] } });
@@ -107,7 +109,7 @@ it('a project arm is compared only with project arms, needs a message and a file
   expect(check(good)).toThrow(/For the input inputs\/one\.json: The message message\.md names \{\{name\}\}/);
 });
 
-it('each event is a new chat in the project folder: the task, then the correction or "That\'s right, thanks." in the same chat; only the folder carries over', async () => {
+it('each event is a new chat in the project folder: the task, then the correction or "That\'s right, thanks." in the same chat; only the folder and Claude Code\'s memory carry over', async () => {
   const { root, file } = fixture();
   const calls = claudeStub(root);
   const compiled = await compileComparison(file);
@@ -130,7 +132,7 @@ it('each event is a new chat in the project folder: the task, then the correctio
     // The input's folder is in the project; a clean room with Claude Code's memory off, the same model and no web.
     expect(first.files).toContain('docs/brief.md');
     expect(first.home).not.toBe(process.env.HOME);
-    expect(first.memory).toBe('1');
+    expect(first.memory).toBeNull();
     expect(first.args[first.args.indexOf('--model') + 1]).toBe('claude-opus-5-5');
     expect(first.args[first.args.indexOf('--disallowedTools') + 1]).toBe('WebSearch,WebFetch');
     expect(first.args[first.args.indexOf('--allowedTools') + 1]).toContain('Bash');
@@ -141,9 +143,10 @@ it('each event is a new chat in the project folder: the task, then the correctio
   }
   const events = (arm: string) => treated.find((t: any) => t.arm === arm).learners[0].events;
   expect(events('plain').map((e: any) => [e.outcome, e.text, e.change.summary])).toEqual([
-    ['edited', 'It needs to be 6 because we add one.', 'Wrote NOTES.md.'], ['was_right', 'That\'s right, thanks.', 'Changed nothing in the project.']]);
+    ['edited', 'It needs to be 6 because we add one.', 'Saved to Claude memory (MEMORY.md).'], ['was_right', 'That\'s right, thanks.', 'Changed nothing in the project.']]);
   expect(events('method').map((e: any) => [e.outcome, e.change.summary])).toEqual([
     ['edited', 'Wrote NOTES.md. Built a Method (review.method). Ran method judge (wrong).'], ['was_right', 'Ran method judge (wrong).']]);
+  expect(events('plain')[0].change.diff).toContain('+++ Claude memory/MEMORY.md');
   expect(events('plain')[0].change.diff).toContain('+It needs to be 6 because we add one.');
   // The probe at checkpoint 2 was asked in a copy: the learner's project has no trace of it.
   const learner = treated.find((t: any) => t.arm === 'plain').learners[0];
@@ -152,7 +155,7 @@ it('each event is a new chat in the project folder: the task, then the correctio
   // What each arm did with its corrections, counted for the page.
   const result = decide(JSON.parse(comparison), [], treated);
   expect(result.received.method.lines.map((l: any) => [l.what, l.received, l.planned])).toEqual([['Inputs run', 0, 4], ['Corrections received', 2, 2],
-    ['Corrections after which it saved something in the project', 1, 2], ['Corrections after which it built or changed a Method', 1, 2], ['Corrections it gave to method judge', 2, 2]]);
+    ['Corrections after which it saved something in the project or memory', 1, 2], ['Corrections after which it built or changed a Method', 1, 2], ['Corrections it gave to method judge', 2, 2]]);
   expect(result.received.plain.lines.map((l: any) => l.what)).not.toContain('Corrections it gave to method judge');
   // A rerun gives nothing again.
   const before = calls().length;
@@ -167,8 +170,11 @@ it('a checkpoint is measured in fresh copies of the project: one new chat per ch
   const comparison = JSON.parse(readFileSync(compiled.inputs, 'utf8')).comparison as string;
   const treated = (await compareStage('treat', { comparison, go: true })).treatment as string;
   const plan = JSON.parse(comparison);
-  const learnerProject = join(plan.folder, 'arms', 'plain', readdirSync(join(plan.folder, 'arms', 'plain')).find(d => d.startsWith('treatment-'))!, 'learner-1', 'project');
-  const notes = readFileSync(join(learnerProject, 'NOTES.md'), 'utf8');
+  const learner = join(plan.folder, 'arms', 'plain', readdirSync(join(plan.folder, 'arms', 'plain')).find(d => d.startsWith('treatment-'))!, 'learner-1');
+  const learnerProject = join(learner, 'project'), memoryFile = join(learner, 'memory', 'MEMORY.md');
+  // The plain project kept the correction in Claude Code's memory, which carried over to its next chat; the probe, asked in a copy, left no trace.
+  const notes = readFileSync(memoryFile, 'utf8');
+  expect(notes).toBe('It needs to be 6 because we add one.\n');
   const cells = ((await compareStage('plan', { comparison, go: true, treated })).cells as string[]).map(c => JSON.parse(c)).filter((c: any) => c.arm === 'plain');
   expect(cells.map((c: any) => [c.checkpoint, c.input.id])).toEqual([[0, 'inputs/one.json'], [0, 'inputs/two.json'], [2, 'inputs/one.json'], [2, 'inputs/two.json']]);
   const start = calls().length;
@@ -181,7 +187,7 @@ it('a checkpoint is measured in fresh copies of the project: one new chat per ch
   expect(chats.every(c => !c.args.includes('--resume'))).toBe(true);
   // Each chat ran in its own copy; the learner's project did not change.
   expect(new Set(chats.map(c => c.cwd)).size).toBe(4);
-  expect(readFileSync(join(learnerProject, 'NOTES.md'), 'utf8')).toBe(notes);
+  expect(readFileSync(memoryFile, 'utf8')).toBe(notes);
   expect(existsSync(join(learnerProject, 'answer.txt'))).toBe(true);
   // At the start it answered n (wrong); after the correction n + 1 (right).
   expect(runs.map(r => [r.checkpoint, r.result, r.handed_in])).toEqual([[0, '1', true], [0, '2', true], [2, '2', true], [2, '3', true]]);
@@ -203,7 +209,7 @@ it('runs a comparison of two projects from the trial to the answer', async () =>
   expect(result.status).toBe('completed');
   // Both learn the same note, so neither is ahead; one copy cannot decide.
   expect(result.result).toMatch(/^Can't tell yet/);
-  expect(result.result).toContain('Claude Code project with the Method plugin: Model: claude-opus-5-5. Inputs run: 4 of 4. Corrections received: 2 of 2 (1 edited, 1 was right). Changed the agent: 1. Corrections after which it saved something in the project: 1 of 2. Corrections after which it built or changed a Method: 1 of 2.');
+  expect(result.result).toContain('Claude Code project with the Method plugin: Model: claude-opus-5-5. Inputs run: 4 of 4. Corrections received: 2 of 2 (1 edited, 1 was right). Changed the agent: 1. Corrections after which it saved something in the project or memory: 1 of 2. Corrections after which it built or changed a Method: 1 of 2.');
   expect(result.result).toContain('Corrections it gave to method judge: 2 of 2.');
   expect(result.result).toMatch(/says its rule \(mean per run; n = learners behind the point\)\n {2}Claude Code project: after 0: 0 \(n=1\); after 2: 1 \(n=1\)/);
 }, 900_000);

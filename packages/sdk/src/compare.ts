@@ -479,7 +479,7 @@ export function armLabels(doc: Comparison, root: string) {
 /** A project arm as people say it: "Claude Code project", "Claude Code project with the Method plugin". */
 const projectWords = (arm: ProjectArm) => `Claude Code project${arm.plugins?.length ? ` with the ${arm.plugins.map(p => p === 'method' ? 'Method' : p).join(' and ')} plugin${arm.plugins.length === 1 ? '' : 's'}` : ''}`;
 /** What a project arm starts with, in words, for the page (its starting instructions). */
-const projectStart = (arm: ProjectArm) => `A Claude Code project folder that starts ${arm.files ? `with the files of ${arm.files}` : 'empty'}. ${arm.plugins?.includes('method') ? 'It has the Method plugin: its skill and hooks, and the method command, signed in to your Method account.' : 'It has no plugin and no method command.'} Each piece of work is a new chat in the folder; only the folder carries over.`;
+const projectStart = (arm: ProjectArm) => `A Claude Code project folder that starts ${arm.files ? `with the files of ${arm.files}` : 'empty'}. ${arm.plugins?.includes('method') ? 'It has the Method plugin: its skill and hooks, and the method command, signed in to your Method account.' : 'It has no plugin and no method command.'} Each piece of work is a new chat in the folder; only the folder and Claude Code\'s memory carry over.`;
 /** The file that each arm hands in, by its name: "the file reply.md", or "the file that the task names" when the path takes a value of the input. */
 export function deliverableWords(doc: Comparison) {
   if (!doc.deliverable) return null;
@@ -569,14 +569,14 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
     if (corrections && !projects.length) add('same_for_both', 'The session that changes an agent after a correction runs on the same model.');
   }
   if (projects.length) {
-    add('same_for_both', 'Every chat runs in a clean room: a fresh home folder with only the Claude Code sign-in, so no agent has your instructions, memory or settings. Claude Code\'s memory is off: only the project folder carries over from one chat to the next.');
+    add('same_for_both', 'Every chat runs in a clean room: a fresh home folder with only the Claude Code sign-in, so no agent has your instructions, memory or settings. Claude Code\'s memory is on, as in the desktop app: each copy keeps its project folder and its Claude Code memory from one chat to the next, and nothing else.');
     add('same_for_both', `Every chat has the same Claude Code tools (files, commands and subagents)${web ? ', and the web' : ', without the web'}.`);
     for (const [armName, arm] of projects) add('arms', `${capital(settings.labels[armName] ?? armName)}: ${arm.plugins?.includes('method') ? 'the Method plugin is loaded in every chat (its skill and hooks), and the method command is on its path, signed in to your Method account. Whether it uses Method is up to the agent.' : 'no plugin, and no method command.'}`);
     add('treatment', 'Each event is one new chat in the project folder. The first message is the task: the input\'s files are put in the folder, and the message asks for the file to hand in. After the agent works, a correction is the second message of the same chat; when the feedback writer finds nothing wrong, the second message is "That\'s right, thanks." Then the chat ends.');
     if (doc.first_message) add('treatment', 'The first chat of each project starts with the same first material for every agent, before the message.');
     add('treatment', 'A correction counts as received when its chat ended, and every Method fix that the chat started had ended. A chat that stops (a usage limit too) is not received, and the comparison stops there.');
     add('treatment', 'For each correction the page says what the agent did in the project: the files it wrote or changed, the Methods it built, and the method commands it ran.');
-    add('main_measure', 'A checkpoint is measured on copies of each project: each checking input is a new chat in a fresh copy, so measuring never changes the project.');
+    add('main_measure', 'A checkpoint is measured on copies of each project and its Claude Code memory: each checking input is a new chat in a fresh copy, so measuring never changes them.');
   } else add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
   add('same_for_both', web ? 'The tools are the tested difference, so the agents may use the web.' : 'No agent can use the web.');
   if (doc.deliverable) add('same_for_both', 'Only the handed-in file is measured.');
@@ -1121,8 +1121,8 @@ type Plain = { agent: 'claude' | 'codex'; instructions: string; model: string | 
 type Project = { agent: 'claude'; plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean; deliverable: string; message: string; first_message: string | null;
   probe: string | null; start_words: string; start: string };
 /** An arm at one point: a Method folder and file, a plain agent, or a copy of a project folder and its Method cache (with its answer to the probe). */
-type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } | { plain: Plain; hash: string } | { copy: { dir: string; cache: string | null }; probe: string | null; hash: string };
-type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; project?: Project; copy?: { dir: string; cache: string | null }; probe?: string | null; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean; feedback?: string;
+type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } | { plain: Plain; hash: string } | { copy: { dir: string; cache: string | null; memory: string | null }; probe: string | null; hash: string };
+type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; project?: Project; copy?: { dir: string; cache: string | null; memory: string | null }; probe?: string | null; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean; feedback?: string;
   input: { id: string; value: unknown; hash: string; room: string | null; deliverable: string | null }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
 /** An arm's name on the page (armLabels), by its key. */
@@ -1447,15 +1447,15 @@ const sumTokens = (list: Array<number | null>) => list.every(t => t !== null) ? 
  * of the project before the chat (after its input was put in) restores the project when a chat did not finish, and
  * gives the diff of what the chat changed.
  */
-async function projectEvent(event: any, arm: any, learner: { project: string; cache: string }, workDir: string, plan: Plan, first: boolean): Promise<Built> {
+async function projectEvent(event: any, arm: any, learner: { project: string; cache: string; memory: string }, workDir: string, plan: Plan, first: boolean): Promise<Built> {
   const project: Project = arm.project, start = join(workDir, 'start');
-  if (existsSync(start)) { copyTree(join(start, 'project'), learner.project); copyTree(join(start, 'cache'), learner.cache); }
+  if (existsSync(start)) for (const part of ['project', 'cache', 'memory'] as const) copyTree(join(start, part), learner[part]);
   removeFolder(join(workDir, 'artifacts'));
   placeInput(learner.project, event.input, event.input.deliverable);
-  copyTree(learner.project, join(start, 'project')); copyTree(learner.cache, join(start, 'cache'));
-  const before = projectFiles(learner.project);
+  for (const part of ['project', 'cache', 'memory'] as const) copyTree(learner[part], join(start, part));
+  const before = projectFiles(learner.project), memoryBefore = projectFiles(learner.memory);
   const message = projectMessage(project, event.input.value, first);
-  const chat = await openChat(learner.project, chatSettings(project, learner.cache, plan.folder), join(workDir, 'artifacts'));
+  const chat = await openChat(learner.project, chatSettings(project, learner.cache, plan.folder), join(workDir, 'artifacts'), learner.memory);
   const turns = [];
   let text: string | undefined, right = false, none: string | null = null;
   try {
@@ -1471,8 +1471,8 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
       if (none === null) turns.push(await chat.send(text!));
     }
   } finally { await chat.close(); }
-  const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable);
-  const diff = projectDiff(join(start, 'project'), learner.project, did);
+  const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable, { before: memoryBefore, after: projectFiles(learner.memory) });
+  const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory });
   removeFolder(start);
   // A Method fix's tokens are not reported: a chat that started one reports none, so usage falls back to minutes.
   const tokens = did.judged.includes('wrong') ? null : sumTokens(turns.map(t => t.tokens));
@@ -1485,24 +1485,24 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
  * A project at a checkpoint: a copy of its folder and Method cache, and, when the treatment has a probe and the
  * checkpoint is after the start, its answer to the probe, asked in a new chat in another copy (so asking changes nothing).
  */
-async function freezeProject(arm: any, learner: { project: string; cache: string }, base: string, at: number, plan: Plan): Promise<Snapshot> {
+async function freezeProject(arm: any, learner: { project: string; cache: string; memory: string }, base: string, at: number, plan: Plan): Promise<Snapshot> {
   const dir = join(base, `after-${at}`);
-  if (!existsSync(join(dir, 'project'))) { copyTree(learner.project, join(dir, 'project')); copyTree(learner.cache, join(dir, 'cache')); }
+  if (!existsSync(join(dir, 'project'))) for (const part of ['project', 'cache', 'memory'] as const) copyTree(learner[part], join(dir, part));
   let probe: string | null = null;
   if (arm.project.probe && at > 0) {
     const answer = join(dir, 'probe.md');
     if (!existsSync(answer)) {
       const work = join(dir, 'probe');
-      copyTree(join(dir, 'project'), join(work, 'project')); copyTree(join(dir, 'cache'), join(work, 'cache'));
-      const chat = await openChat(join(work, 'project'), chatSettings(arm.project, join(work, 'cache'), plan.folder), join(work, 'artifacts'));
+      for (const part of ['project', 'cache', 'memory']) copyTree(join(dir, part), join(work, part));
+      const chat = await openChat(join(work, 'project'), chatSettings(arm.project, join(work, 'cache'), plan.folder), join(work, 'artifacts'), join(work, 'memory'));
       let reply: string;
       try { reply = (await chat.send(arm.project.probe)).reply; } finally { await chat.close(); }
-      removeFolder(join(work, 'project')); removeFolder(join(work, 'cache'));
+      for (const part of ['project', 'cache', 'memory']) removeFolder(join(work, part));
       writeFileSync(answer, reply, { mode: 0o600 });
     }
     probe = readFileSync(answer, 'utf8');
   }
-  return { copy: { dir: join(dir, 'project'), cache: join(dir, 'cache') }, probe, hash: sha({ arm: arm.hash, project: folderHash(join(dir, 'project')), probe }) };
+  return { copy: { dir: join(dir, 'project'), cache: join(dir, 'cache'), memory: join(dir, 'memory') }, probe, hash: sha({ arm: arm.hash, project: folderHash(join(dir, 'project')), memory: folderHash(join(dir, 'memory')), probe }) };
 }
 
 /** Copy a folder without its run records. */
@@ -1536,8 +1536,8 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
   // A Method learner: its own copy of the arm with its own Method ID and cache, frozen at the start too.
   const method = arm.plain || arm.project ? null : { dir: join(base, 'method'), file: arm.file, cache: join(base, 'cache') };
   // A project learner: its own project folder, from the arm's start, and its own Method cache.
-  const project = arm.project ? { project: join(base, 'project'), cache: join(base, 'cache') } : null;
-  if (project && !existsSync(project.project)) { copyTree(arm.project.start, project.project); mkdirSync(project.cache, { recursive: true, mode: 0o700 }); }
+  const project = arm.project ? { project: join(base, 'project'), cache: join(base, 'cache'), memory: join(base, 'memory') } : null;
+  if (project && !existsSync(project.project)) { copyTree(arm.project.start, project.project); for (const dir of [project.cache, project.memory]) mkdirSync(dir, { recursive: true, mode: 0o700 }); }
   if (method && !existsSync(join(method.dir, method.file))) {
     copyFolder(arm.dir, method.dir);
     writeMethodId(join(method.dir, method.file), newMethodId());
@@ -1677,7 +1677,7 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
   const project = plan.arms.find((a: any) => a.name === arm)?.project as Project | undefined;
   const chats = (t?.learners ?? []).flatMap(l => l.events.filter(e => e.kind === 'correction' && e.received && e.did)).map(e => e.did!);
   if (project && chats.length) {
-    lines.push({ what: 'Corrections after which it saved something in the project', received: chats.filter(keptSomething).length, planned: chats.length, missing: [] });
+    lines.push({ what: 'Corrections after which it saved something in the project or memory', received: chats.filter(keptSomething).length, planned: chats.length, missing: [] });
     if (project.plugins.includes('method')) {
       lines.push({ what: 'Corrections after which it built or changed a Method', received: chats.filter(d => d.methods_built.length + d.methods_changed.length > 0).length, planned: chats.length, missing: [] });
       lines.push({ what: 'Corrections it gave to method judge', received: chats.filter(d => d.judged.length > 0).length, planned: chats.length, missing: [] });
@@ -1782,7 +1782,7 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, stage: 'trial' | 'ful
   const out: Cell[] = [];
   for (const arm of plan.arms) for (const checkpoint of checkpoints) for (let learner = 0; learner < learners; learner++) {
     const own = treated?.find(t => t.arm === arm.name)?.learners[learner];
-    const snapshot: Snapshot | undefined = checkpoint === null ? (arm.project ? { copy: { dir: arm.project.start, cache: null }, probe: null, hash: arm.hash } : arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : own?.snapshots[checkpoint];
+    const snapshot: Snapshot | undefined = checkpoint === null ? (arm.project ? { copy: { dir: arm.project.start, cache: null, memory: null }, probe: null, hash: arm.hash } : arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : own?.snapshots[checkpoint];
     if (!snapshot) continue;
     for (const input of inputs) {
       const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain || arm.project ? { method: arm.method } : {}), ...(arm.project ? { project: arm.project } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}), input, repeat: learner, checkpoint,
@@ -1915,11 +1915,11 @@ async function runCell(cell: Cell) {
     if (cell.project) {
       // A new chat in a fresh copy of the project at its checkpoint (folders/project, so the judge finds what it read),
       // with the input's folders put in: measuring never changes the learner's project.
-      const work = join(runDir, 'folders', 'project'), cache = join(runDir, 'cache');
-      copyTree(cell.copy!.dir, work); copyTree(cell.copy!.cache ?? join(runDir, 'no-cache'), cache);
+      const work = join(runDir, 'folders', 'project'), cache = join(runDir, 'cache'), memory = join(runDir, 'memory');
+      copyTree(cell.copy!.dir, work); copyTree(cell.copy!.cache ?? join(runDir, 'no-cache'), cache); copyTree(cell.copy!.memory ?? join(runDir, 'no-memory'), memory);
       placeInput(work, cell.input, cell.input.deliverable);
       folders = { project: work };
-      request = JSON.stringify({ project: work, deliverable: cell.input.deliverable, settings: chatSettings(cell.project, cache, cell.folder),
+      request = JSON.stringify({ project: work, memory, deliverable: cell.input.deliverable, settings: chatSettings(cell.project, cache, cell.folder),
         message: projectMessage(cell.project, cell.input.value, cell.checkpoint === null || cell.checkpoint === 0) });
       await sync?.start(readDocument(file), { request } as any, {}, false);
       result = await runMethod(file, { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } } } as any, {
@@ -2499,12 +2499,12 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
  * with one message. Its prompt, events and transcript go in the run's artifacts (METHOD_OUTPUT_DIR), as a session
  * step's do. Returns the agent's last words, the model it ran on, its tokens, and what it did in the project.
  */
-async function projectChatStage(request: { project: string; deliverable: string | null; settings: ChatSettings; message: string }) {
-  const before = projectFiles(request.project);
-  const chat = await openChat(request.project, request.settings, process.env.METHOD_OUTPUT_DIR ?? join(dirname(request.project), 'artifacts'));
+async function projectChatStage(request: { project: string; memory: string; deliverable: string | null; settings: ChatSettings; message: string }) {
+  const before = projectFiles(request.project), memory = projectFiles(request.memory);
+  const chat = await openChat(request.project, request.settings, process.env.METHOD_OUTPUT_DIR ?? join(dirname(request.project), 'artifacts'), request.memory);
   let turn;
   try { turn = await chat.send(request.message); } finally { await chat.close(); }
-  return { reply: turn.reply, model: turn.model, tokens: turn.tokens, did: whatItDid(before, projectFiles(request.project), turn.entries, request.deliverable) };
+  return { reply: turn.reply, model: turn.model, tokens: turn.tokens, did: whatItDid(before, projectFiles(request.project), turn.entries, request.deliverable, { before: memory, after: projectFiles(request.memory) }) };
 }
 
 /** `method __compare STAGE`: one stage of a comparison, run by the generated Method's stage script. */
