@@ -39,13 +39,16 @@ it('lists each missing setup item once, however many steps need it',async()=>{
  const {missing_setup}=s.result();
  expect(missing_setup.length).toBeGreaterThan(0);expect(new Set(missing_setup).size).toBe(missing_setup.length);
 });
-it('status does not list Methods, reveal account details, or start login',async()=>{
- const s=setup();const client:any={server:'https://example.test',token:()=>null,login:vi.fn(),request:vi.fn()};
- await methodMain(['status'],()=>client);expect(s.result().signed_in).toBe(false);expect(client.login).not.toHaveBeenCalled();expect(client.request).not.toHaveBeenCalled();
- client.token=()=> 'test-token';client.request.mockResolvedValue({user:{email:'private@example.test'}});s.stdout.mockClear();
- await methodMain(['status'],()=>client);expect(s.result()).toEqual({installed:true,server:client.server,signed_in:true});expect(client.request).toHaveBeenCalledWith('/api/cli/me');
- client.request.mockRejectedValue(Error('401: expired'));s.stdout.mockClear();await methodMain(['status'],()=>client);expect(s.result().signed_in).toBe(false);
- client.request.mockRejectedValue(Error('503: unavailable'));await expect(methodMain(['status'],()=>client)).rejects.toThrow('503');
+it('status names the signed-in accounts and nothing else, and does not start login',async()=>{
+ const s=setup();const client:any={server:'https://example.test',token:()=>null,login:vi.fn(),request:vi.fn(),check:vi.fn()};
+ await methodMain(['status'],()=>client);expect(s.result()).toEqual({installed:true,server:client.server,signed_in:false,next:'Run method login to sign in with browser approval.'});
+ expect(client.login).not.toHaveBeenCalled();expect(client.check).not.toHaveBeenCalled();
+ const ada={key:'user_ada',token:'t',ids:['wf_private'],added_at:1,person:{id:'user_ada',name:'Ada',email:'ada@example.test'},workspace:{id:'org',name:'Engines'}};
+ client.token=()=> 'test-token';client.check.mockResolvedValue([{...ada,signed_in:true}]);s.stdout.mockClear();
+ await methodMain(['status'],()=>client);expect(s.result()).toEqual({installed:true,server:client.server,signed_in:true,account:{person:'Ada',email:'ada@example.test',workspace:'Engines'}});
+ client.check.mockResolvedValue([{...ada,signed_in:false}]);s.stdout.mockClear();await methodMain(['status'],()=>client);expect(s.result()).toMatchObject({signed_in:false,account:{person:'Ada',signed_in:false}});
+ client.check.mockRejectedValue(Error('503: unavailable'));await expect(methodMain(['status'],()=>client)).rejects.toThrow('503');
+ expect(client.request).not.toHaveBeenCalled();
 });
 it('validates a simple local-agent Method without a configuration file', async()=>{
  const s=setup();

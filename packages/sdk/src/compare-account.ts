@@ -6,8 +6,9 @@
  * grade cell with its numbers and verdicts), and each stage (trial, running, done). The result page on the dashboard
  * reads them. When run content stays on this computer, only run IDs and numbers go to the account.
  *
- * The account record (account.json in the comparison folder) keeps the server, the sign-in folder, the comparison ID
- * and the version, so the stages, which run as separate processes, report to the same comparison. It is not part of the
+ * The account record (account.json in the comparison folder) keeps the server, the sign-in folder, the signed-in account,
+ * the comparison ID and the version, so the stages, which run as separate processes, report to the same comparison with
+ * the same account, whichever account is current. It is not part of the
  * generated Method's inputs, so a new version reuses every finished cell. Nothing here stops a comparison: a failed
  * report prints one line, and the comparison runs on.
  */
@@ -21,7 +22,7 @@ import { configRoot } from './computer-settings.js';
 import { methodCache } from './prepare.js';
 
 /** cache_dir: the Method cache of this computer, where the local Method server finds the runs it may show. */
-export type Account = { server: string; config_dir: string; cache_dir: string; comparison_id: string; version_number: number; stage: string; url: string; spec_digest: string };
+export type Account = { server: string; config_dir: string; account?: string | undefined; cache_dir: string; comparison_id: string; version_number: number; stage: string; url: string; spec_digest: string };
 const accountFile = (folder: string) => join(folder, 'account.json');
 export const readAccount = (folder: string): Account | null => { try { return JSON.parse(readFileSync(accountFile(folder), 'utf8')); } catch { return null; } };
 const digest = (value: unknown) => createHash('sha256').update(canonicalJson(value)).digest('hex');
@@ -33,10 +34,15 @@ function warn(error: unknown) {
   if (!said.has(message)) { said.add(message); process.stderr.write(message + '\n'); }
 }
 
-/** The client of the comparison's account, with the sign-in that saved it. */
-function clientOf(account: Account) {
+/**
+ * The client of the comparison's account, with the sign-in that saved it. The processes that this one starts (the arms,
+ * their runs and fixes) use the same account.
+ */
+export function clientOf(account: Account) {
   process.env.METHOD_CONFIG_DIR ??= account.config_dir;
-  return new MethodClient(account.server);
+  if (account.account) process.env.METHOD_ACCOUNT = account.account;
+  const client = new MethodClient(account.server);
+  return account.account ? client.as(account.account) : client;
 }
 
 /**
@@ -53,7 +59,8 @@ export async function saveComparison(folder: string, id: string, name: string, s
   }
   try {
     const saved = await client.request<{ comparison_id: string; version_number: number; stage: string; url: string }>(`/api/cli/comparisons/${id}`, 'PUT', { name, spec });
-    const account: Account = { server: client.server, config_dir: configRoot(), cache_dir: methodCache(), comparison_id: saved.comparison_id, version_number: saved.version_number, stage: saved.stage,
+    client.remember(id);
+    const account: Account = { server: client.server, config_dir: configRoot(), account: client.account()?.key, cache_dir: methodCache(), comparison_id: saved.comparison_id, version_number: saved.version_number, stage: saved.stage,
       url: saved.url, spec_digest: digest(spec) };
     writePrivateJson(accountFile(folder), account);
     return account;

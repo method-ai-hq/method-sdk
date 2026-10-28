@@ -14,10 +14,11 @@ import type { MethodClient } from './method-client.js';
  * Order: a version is sent after its files; a run record after its version. Every request is idempotent, so two
  * processes that send the same item do no harm.
  */
-export type FileItem = { kind: 'file'; server: string; sha256: string; size: number };
-export type VersionItem = { kind: 'version'; server: string; method_id: string; version_id: string; file?: string;
+/** account: the key of the signed-in account that sends the item (method-client.ts). */
+export type FileItem = { kind: 'file'; server: string; account?: string; sha256: string; size: number };
+export type VersionItem = { kind: 'version'; server: string; account?: string; method_id: string; version_id: string; file?: string;
   body: { workflow: unknown; package: { files: Array<{ sha256: string }>; digest: string }; parent_version_id?: string; merged_version_id?: string; reason: string } };
-export type RunItem = { kind: 'run'; server: string; run_dir: string; version_id: string; pid: number };
+export type RunItem = { kind: 'run'; server: string; account?: string; run_dir: string; version_id: string; pid: number };
 export type Item = FileItem | VersionItem | RunItem;
 /** beside: the version was saved beside a newer one (by that person, or null); the next run combines them. */
 type Saved = { method_id: string; version_number: number; beside?: string | null };
@@ -33,7 +34,8 @@ export type LastSaved = { version_id?: string; version_number?: number; workflow
 
 export const outboxDir = () => join(methodCache(), 'outbox');
 const blobPath = (hash: string) => join(outboxDir(), 'blobs', hash);
-const itemKey = (item: Item) => sha256([item.server, item.kind, item.kind === 'file' ? item.sha256 : item.kind === 'version' ? item.version_id : item.run_dir].join('\n')).slice(0, 32);
+// Two accounts can upload the same file: each has its own item for it.
+const itemKey = (item: Item) => sha256([item.server, ...(item.kind === 'file' && item.account ? [item.account] : []), item.kind, item.kind === 'file' ? item.sha256 : item.kind === 'version' ? item.version_id : item.run_dir].join('\n')).slice(0, 32);
 const savedFile = (server: string) => join(methodCache(), 'versions', `${sha256(server).slice(0, 24)}.json`);
 const methodFile = (server: string, methodId: string) => join(methodCache(), 'versions', `${sha256(`${server}\n${methodId}`).slice(0, 24)}.json`);
 const read = (path: string) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
@@ -92,6 +94,8 @@ export class Outbox {
 
   /** Add an item. A file item copies the bytes now, so later edits to the file cannot change what is uploaded. */
   add(item: Item, source?: string) {
+    // Each item goes to the account of the client that adds it, whichever account is current when it is sent.
+    try { const account = this.client.account?.()?.key; if (account) item.account = account; } catch { /* signed out */ }
     mkdirSync(join(outboxDir(), 'blobs'), { recursive: true, mode: 0o700 });
     if (item.kind === 'file' && !existsSync(blobPath(item.sha256))) {
       const temporary = `${blobPath(item.sha256)}.${process.pid}.tmp`;
@@ -107,10 +111,22 @@ export class Outbox {
   /** Remove a run item that this process sent itself. */
   remove(item: Item) { this.owned.delete(itemKey(item)); rmSync(join(outboxDir(), `${itemKey(item)}.json`), { force: true }); }
   release(item: RunItem) { this.owned.delete(itemKey(item)); }
-  items(): Item[] {
+  /** The items of every account. */
+  private allItems(): Item[] {
     let names: string[] = [];
     try { names = readdirSync(outboxDir()).filter(name => /^[a-f0-9]{32}\.json$/.test(name)); } catch { return []; }
-    return names.map(name => read(join(outboxDir(), name))).filter((item): item is Item => !!item && item.server === this.client.server);
+    return names.map(name => read(join(outboxDir(), name))).filter((item): item is Item => !!item);
+  }
+  items(): Item[] {
+    // Items of another account wait for a command of that account. Items from before accounts were kept apart belong
+    // to the first account this computer signed in with.
+    let mine: (item: Item) => boolean = () => true;
+    try {
+      const accounts = this.client.accounts?.() ?? [], own = this.client.account?.()?.key;
+      const first = [...accounts].sort((a, b) => a.added_at - b.added_at)[0]?.key;
+      if (own) mine = item => (item.account ?? first) === own;
+    } catch { /* signed out: nothing is sent */ }
+    return this.allItems().filter(item => item.server === this.client.server && mine(item));
   }
   pending() { return this.items().length; }
   /**
@@ -184,7 +200,7 @@ export class Outbox {
         const key = itemKey(item);
         active.set(key, this.send(item).then(() => {
           rmSync(join(outboxDir(), `${key}.json`), { force: true });
-          if (item.kind === 'file') rmSync(blobPath(item.sha256), { force: true });
+          if (item.kind === 'file' && !this.allItems().some(other => other.kind === 'file' && other.sha256 === item.sha256)) rmSync(blobPath(item.sha256), { force: true });
           this.retryAt.delete(key); this.networkFailures = 0; this.gaveUp = false; this.lastProgress = Date.now();
         }, (error: any) => {
           const status = error?.status ?? Number(/^(\d{3}):/.exec(String(error?.message))?.[1]);
@@ -229,7 +245,8 @@ export class Outbox {
         const found = await this.client.request<{ present: string[] }>('/api/cli/files/check', 'POST', { hashes: files.slice(offset, offset + 10_000).map(f => f.sha256) }, true, { stallMs: this.options.stallMs ?? 60_000 });
         for (const hash of found.present ?? []) {
           const item = files.find(f => f.sha256 === hash)!;
-          rmSync(join(outboxDir(), `${itemKey(item)}.json`), { force: true }); rmSync(blobPath(hash), { force: true });
+          rmSync(join(outboxDir(), `${itemKey(item)}.json`), { force: true });
+          if (!this.allItems().some(other => other.kind === 'file' && other.sha256 === hash)) rmSync(blobPath(hash), { force: true });
         }
       }
       this.lastProgress = Date.now();
@@ -251,6 +268,7 @@ export class Outbox {
         `/api/cli/methods/${encodeURIComponent(item.method_id)}/versions/${encodeURIComponent(item.version_id)}`, 'PUT', item.body, true, { stallMs, onProgress });
       if (saved.version_id !== item.version_id) throw Object.assign(Error('The server saved another version ID than this content has.'), { status: 409 });
       recordSaved(item, saved);
+      this.client.remember?.(item.method_id);
       return;
     }
     if (!existsSync(join(item.run_dir, 'method-sync.json'))) return;
@@ -261,5 +279,8 @@ export class Outbox {
 
 /** Send what earlier commands left in the outbox, in the background. Never throws and never delays the command. */
 export function sendLeftovers(client: MethodClient) {
-  try { const outbox = new Outbox(client, { write: () => {} }); if (outbox.pending()) outbox.start(); } catch { /* sent by a later command */ }
+  let accounts: Array<{ key: string }> = [];
+  try { accounts = client.accounts?.() ?? []; } catch { /* signed out */ }
+  for (const each of accounts.length ? accounts.map(a => client.as(a.key)) : [client])
+    try { const outbox = new Outbox(each, { write: () => {} }); if (outbox.pending()) outbox.start(); } catch { /* sent by a later command */ }
 }

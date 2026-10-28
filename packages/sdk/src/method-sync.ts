@@ -245,7 +245,7 @@ export class MethodSync {
       JSON.parse(readFileSync(join(directory, "method-sync.json"), "utf8")),
     );
     const sync = new MethodSync(
-      client ?? new MethodClient(state.server),
+      client ?? new MethodClient(state.server).owner(state.workflow_id),
       directory,
       state.workflow_id,
       state.version_id,

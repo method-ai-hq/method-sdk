@@ -975,7 +975,8 @@ async function armRoom(file: string, cacheDir: string, fix: boolean, folders: Re
   const agents = new Set<string>(Object.values(methodProfiles(method)).map((profile: any) => profile.backend));
   if (fix || models.length) { const local = await localAgent(); if (local) agents.add(local); }
   const room = await cleanRoomEnv([...agents].filter((agent): agent is 'claude' | 'codex' => agent === 'claude' || agent === 'codex'), process.env, { folders });
-  Object.assign(room.env, { METHOD_CONFIG_DIR: configRoot(), METHOD_CACHE_DIR: cacheDir, ...(web ? {} : { METHOD_WEB: 'off' }), ...(process.env.METHOD_SERVER ? { METHOD_SERVER: process.env.METHOD_SERVER } : {}) });
+  Object.assign(room.env, { METHOD_CONFIG_DIR: configRoot(), METHOD_CACHE_DIR: cacheDir, ...(web ? {} : { METHOD_WEB: 'off' }), ...(process.env.METHOD_SERVER ? { METHOD_SERVER: process.env.METHOD_SERVER } : {}),
+    ...(process.env.METHOD_ACCOUNT ? { METHOD_ACCOUNT: process.env.METHOD_ACCOUNT } : {}) });
   return room;
 }
 /** Wait for the fix of a correction until it has a final outcome, for at most FIX_LIMIT_MS. */
@@ -1401,12 +1402,11 @@ async function cellSync(folder: string, file: string, frozen: boolean) {
   const account = readAccount(folder);
   if (!account) return null;
   try {
-    process.env.METHOD_CONFIG_DIR ??= account.config_dir;
-    const { MethodClient } = await import('./method-client.js');
+    const { clientOf } = await import('./compare-account.js');
     const { Outbox } = await import('./outbox.js');
     const { prepareVersion } = await import('./versions.js');
     const { MethodSync } = await import('./method-sync.js');
-    const client = new MethodClient(account.server), outbox = new Outbox(client);
+    const client = clientOf(account), outbox = new Outbox(client);
     const version = await prepareVersion(client, outbox, file, 'Saved by a comparison.', { home: !frozen });
     return (runDir: string) => new MethodSync(client, runDir, version.method_id, version.version_id, undefined, readDocument(file).run_data === 'device', outbox);
   } catch (error) {
@@ -2009,6 +2009,9 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
 /** `method __compare STAGE`: one stage of a comparison, run by the generated Method's stage script. */
 export async function compareStage(stage: string, bindings: any): Promise<Record<string, unknown>> {
   const plan = bindings.comparison ? JSON.parse(bindings.comparison) : undefined;
+  // Every stage, its arms and their learners use the account that saved the comparison.
+  const saved = plan?.folder ? readAccount(plan.folder) : null;
+  if (saved?.account) process.env.METHOD_ACCOUNT = saved.account;
   const treated: ArmTreatment[] | null = bindings.treated ? JSON.parse(bindings.treated) : null;
   const runsOf = (list: string[] = []) => list.map(r => JSON.parse(r));
   const reported = { state: { reported: new Date().toISOString() } };

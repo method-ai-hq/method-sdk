@@ -1557,7 +1557,7 @@ method keys create --name 'Cuties backend'
 
 ## status
 
-Check installation and sign-in without listing Methods or starting login.
+Check installation and sign-in, and name the signed-in accounts, without listing Methods or starting login.
 
 Usage:
 
@@ -1566,10 +1566,10 @@ method status [--server URL]
 ```
 
 Arguments and defaults:
-No required arguments. Checks the selected server with the current credential when one exists.
+No required arguments. Checks each signed-in account of the selected server.
 
 Result and changes:
-JSON {installed:true,server,signed_in}. A missing or expired credential returns signed_in:false. Does not print account details.
+JSON {installed:true,server,signed_in,account,other_accounts}. account is the current account: person, email and workspace. other_accounts lists the other signed-in accounts of this computer. A missing or expired credential returns signed_in:false; an account whose credential expired shows signed_in:false.
 
 Errors:
 Network and server errors exit 1; they are not reported as signed out.
@@ -1654,7 +1654,7 @@ method step wf_example search
 
 ## login
 
-Connect this computer with browser approval.
+Connect this computer to a Method account with browser approval, or add another account.
 
 Usage:
 
@@ -1663,10 +1663,10 @@ method login [--server URL]
 ```
 
 Arguments and defaults:
-No credentials in chat or command flags. Method opens the sign-in/approval page and waits. Connection is saved per server in ~/.config/method. Sign in again if access expires or is revoked.
+No credentials in chat or command flags. Method always opens the approval page and waits. The account that approves becomes the current account: a new account is added, and an account this computer already has gets a new credential. The other accounts stay signed in. To add another account, open the link where you are signed in to that account, for example in a private window. Each command uses the account that owns its Method or comparison, whichever account is current; a new Method uses the current account. Credentials are kept privately per server in ~/.config/method.
 
 Result and changes:
-Sign-in instructions and status text. Stores a private local credential after approval. Remote commands also start login when no credential exists.
+Sign-in instructions, then the current account and the other signed-in accounts. Remote commands also start login when no account is signed in.
 
 Errors:
 Approval expired, denied, or network unavailable. Repeat login when ready.
@@ -1679,7 +1679,7 @@ method login
 
 ## logout
 
-Disconnect this computer from the selected Method server.
+Sign out of the current account on this computer.
 
 Usage:
 
@@ -1688,13 +1688,13 @@ method logout [--server URL]
 ```
 
 Arguments and defaults:
-No required arguments. Select the same server used for login.
+No required arguments. Select the same server used for login. The other accounts stay signed in; the most recently used of them becomes the current account.
 
 Result and changes:
-Status text. Revokes remote access, then removes the local credential.
+One line: the account signed out, and the account that is current now (or that none is).
 
 Errors:
-If remote revocation fails, the local credential remains. Retry online, or use devices/revoke from another connected computer.
+If remote revocation fails, the credential remains. Retry online, or use devices/revoke from another connected computer.
 
 Example:
 

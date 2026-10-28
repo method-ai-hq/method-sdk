@@ -176,7 +176,8 @@ class ProductionAskTest(unittest.TestCase):
         cwd = os.getcwd()
         with tempfile.TemporaryDirectory() as config, tempfile.TemporaryDirectory() as app:
             os.environ["METHOD_CONFIG_DIR"] = config
-            (Path(config) / (hashlib.sha256(self.url.encode()).hexdigest()[:24] + ".json")).write_text(json.dumps({"server": self.url, "token": TOKEN}))
+            (Path(config) / (hashlib.sha256(self.url.encode()).hexdigest()[:24] + ".json")).write_text(json.dumps({"server": self.url, "accounts": [
+                {"key": "user_current", "token": TOKEN, "ids": []}, {"key": "user_other", "token": "method_" + "o" * 43, "ids": []}]}))
             os.chdir(app)
             try:
                 method = Method(server=self.url, worker=False)

@@ -82,15 +82,21 @@ def dotenv_values(folder: str | Path | None = None) -> dict[str, str]:
 
 
 def _signed_in_token(server: str) -> str | None:
-    """The CLI sign-in of this computer for a server (the same file `method login` writes)."""
+    """The CLI sign-in of this computer for a server (the file `method login` writes): the account that METHOD_ACCOUNT
+    names, else the current account (the first). A file from before 0.22.6 holds one sign-in."""
     root = Path(os.environ.get("METHOD_CONFIG_DIR") or Path.home() / ".config" / "method")
     path = root / (hashlib.sha256(server.encode("utf-8")).hexdigest()[:24] + ".json")
     try:
         saved = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    token = saved.get("token")
-    return token if saved.get("server") == server and isinstance(token, str) and CREDENTIAL.match(token) else None
+    if saved.get("server") != server:
+        return None
+    accounts = [a for a in saved.get("accounts", [{"key": "", "token": saved.get("token")}]) if isinstance(a, dict)]
+    wanted = os.environ.get("METHOD_ACCOUNT")
+    account = next((a for a in accounts if wanted and a.get("key") == wanted), accounts[0] if accounts else {})
+    token = account.get("token")
+    return token if isinstance(token, str) and CREDENTIAL.match(token) else None
 
 
 def resolve_credential(api_key: str | None = None, server: str | None = None) -> tuple[str, str]:

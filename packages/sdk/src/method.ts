@@ -7,13 +7,13 @@ import { restorePackage } from './method-files.js';
 import { publish, methodContent, methodIdPattern } from './versions.js';
 import { runSaved } from './run-saved.js';
 import { bindInput, bindConnection } from './bindings.js';
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { localAuthoring, authoringPath, readDocument, writeDocument } from "./authoring.js";
-import { MethodClient, DEFAULT_SERVER } from "./method-client.js";
+import { MethodClient, DEFAULT_SERVER, accountWords } from "./method-client.js";
 import { MethodSync } from "./method-sync.js";
 import { progressMain } from "./progress.js";
 import { run, parse, localMain } from "./local-cli.js";
@@ -138,12 +138,55 @@ async function methodByName(client: MethodClient, name: string) {
   process.exitCode = 2;
   return undefined;
 }
+/**
+ * The Method, comparison or run that a command acts on, by its ID: a Method or comparison file (its id: line), a
+ * Method or comparison ID, a dashboard link, the run of method judge, or the Method of a judgment that this computer
+ * fixes. Undefined when the command names none.
+ */
+async function commandTarget(args: string[]): Promise<string | undefined> {
+  const [command, first] = args;
+  const idOf = (file: string) => { try { const id = readDocument(file).id; return typeof id === 'string' && /^(wf|cmp)_[a-f0-9]{32}$/.test(id) ? id : undefined; } catch { return undefined; } };
+  if (command === 'judge' && first) {
+    const { findRunFolder } = await import('./local-judgments.js');
+    const dir = findRunFolder(first);
+    if (!dir) return first;
+    try { const id = JSON.parse(readFileSync(join(dir, 'method.json'), 'utf8')).id; if (typeof id === 'string' && methodIdPattern.test(id)) return id; } catch { /* no Method ID */ }
+    return undefined;
+  }
+  if ((command === 'answer' || command === 'wait') && /^jdg_/.test(first ?? ''))
+    return (await import('./fix-outcomes.js')).storedOutcomes().find(r => r.judgment === first)?.method_id || undefined;
+  if (command === 'undo' && (!first || first.startsWith('--'))) { const last = (await import('./fix-outcomes.js')).lastChangedFile(); return last ? idOf(last) : undefined; }
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === '--file' && args[i + 1]) { const id = idOf(args[i + 1]!); if (id) return id; }
+    if (arg.startsWith('-')) continue;
+    if (/^(wf|cmp)_[a-f0-9]{32}$/.test(arg)) return arg;
+    const linked = /^https?:\/\/[^/]+\/(?:methods|comparisons)\/((?:wf|cmp)_[a-f0-9]{32})/.exec(arg)?.[1];
+    if (linked) return linked;
+    if (/\.(method|compare)$/i.test(arg) && existsSync(arg)) return idOf(arg);
+  }
+  // method connect without --file: the one Method file in this folder.
+  if (command === 'connect') { const found = readdirSync('.').filter(name => /\.method$/i.test(name)); if (found.length === 1) return idOf(found[0]!); }
+  return undefined;
+}
+/**
+ * Every command uses the account that owns its Method or comparison, whichever account is current: this process and
+ * the processes it starts (the run, the fix, a comparison's arms and learners).
+ */
+async function routeAccount(args: string[], clientFactory: (server: string) => MethodClient) {
+  if (process.env.METHOD_API_KEY || ['login', 'logout', 'status'].includes(args[0] ?? '')) return;
+  const id = await commandTarget(args);
+  if (!id) return;
+  const server = parseArgs({ args: args.slice(1), strict: false, options: { server: { type: 'string' } } }).values.server;
+  try { await clientFactory(typeof server === 'string' ? server : DEFAULT_SERVER).route?.(id); } catch { /* the current account */ }
+}
 export async function methodMain(args = process.argv.slice(2), clientFactory: (server: string) => MethodClient = server => new MethodClient(server)) {
   const resumed = (await import('./resume-release.js')).resumeWithOriginalRelease(args);
   if (resumed !== undefined) { process.exitCode = resumed; return; }
   // An installed CLI keeps itself current in the background, with no output; this command is not delayed.
   void (await import('./update.js')).updateInBackground();
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
+  await routeAccount(args, clientFactory);
   if (args[0] === 'judge') return (await import('./judge.js')).judgeCommand(args.slice(1), clientFactory);
   if (args[0] === 'answer' && /^jdg_/.test(args[1] ?? '')) return (await import('./judge.js')).answerJudgmentCommand(args.slice(1), clientFactory);
   if (args[0] === 'wait' && (!args[1] || /^jdg_|^--/.test(args[1]))) return (await import('./fix-outcomes.js')).waitCommand(args.slice(1));
@@ -282,17 +325,20 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     return;
   }
   if (command === "logout") {
-    await client.logout();
-    process.stdout.write("Method is disconnected.\n");
+    const { signed_out, current } = await client.logout();
+    process.stdout.write(!signed_out ? "No account is signed in.\n"
+      : `Signed out of ${accountWords(signed_out)}. ${current ? `The current account is now ${accountWords(current)}.` : "No account is signed in now."}\n`);
     return;
   }
   if (command === "status") {
-    let signedIn = false;
-    if (client.token()) {
-      try { await client.request("/api/cli/me"); signedIn = true; }
-      catch (error) { if (!/^401:/.test(String((error as Error).message))) throw error; }
-    }
-    process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn, ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : {}) }, null, 2) + "\n");
+    // The current account, by person and workspace, and the other accounts of this computer. Nothing else about them.
+    const accounts = client.token() ? await client.check() : [];
+    const words = (a: (typeof accounts)[number]) => ({ person: a.person?.name ?? null, email: a.person?.email ?? null, workspace: a.workspace?.name ?? null, ...(a.signed_in ? {} : { signed_in: false }) });
+    const [current, ...others] = accounts;
+    const signedIn = !!current?.signed_in;
+    process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn,
+      ...(current ? { account: words(current) } : {}), ...(others.length ? { other_accounts: others.map(words) } : {}),
+      ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : others.some(a => !a.signed_in) ? { next: "An account with signed_in false needs method login again, approved with that account." } : {}) }, null, 2) + "\n");
     return;
   }
   // Without sign-in, explain prints one line and stops: script cards need a hosted model.
