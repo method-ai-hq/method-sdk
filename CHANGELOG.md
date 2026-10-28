@@ -1,3 +1,8 @@
+# 0.24.1
+
+- **A project arm keeps Claude Code's memory on**, as in the desktop app.
+- **Comparisons show the literal things first.** The page starts with what each agent receives, its files, one correction as each agent gets it, the hidden answer, and how each measure scores, made by Method from the comparison's own files and code. `method validate` makes these exhibits and says when a code measure or the correction has none. The trial sends each arm's worked example from its real runs.
+
 # 0.24.0
 
 - **Method's learner is one agent session.** A correction goes to one Claude Code or Codex session (the agent, model and effort of the Method's own steps, on your own subscription) in a private copy of the Method's folder. It reads the correction, the run (inputs, step outputs, result, transcripts, files), every earlier correction with its check and outcome, and the authoring guide. It writes the check of the correction with `method case new`, changes whatever the Method needs (a prompt, a learned rule, a new run step with a data file, a check, a split step, examples), and runs `method validate` and `method test`.
