@@ -1,3 +1,15 @@
+# 0.25.0
+
+Use runtime 0.17.0.
+
+- **A model step can answer in a production JSON Schema.** An output can say `schema: FILE` (a JSON Schema file listed in `files`) in place of `fields`. When it is the only output of a `call` or `agent` step, the model gets that schema itself as its output format and its answer is the output, so a production prompt and schema can be copied exactly. Values that use `enum`, optional fields, and patterns now work.
+- **The model reads each value once.** A value that the prompt inserts with `{{NAME}}` is no longer repeated in the JSON input. Files come before the JSON input.
+- **A dropped connection is tried again.** A model or classification request whose connection closes before the answer is retried like a server error, and a request gets five attempts in all, not three.
+- **Hosted models say when Method's own model account has no funds.** That refusal is no longer reported as a short outage and tried again; it says to use your own key with `method config model-key`.
+- **`method config model-key` says which key it uses.** It takes the key from the one nearby key file even when a key is already saved, and its output names where the key came from.
+- **A failed dashboard sync says that it tries again** every 5 seconds while the run goes on.
+- **The guide says that a script's file path is relative to `$METHOD_OUTPUT_DIR`.**
+
 # 0.24.5
 
 Use runtime 0.16.9.
