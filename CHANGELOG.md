@@ -1,3 +1,10 @@
+# 0.24.5
+
+Use runtime 0.16.9.
+
+- **A model step reads the files in its input.** A `call` or `agent` step gets each value of type `file` in its input, found by its declared type: a PDF or an image as the file itself, a text file as its text. The kind comes from the file's first bytes, not its name. Claude Code and Codex get the absolute path of each file; Codex gets images with its prompt. Before, the model got only the file's path and hash, and answered as if it had read the file. Any other file, and a PDF for a Codex step, stops the step with `unreadable_file` before the model runs.
+- **A checkpoint copy of a project runs its Methods under IDs of its own.** A comparison's measuring and probe copies of a project arm no longer catch up to the newest version that the learner saved: each copy runs its Methods as they were at its checkpoint.
+
 # 0.24.4
 
 - **Claude Code uses Method for work the person will repeat.** The Method plugin's skill applies when the person says they will give the same kind of task again, when the work follows a written guide or rules for a recurring task, and when they correct a result and expect it to stay corrected. At the start of each chat the plugin says so in one line, with `method judge` for corrections. A correction of repeated work that no Method does yet: Claude Code builds a Method from the work it just did, runs it, and judges that run. It tells the person what was kept and where, and never says a correction is kept when nothing was saved.
