@@ -80,3 +80,19 @@ it('method config model-key imports the key from a nearby key file before it ope
   expect(asked).toEqual([]);
   expect(resolveSecrets([ownKeyName])[ownKeyName]).toBe('sk-or-nearby');
 });
+
+it('method config model-key takes the key in the one nearby key file in place of a saved key, and says where the key came from', async () => {
+  const root = computer();
+  mkdirSync(join(root, 'work'));
+  writeFileSync(join(root, '.env'), `${ownKeyName}=sk-or-old\n`);
+  await modelKeyCommand([], async () => {});
+  writeFileSync(join(root, '.env'), `${ownKeyName}=sk-or-new\n`);
+  const written = vi.mocked(process.stdout.write); written.mockClear();
+  await modelKeyCommand([], async () => { throw Error('The form must not open.'); });
+  expect(resolveSecrets([ownKeyName])[ownKeyName]).toBe('sk-or-new');
+  expect(String(written.mock.calls.at(-1)?.[0])).toContain('the key in ../.env, now saved on this computer');
+  // Without a key file, the saved key is used, and the command says so.
+  rmSync(join(root, '.env')); written.mockClear();
+  await modelKeyCommand([], async () => { throw Error('The form must not open.'); });
+  expect(String(written.mock.calls.at(-1)?.[0])).toContain('the key already saved on this computer');
+});

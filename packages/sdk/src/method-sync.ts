@@ -195,7 +195,7 @@ export class MethodSync {
     if (!this.warned && String(error).includes("not saved yet")) { this.warned = true; return; }
     if (!this.warned)
       process.stderr.write(
-        `Dashboard sync paused: ${String(error)}\nRun records remain here; any later method command sends them.\n`,
+        `Dashboard sync failed: ${String(error)}\nMethod tries again every 5 seconds while the run goes on. Run records remain here; any later method command sends what is left.\n`,
       );
     this.warned = true;
   }

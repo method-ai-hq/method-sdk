@@ -159,6 +159,7 @@ run_data            account (default) | device   device only when the user expli
 
 DATA   {type: text | number | boolean | record | list | file, description,
         fields: {NAME: TYPE}   (a record, or a list of records)
+        schema: FILE           (a step output record, in place of fields: a JSON Schema file listed in files)
         items: TYPE            (a list of one type)
         default: VALUE}        A bare type such as text works inside fields and items.
 REF    inputs.NAME | an output NAME | NAME.field | state.NAME | environment.NAME
@@ -171,9 +172,11 @@ STEP   name, purpose          give a run step both; purpose states its rules, re
        do: one of
          {kind: run, runtime: python | node, entrypoint: FILE, args: [...]}
              reads one JSON object (its in) on stdin, prints one JSON object (its out); files go under $METHOD_OUTPUT_DIR
+             a file's path is relative to $METHOD_OUTPUT_DIR: join the two to open an input file
          {kind: call, model: NAME, prompt: TEXT}
-             the step's in go to the model as JSON; {{ALIAS}} puts a text, number, or boolean value into the prompt
-             the model also reads each file in its in: a PDF or image as itself, a text file as text; any other file stops the step
+             {{ALIAS}} puts a text, number, or boolean value into the prompt; the step's other in go to the model as JSON
+             the model also reads each file in its in, before the JSON: a PDF or image as itself, a text file as text; any other file stops the step
+             one out with schema: FILE gives the model that JSON Schema itself; use it to keep a production prompt and schema exact
          {kind: agent, model: NAME, prompt: TEXT, tools: [TOOL]}
          {kind: classify, question: TEXT, options: {ID: description}}   value: {choice, probabilities}
          {kind: classify, question: TEXT, answer: yes_no}                value: {answer, probability} (of yes)

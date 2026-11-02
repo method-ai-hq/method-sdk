@@ -20,18 +20,16 @@ export async function modelKeyCommand(args: string[], set: (name: string) => Pro
     process.stdout.write('Model and classify steps use the Method account again. The key stays in the secret store; method secret list shows it.\n');
     return;
   }
-  if (!resolveSecrets([ownKeyName])[ownKeyName]) {
-    // One nearby key file holds the key (the team's .env, an old pipeline's): import it, without showing it. With
-    // several, the person chooses in the form.
-    const files = findSecrets([ownKeyName]).secrets?.[ownKeyName]?.in_files ?? [];
-    const file = files.length === 1 ? files[0] : undefined;
-    if (file) {
-      importSecrets(file, [ownKeyName]);
-      process.stdout.write(`Imported ${ownKeyName} from ${file}.\n`);
-    } else await set(ownKeyName);
-  }
+  // The one nearby key file that holds the key is the key the person means, even when another one is saved: import it,
+  // without showing it. With several files, a saved key stays; with none, the person enters it in the form.
+  const files = findSecrets([ownKeyName]).secrets?.[ownKeyName]?.in_files ?? [];
+  let from = 'the key already saved on this computer';
+  if (files.length === 1) { importSecrets(files[0]!, [ownKeyName]); from = `the key in ${files[0]}, now saved on this computer`; }
+  else if (!resolveSecrets([ownKeyName])[ownKeyName]) { await set(ownKeyName); from = 'the key that you entered in the form'; }
+  // A value that the shell exports comes before the saved one when a step runs.
+  if (process.env[ownKeyName]) from = `the key that your shell sets in ${ownKeyName}, which comes before a saved key`;
   updateComputerSettings(settings => { settings.model_key_env = ownKeyName; });
-  process.stdout.write(`Model and classify steps on this computer use your own OpenRouter key (${ownKeyName}). Turn it off with method config model-key --off.\n`);
+  process.stdout.write(`Model and classify steps on this computer use your own OpenRouter key: ${from}. Turn it off with method config model-key --off.\n`);
 }
 
 /**
