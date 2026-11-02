@@ -16,6 +16,8 @@ const server = 'https://example.test';
 const people = {
   ryan: { id: 'user_ryan', name: 'Ryan', email: 'ryan@example.test', organization_id: 'org_main', workspace: 'Main' },
   shared: { id: 'user_shared', name: 'Ryan', email: 'ryan+shared@example.test', organization_id: 'org_shared', workspace: 'Shared with Ada' },
+  // The same person as ryan, signed in to a second workspace of theirs.
+  ryanLdgr: { id: 'user_ryan', name: 'Ryan', email: 'ryan@example.test', organization_id: 'org_ldgr', workspace: 'LDGR Systems' },
 };
 type Person = keyof typeof people;
 
@@ -73,15 +75,15 @@ it('login always asks the browser: another account is added and becomes current,
   // Signed in already: login still opens the approval. The shared account is added and becomes current.
   s.fake.approve('shared');
   await s.client().login(noBrowser);
-  expect(s.saved().accounts.map((a: any) => a.key)).toEqual(['user_shared', 'user_ryan']);
+  expect(s.saved().accounts.map((a: any) => a.key)).toEqual(['user_shared:org_shared', 'user_ryan:org_main']);
   expect(s.said()).toContain('The current account is Ryan (ryan+shared@example.test), workspace Shared with Ada. Also signed in: Ryan (ryan@example.test), workspace Main.');
   // The main account again: its credential is replaced (the old one no longer works), its Methods stay its own.
   const before = s.saved().accounts[1];
-  s.client('user_ryan').remember('wf_' + '1'.repeat(32));
+  s.client('user_ryan:org_main').remember('wf_' + '1'.repeat(32));
   s.fake.approve('ryan');
   await s.client().login(noBrowser);
   const [main, shared] = s.saved().accounts;
-  expect([main.key, shared.key]).toEqual(['user_ryan', 'user_shared']);
+  expect([main.key, shared.key]).toEqual(['user_ryan:org_main', 'user_shared:org_shared']);
   expect(main.token).not.toBe(before.token);
   expect(main.ids).toEqual(['wf_' + '1'.repeat(32)]);
   expect(s.fake.revoked.has(sha256(before.token))).toBe(true);
@@ -105,7 +107,7 @@ it('a command uses the account that owns its Method, whichever account is curren
   await methodMain(['get', mine], () => s.client());
   expect(s.fake.calls.filter(c => c.path === `/api/cli/methods/${mine}`).map(c => c.person).sort()).toEqual(['ryan', 'ryan', 'shared']);
   expect(JSON.parse(s.printed()).workflow_id).toBe(mine);
-  expect(s.saved().accounts.find((a: any) => a.key === 'user_ryan').ids).toEqual([mine]);
+  expect(s.saved().accounts.find((a: any) => a.key === 'user_ryan:org_main').ids).toEqual([mine]);
   // Remembered: the next command asks nobody first, and uses the main account.
   delete process.env.METHOD_ACCOUNT; s.fake.calls.length = 0;
   await methodMain(['get', mine], () => s.client());
@@ -113,19 +115,19 @@ it('a command uses the account that owns its Method, whichever account is curren
   // A Method file with an id: line uses its owner too; a file with a new ID uses the current account.
   const folder = mkdtempSync(join(tmpdir(), 'method-accounts-file-')); dirs.push(folder);
   writeFileSync(join(folder, 'theirs.method'), `id: ${theirs}\nname: Theirs\n`);
-  expect(process.env.METHOD_ACCOUNT).toBe('user_ryan');
+  expect(process.env.METHOD_ACCOUNT).toBe('user_ryan:org_main');
   await methodMain(['steps', join(folder, 'theirs.method')], () => s.client()).catch(() => {});
-  expect(process.env.METHOD_ACCOUNT).toBe('user_shared');
+  expect(process.env.METHOD_ACCOUNT).toBe('user_shared:org_shared');
   expect(s.client().token()).toBe(s.saved().accounts[0].token);
   delete process.env.METHOD_ACCOUNT;
   await s.client().route('wf_' + 'c'.repeat(32));
   expect(process.env.METHOD_ACCOUNT).toBeUndefined();
-  expect(s.client().account()?.key).toBe('user_shared');
+  expect(s.client().account()?.key).toBe('user_shared:org_shared');
   // While a command of the main account runs, every client of this process (and of the processes it starts) uses it.
   await s.client().route(mine);
-  expect(process.env.METHOD_ACCOUNT).toBe('user_ryan');
-  expect(s.client().account()?.key).toBe('user_ryan');
-  expect(s.client().owner(theirs).account()?.key).toBe('user_shared');
+  expect(process.env.METHOD_ACCOUNT).toBe('user_ryan:org_main');
+  expect(s.client().account()?.key).toBe('user_ryan:org_main');
+  expect(s.client().owner(theirs).account()?.key).toBe('user_shared:org_shared');
 }, 30_000);
 
 it('what waits to be saved goes with the account that saved it, whichever account is current later', async () => {
@@ -134,10 +136,10 @@ it('what waits to be saved goes with the account that saved it, whichever accoun
   s.fake.approve('shared');
   await s.client().login(noBrowser);
   const outbox = (key: string) => new Outbox(s.client(key), { write: () => {} });
-  outbox('user_ryan').add({ kind: 'run', server, run_dir: join(s.root, 'run-main'), version_id: 'v1', pid: 1 });
-  outbox('user_shared').add({ kind: 'run', server, run_dir: join(s.root, 'run-shared'), version_id: 'v2', pid: 1 });
-  expect(outbox('user_ryan').items().map(i => i.kind === 'run' && i.run_dir)).toEqual([join(s.root, 'run-main')]);
-  expect(outbox('user_shared').items().map(i => i.kind === 'run' && i.run_dir)).toEqual([join(s.root, 'run-shared')]);
+  outbox('user_ryan:org_main').add({ kind: 'run', server, run_dir: join(s.root, 'run-main'), version_id: 'v1', pid: 1 });
+  outbox('user_shared:org_shared').add({ kind: 'run', server, run_dir: join(s.root, 'run-shared'), version_id: 'v2', pid: 1 });
+  expect(outbox('user_ryan:org_main').items().map(i => i.kind === 'run' && i.run_dir)).toEqual([join(s.root, 'run-main')]);
+  expect(outbox('user_shared:org_shared').items().map(i => i.kind === 'run' && i.run_dir)).toEqual([join(s.root, 'run-shared')]);
 });
 
 it('logout signs out of the current account only and says which account is current now', async () => {
@@ -149,7 +151,7 @@ it('logout signs out of the current account only and says which account is curre
   await methodMain(['logout'], () => s.client());
   expect(s.printed()).toBe('Signed out of Ryan (ryan+shared@example.test), workspace Shared with Ada. The current account is now Ryan (ryan@example.test), workspace Main.\n');
   expect(s.fake.revoked.has(sha256(sharedToken))).toBe(true);
-  expect(s.saved().accounts.map((a: any) => a.key)).toEqual(['user_ryan']);
+  expect(s.saved().accounts.map((a: any) => a.key)).toEqual(['user_ryan:org_main']);
   s.stdout.mockClear();
   await methodMain(['logout'], () => s.client());
   expect(s.printed()).toBe('Signed out of Ryan (ryan@example.test), workspace Main. No account is signed in now.\n');
@@ -163,9 +165,28 @@ it("a comparison's stages, arms and learners use the account that saved it, whic
   await s.client().login(noBrowser);
   vi.stubEnv('METHOD_CONFIG_DIR', s.root);
   const { clientOf } = await import('../../packages/sdk/src/compare-account.js');
-  const client = clientOf({ server, config_dir: s.root, account: 'user_ryan', cache_dir: s.root, comparison_id: 'cmp_' + 'd'.repeat(32), version_number: 1, stage: 'draft', url: '', spec_digest: '' });
-  expect(client.account()?.key).toBe('user_ryan');
+  const client = clientOf({ server, config_dir: s.root, account: 'user_ryan:org_main', cache_dir: s.root, comparison_id: 'cmp_' + 'd'.repeat(32), version_number: 1, stage: 'draft', url: '', spec_digest: '' });
+  expect(client.account()?.key).toBe('user_ryan:org_main');
   // The processes it starts inherit the account.
-  expect(process.env.METHOD_ACCOUNT).toBe('user_ryan');
-  expect(new MethodClient(server, s.fake.fetcher, s.root).account()?.key).toBe('user_ryan');
+  expect(process.env.METHOD_ACCOUNT).toBe('user_ryan:org_main');
+  expect(new MethodClient(server, s.fake.fetcher, s.root).account()?.key).toBe('user_ryan:org_main');
 }, 30_000);
+
+it('one person in two workspaces keeps an account for each, and login --workspace switches between them', async () => {
+  const s = setup();
+  s.fake.approve('ryan');
+  await s.client().login(noBrowser);
+  const opened: string[] = [];
+  s.fake.approve('ryanLdgr');
+  await s.client().login(url => opened.push(url), 'LDGR Systems');
+  // The approval page opens with the workspace chosen; the first workspace's credential still works.
+  expect(new URL(opened[0]!).searchParams.get('workspace')).toBe('LDGR Systems');
+  expect(s.saved().accounts.map((a: any) => [a.key, a.workspace.name])).toEqual([['user_ryan:org_ldgr', 'LDGR Systems'], ['user_ryan:org_main', 'Main']]);
+  expect(s.fake.calls.some(c => c.path === '/api/cli/logout')).toBe(false);
+  // A workspace that this computer is signed in to becomes current with no browser.
+  const starts = s.fake.calls.filter(c => c.path === '/auth/cli/start').length;
+  await s.client().login(() => { throw Error('The browser must not open.'); }, 'main');
+  expect(s.fake.calls.filter(c => c.path === '/auth/cli/start').length).toBe(starts);
+  expect(s.client().account()?.key).toBe('user_ryan:org_main');
+  expect(s.said()).toContain('The current account is Ryan (ryan@example.test), workspace Main.');
+});

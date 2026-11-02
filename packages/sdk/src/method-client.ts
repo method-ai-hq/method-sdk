@@ -147,16 +147,18 @@ export class MethodClient {
     if (owner) process.env[ROUTED] = owner.key;
   }
   /** The person and workspace of a credential, from the server. Throws 401 when it no longer works. */
-  async whoIs(token: string): Promise<Pick<SignIn, "person" | "workspace">> {
+  async whoIs(token: string): Promise<Pick<SignIn, "person" | "workspace"> & { memberships?: Array<{ id: string; name: string }> }> {
     const answer = await this.send("/api/cli/me", "GET", { token, stallMs: 15_000 });
     const text = Buffer.from(answer.bytes).toString("utf8");
     if (!answer.ok) throw Object.assign(Error(`${answer.status}: ${text.slice(0, 300)}`), { status: answer.status });
     const me = JSON.parse(text);
     return { person: { id: String(me.user.id), name: String(me.user.name ?? me.user.email), email: String(me.user.email) },
-      workspace: { id: String(me.user.organization_id), name: typeof me.organization?.name === "string" ? me.organization.name : null } };
+      workspace: { id: String(me.user.organization_id), name: typeof me.organization?.name === "string" ? me.organization.name : null },
+      // Each workspace of the person; method status names them. It is not saved with the account.
+      ...(Array.isArray(me.memberships) ? { memberships: me.memberships.map((w: any) => ({ id: String(w.id), name: String(w.name) })) } : {}) };
   }
   /** Each account with whether its credential still works, and its person and workspace as the server has them now. */
-  async check(): Promise<Array<SignIn & { signed_in: boolean }>> {
+  async check(): Promise<Array<SignIn & { signed_in: boolean; memberships?: Array<{ id: string; name: string }> }>> {
     const accounts = this.accounts();
     const checked = await Promise.all(accounts.map(async a => {
       try { return { ...a, ...await this.whoIs(a.token), signed_in: true }; }
@@ -284,7 +286,18 @@ export class MethodClient {
    * Browser approval. The account that approves is added, or refreshed when this computer already has it, and becomes
    * the current account. The other accounts stay signed in.
    */
-  async login(openBrowser: (url: string) => void = openUrl) {
+  async login(openBrowser: (url: string) => void = openUrl, workspace?: string) {
+    // A workspace that this computer is already signed in to becomes the current account, with no browser.
+    if (workspace) {
+      const wanted = workspace.trim().toLowerCase();
+      const saved = (await this.check()).find(a => a.signed_in && (a.workspace?.id.toLowerCase() === wanted || a.workspace?.name?.toLowerCase() === wanted));
+      if (saved) {
+        const accounts = this.accounts();
+        this.saveAccounts([accounts.find(a => a.key === saved.key)!, ...accounts.filter(a => a.key !== saved.key)]);
+        process.stderr.write(`The current account is ${accountWords(saved)}.\n`);
+        return;
+      }
+    }
     const pendingFile = `${this.credentialFile}.pending`;
     const prior = existsSync(pendingFile) ? JSON.parse(readFileSync(pendingFile, 'utf8')) : null;
     const token = prior?.expires_at > Date.now() ? prior.token : `method_${Buffer.from(randomBytes(32)).toString("base64url")}`;
@@ -301,6 +314,8 @@ export class MethodClient {
     );
     writePrivateJson(pendingFile, { ...started, token });
     const verification = new URL(started.verification_url);
+    // The approval page chooses this workspace; the person can choose another of theirs there.
+    if (workspace) verification.searchParams.set("workspace", workspace);
     // The hosted app uses its API origin for WorkOS cookies. No credentials are sent to this URL.
     if (
       verification.protocol !== "https:" &&
@@ -309,7 +324,7 @@ export class MethodClient {
       throw Error("Invalid browser sign-in URL.");
     process.stderr.write(
       `Approve Method in your browser. Check this code: ${started.code}\n${verification}\n` +
-      (this.accounts().length ? "The account you approve with becomes the current account. To add another account, open the link where you are signed in to it, for example in a private window.\n" : ""),
+      (this.accounts().length ? "The account you approve with becomes the current account. Choose the workspace on the page. To add another person, open the link where you are signed in as that person, for example in a private window.\n" : ""),
     );
     openBrowser(verification.toString());
     while (Date.now() < started.expires_at) {
@@ -332,7 +347,10 @@ export class MethodClient {
     rmSync(pendingFile, {force: true});
     throw Error("Browser sign-in expired. Run method login again.");
   }
-  /** Keep an approved credential as the current account: a known person and workspace gets the new credential. */
+  /**
+   * Keep an approved credential as the current account. An account is one person in one workspace: the same person
+   * and workspace gets the new credential, and a sign-in to another workspace of the person is another account.
+   */
   private async addAccount(token: string) {
     const identity = await this.whoIs(token).catch(() => ({}) as Pick<SignIn, "person" | "workspace">);
     // An account from before the person was known is named now, so it is found when the same person approves again.
@@ -342,8 +360,9 @@ export class MethodClient {
       try { accounts.push({ ...a, ...await this.whoIs(a.token) }); }
       catch (error: any) { if (error?.status !== 401) accounts.push(a); }
     }
-    const known = identity.person ? accounts.find(a => a.person?.id === identity.person!.id) : undefined;
-    const added = SignIn.parse({ key: known?.key ?? identity.person?.id ?? tokenKey(token), token, ...identity, ids: known?.ids ?? [], added_at: known?.added_at ?? Date.now() });
+    const known = identity.person ? accounts.find(a => a.person?.id === identity.person!.id && a.workspace?.id === identity.workspace?.id) : undefined;
+    const key = identity.person ? `${identity.person.id}:${identity.workspace?.id ?? ""}` : tokenKey(token);
+    const added = SignIn.parse({ key: known?.key ?? key, token, ...identity, ids: known?.ids ?? [], added_at: known?.added_at ?? Date.now() });
     this.saveAccounts([added, ...accounts.filter(a => a !== known)]);
     // The credential it replaces no longer works.
     if (known && known.token !== token) await this.send("/api/cli/logout", "POST", { token: known.token, body: "{}", type: "application/json" }).catch(() => {});

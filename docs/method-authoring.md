@@ -1588,7 +1588,7 @@ Arguments and defaults:
 No required arguments. Checks each signed-in account of the selected server.
 
 Result and changes:
-JSON {installed:true,server,signed_in,account,other_accounts}. account is the current account: person, email and workspace. other_accounts lists the other signed-in accounts of this computer. A missing or expired credential returns signed_in:false; an account whose credential expired shows signed_in:false.
+JSON {installed:true,server,signed_in,account,workspaces,other_accounts}. account is the current account: person, email and workspace. workspaces, for a person in more than one workspace, lists each with signed_in_here. other_accounts lists the other signed-in accounts of this computer. A missing or expired credential returns signed_in:false; an account whose credential expired shows signed_in:false.
 
 Errors:
 Network and server errors exit 1; they are not reported as signed out.
@@ -1673,16 +1673,16 @@ method step wf_example search
 
 ## login
 
-Connect this computer to a Method account with browser approval, or add another account.
+Connect this computer to a Method account with browser approval, add another account, or switch to another workspace.
 
 Usage:
 
 ```sh
-method login [--server URL]
+method login [--workspace NAME|ID] [--server URL]
 ```
 
 Arguments and defaults:
-No credentials in chat or command flags. Method always opens the approval page and waits. The account that approves becomes the current account: a new account is added, and an account this computer already has gets a new credential. The other accounts stay signed in. To add another account, open the link where you are signed in to that account, for example in a private window. Each command uses the account that owns its Method or comparison, whichever account is current; a new Method uses the current account. Credentials are kept privately per server in ~/.config/method.
+No credentials in chat or command flags. An account is one person in one workspace. Method opens the approval page and waits; the page names the workspace, and a person in more than one workspace chooses it there. --workspace chooses it first; when this computer is already signed in to that workspace, it becomes the current account with no browser. The account that approves becomes the current account: a new account is added, and an account this computer already has gets a new credential. The other accounts stay signed in. To add another person, open the link where you are signed in as that person, for example in a private window. Each command uses the account that owns its Method or comparison, whichever account is current; a new Method uses the current account. Credentials are kept privately per server in ~/.config/method.
 
 Result and changes:
 Sign-in instructions, then the current account and the other signed-in accounts. Remote commands also start login when no account is signed in.
@@ -1693,7 +1693,7 @@ Approval expired, denied, or network unavailable. Repeat login when ready.
 Example:
 
 ```sh
-method login
+method login --workspace 'LDGR Systems'
 ```
 
 ## logout

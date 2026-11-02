@@ -276,6 +276,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   // Strip only Method flags. Pass run flags unchanged to the existing SDK parser.
   const methodOptions = new Set([
     "server",
+    "workspace",
     "version",
     "file",
     "reason",
@@ -320,7 +321,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (!["status","login","logout","devices","revoke","list","get","steps","step","run","runs","logs","publish","explain","bind","state"].includes(command)) throw Error(help);
   const client = clientFactory(values.server ?? DEFAULT_SERVER);
   if (command === "login") {
-    await client.login();
+    await client.login(undefined, values.workspace);
     return;
   }
   if (command === "logout") {
@@ -335,8 +336,10 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
     const words = (a: (typeof accounts)[number]) => ({ person: a.person?.name ?? null, email: a.person?.email ?? null, workspace: a.workspace?.name ?? null, ...(a.signed_in ? {} : { signed_in: false }) });
     const [current, ...others] = accounts;
     const signedIn = !!current?.signed_in;
+    // Each workspace of the current person, and whether this computer is signed in to it (method login --workspace NAME).
+    const workspaces = signedIn ? current.memberships?.map(w => ({ name: w.name, signed_in_here: accounts.some(a => a.signed_in && a.person?.id === current.person?.id && a.workspace?.id === w.id) })) : undefined;
     process.stdout.write(JSON.stringify({ installed: true, server: client.server, signed_in: signedIn,
-      ...(current ? { account: words(current) } : {}), ...(others.length ? { other_accounts: others.map(words) } : {}),
+      ...(current ? { account: words(current) } : {}), ...(workspaces && workspaces.length > 1 ? { workspaces } : {}), ...(others.length ? { other_accounts: others.map(words) } : {}),
       ...(!signedIn ? { next: "Run method login to sign in with browser approval." } : others.some(a => !a.signed_in) ? { next: "An account with signed_in false needs method login again, approved with that account." } : {}) }, null, 2) + "\n");
     return;
   }
