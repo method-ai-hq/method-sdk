@@ -1,3 +1,11 @@
+# 0.25.1
+
+Use runtime 0.17.0.
+
+- **One person in more than one workspace.** An account is now one person in one workspace. A sign-in to another workspace of the same email adds an account and no longer signs out the first one.
+- **`method login --workspace NAME|ID`** opens the approval page with that workspace chosen. When this computer is already signed in to that workspace, it becomes the current account with no browser. A person in more than one workspace chooses the workspace on the approval page.
+- **`method status` lists the person's workspaces**, and whether this computer is signed in to each.
+
 # 0.25.0
 
 Use runtime 0.17.0.
