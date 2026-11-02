@@ -123,6 +123,7 @@ STEP   name, purpose          give a run step both; purpose states its rules, re
              reads one JSON object (its in) on stdin, prints one JSON object (its out); files go under $METHOD_OUTPUT_DIR
          {kind: call, model: NAME, prompt: TEXT}
              the step's in go to the model as JSON; {{ALIAS}} puts a text, number, or boolean value into the prompt
+             the model also reads each file in its in: a PDF or image as itself, a text file as text; any other file stops the step
          {kind: agent, model: NAME, prompt: TEXT, tools: [TOOL]}
          {kind: classify, question: TEXT, options: {ID: description}}   value: {choice, probabilities}
          {kind: classify, question: TEXT, answer: yes_no}                value: {answer, probability} (of yes)
