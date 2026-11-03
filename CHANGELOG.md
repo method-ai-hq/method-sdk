@@ -1,3 +1,13 @@
+# 0.26.3
+
+Use runtime 0.17.1.
+
+- **A comparison's runs reach its own workspace, and its page fills while it runs.** This computer kept one record of saved versions for all accounts, so a comparison's arm Method that another workspace had looked saved, and its runs were refused (`404: Method not found`, then `Run ... is not saved yet` on every cell). Each account now keeps its own record. A comparison's Method file whose ID another workspace has gets the ID that this workspace uses for it and is saved there. A finished run that the comparison's workspace does not have is saved there on the next `method run` of the file, under the same run ID, without running or grading anything again. Reports to the page are sent again after no answer or a stall, and each stage that plans links the runs the page lacks.
+- **A comparison's run record fits the account.** Each step's record held the whole Method state again, once per item of a list, which made a comparison's record larger than 40 MB. It now holds the state values that the step changed.
+- **An update keeps a comparison's trial.** A project arm with the Method plugin counted the plugin's version number as part of the arm, so each update of the method CLI gave the trial's corrections again and ran the trial again. The comparison keeps its copy of the plugin while only the version number differs.
+- **The full-run estimate counts slower fixes.** A Method fix tests its change on every earlier correction again, so later corrections take longer; the estimate now adds that time.
+- `method run-status`, `method wait` and `method cancel` take the run ID that `method run` printed. A name that no run on this computer has is an error, not `{"running":false}`.
+
 # 0.26.2
 
 Use runtime 0.17.1.
