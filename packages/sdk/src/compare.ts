@@ -1100,7 +1100,10 @@ export async function compileComparison(file: string, options: { strict?: boolea
   // The approval holds for the definition, whether or not the inputs' content went up.
   const digest = sha({ ...spec, inputs: { ...spec.inputs, details: Object.fromEntries(Object.entries(spec.inputs.details).map(([key, d]) => [key, d.name])) } });
   writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
-  const account = await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec, options);
+  const methodPath = join(folder, 'comparison.method');
+  let previousId: string | undefined;
+  try { const old = JSON.parse(readFileSync(methodPath, 'utf8')).id; if (typeof old === 'string' && methodIdPattern.test(old)) previousId = old; } catch { /* first run */ }
+  const account = await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec, { ...options, ...(previousId ? { methodId: previousId } : {}) });
   const plan = {
     file: path, folder, question: doc.question, difference: doc.difference, other_differences: doc.other_differences ?? [],
     arms, inputs: doc.inputs.map(id => resolveInput(id)),
@@ -1111,9 +1114,6 @@ export async function compileComparison(file: string, options: { strict?: boolea
     rule: doc.rule, rule_sentence: ruleSentence(doc), learners: doc.runs,
     assumptions: assumptionsOf(doc), compare_root: root, web, judge, judge_method: judgeMethod, model: models.shared, names: doc.about_inputs?.names ?? {},
   };
-  const methodPath = join(folder, 'comparison.method');
-  let previousId: string | undefined;
-  try { const old = JSON.parse(readFileSync(methodPath, 'utf8')).id; if (typeof old === 'string' && methodIdPattern.test(old)) previousId = old; } catch { /* first run */ }
   const cellCount = arms.length * doc.inputs.length * Math.max(doc.runs, NOISE_LEARNERS) * ((plan.checkpoints?.length ?? 1) + 1);
   writeFileSync(join(folder, 'stage.mjs'), stageScript, { mode: 0o600 });
   // The answers on the comparison page: the approvals let the run go on, and the other answers are for the agent.

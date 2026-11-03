@@ -22,7 +22,7 @@ const people = {
 type Person = keyof typeof people;
 
 /** A fake Method server: who each credential belongs to, which Methods each workspace owns, and every request. */
-function fakeServer() {
+function fakeServer(server = 'https://example.test', onRequest: (path: string, method: string) => void = () => {}) {
   const holders = new Map<string, Person>(), revoked = new Set<string>(), calls: Array<{ path: string; method: string; person: Person | undefined }> = [];
   const owned: Record<string, Person> = {};
   let approver: Person = 'ryan', pending = '';
@@ -32,6 +32,7 @@ function fakeServer() {
     const token = String((init.headers as any)?.authorization ?? '').replace(/^Bearer /, '');
     const person = token && !revoked.has(sha256(token)) ? holders.get(sha256(token)) : undefined;
     calls.push({ path, method, person });
+    onRequest(path, method);
     if (path === '/auth/cli/start') { pending = JSON.parse(String(init.body)).token_hash; return json({ poll_secret: 'p', code: 'ABCDEF123456', expires_at: Date.now() + 60_000, verification_url: `${server}/auth/cli/authorize?code=ABCDEF123456` }); }
     if (path === '/auth/cli/poll') { holders.set(pending, approver); return json({ status: 'approved' }); }
     if (!person) return json({ error: 'unauthorized' }, 401);
@@ -39,6 +40,12 @@ function fakeServer() {
     if (path === '/api/cli/logout') { revoked.add(sha256(token)); return json({ ok: true }); }
     const id = /^\/api\/cli\/methods\/([^/?]+)/.exec(path)?.[1];
     if (id && method === 'GET') return owned[id] === person ? json({ workflow_id: id, version_id: 'v1', version_number: 1, workflow: {} }) : json({ message: 'Not found.' }, 404);
+    // A comparison is saved in the workspace of the account that first saves it; any other workspace does not find it.
+    const comparison = /^\/api\/cli\/comparisons\/(cmp_[a-f0-9]{32})$/.exec(path)?.[1];
+    if (comparison && method === 'PUT') {
+      owned[comparison] ??= person;
+      return owned[comparison] === person ? json({ comparison_id: comparison, version_number: 1, stage: 'draft', url: `${server}/comparisons/${comparison}?version=1` }) : json({ message: 'Comparison not found.' }, 404);
+    }
     return json({ message: 'Not found.' }, 404);
   }) as unknown as typeof fetch;
   return { fetcher, calls, owned, holders, revoked, approve: (who: Person) => { approver = who; } };
@@ -170,6 +177,34 @@ it("a comparison's stages, arms and learners use the account that saved it, whic
   // The processes it starts inherit the account.
   expect(process.env.METHOD_ACCOUNT).toBe('user_ryan:org_main');
   expect(new MethodClient(server, s.fake.fetcher, s.root).account()?.key).toBe('user_ryan:org_main');
+}, 30_000);
+
+it('a comparison saves with the account whose workspace has it and records that account, whichever account is current or becomes current', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'method-accounts-')); dirs.push(root);
+  vi.stubEnv('METHOD_CONFIG_DIR', root);
+  vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const { DEFAULT_SERVER } = await import('../../packages/sdk/src/method-client.js');
+  const { clientOf, readAccount, saveComparison } = await import('../../packages/sdk/src/compare-account.js');
+  const client = () => new MethodClient(DEFAULT_SERVER, fake.fetcher, root);
+  // Another session makes the shared account current while this save is on its way.
+  const switchToShared = () => {
+    const file = client().credentialFile, saved = JSON.parse(readFileSync(file, 'utf8'));
+    writeFileSync(file, JSON.stringify({ ...saved, accounts: [...saved.accounts.filter((a: any) => a.key === 'user_shared:org_shared'), ...saved.accounts.filter((a: any) => a.key !== 'user_shared:org_shared')] }));
+  };
+  const fake = fakeServer(DEFAULT_SERVER, (path, method) => { if (method === 'PUT' && path.startsWith('/api/cli/comparisons/')) switchToShared(); });
+  vi.stubGlobal('fetch', fake.fetcher);
+  await client().login(noBrowser);
+  fake.approve('shared');
+  await client().login(noBrowser);
+  const id = 'cmp_' + 'e'.repeat(32), folder = join(root, 'comparison');
+  // Saved first while the main account was current; nothing remembers which account has it.
+  fake.owned[id] = 'ryan';
+  const account = await saveComparison(folder, id, 'Thirty corrections', { question: 'Which agent?' });
+  expect(account?.account).toBe('user_ryan:org_main');
+  expect(readAccount(folder)?.account).toBe('user_ryan:org_main');
+  // The stages, which run as separate processes, report with the account that has the comparison.
+  expect(clientOf(readAccount(folder)!).account()?.key).toBe('user_ryan:org_main');
+  expect(JSON.parse(readFileSync(client().credentialFile, 'utf8')).accounts.find((a: any) => a.key === 'user_ryan:org_main').ids).toContain(id);
 }, 30_000);
 
 it('one person in two workspaces keeps an account for each, and login --workspace switches between them', async () => {

@@ -6,6 +6,7 @@
  * grade cell with its numbers and verdicts), and each stage (trial, running, done). The result page on the dashboard
  * reads them. When run content stays on this computer, only run IDs and numbers go to the account.
  *
+ * Each report names the Method that runs the comparison, so the page reads its run: running, waiting, or stopped and why.
  * The account record (account.json in the comparison folder) keeps the server, the sign-in folder, the signed-in account,
  * the comparison ID and the version, so the stages, which run as separate processes, report to the same comparison with
  * the same account, whichever account is current. It is not part of the
@@ -46,35 +47,63 @@ export function clientOf(account: Account) {
 }
 
 /**
+ * The accounts that may own this comparison, each once: the account known to own it, the account of this command, then
+ * every other signed-in account.
+ */
+function accountsFor(client: MethodClient, id: string): string[] {
+  let all: string[] = [];
+  try { all = client.accounts().map(a => a.key); } catch { /* the client's own account only */ }
+  const keys = [client.owner(id).accountKey, client.account()?.key, ...all].filter((key): key is string => !!key);
+  return [...new Set(keys)];
+}
+
+/**
  * Save the comparison file as the newest version of its comparison. Signed out: nothing is saved and the comparison
  * runs on this computer. Returns the account record, or null. strict (method publish, which only saves): signed out or a
- * failed save is an error.
+ * failed save is an error. methodId: the Method that runs the comparison (comparison.method), once it is saved.
+ *
+ * The save and its record use one account, chosen once: the account that owns the comparison. Another session can
+ * change the current account at any time, so the account is never read again after the save. When the account known
+ * to own it answers that the comparison is not there, the other signed-in accounts are asked, and the one that has it
+ * is recorded, so the stages report to the comparison's own workspace.
  */
-export async function saveComparison(folder: string, id: string, name: string, spec: unknown, options: { strict?: boolean } = {}): Promise<Account | null> {
-  let client: MethodClient;
-  try { client = new MethodClient(DEFAULT_SERVER); } catch (error) { if (options.strict) throw error; return null; }
-  if (!client.token()) {
+export async function saveComparison(folder: string, id: string, name: string, spec: unknown, options: { strict?: boolean; methodId?: string } = {}): Promise<Account | null> {
+  let base: MethodClient;
+  try { base = new MethodClient(DEFAULT_SERVER); } catch (error) { if (options.strict) throw error; return null; }
+  if (!base.token()) {
     if (options.strict) throw Error('Sign in to publish this comparison: method login');
     process.stderr.write('Sign in to see this comparison on the dashboard: method login\n'); return null;
   }
-  try {
-    const saved = await client.request<{ comparison_id: string; version_number: number; stage: string; url: string }>(`/api/cli/comparisons/${id}`, 'PUT', { name, spec });
-    client.remember(id);
-    const account: Account = { server: client.server, config_dir: configRoot(), account: client.account()?.key, cache_dir: methodCache(), comparison_id: saved.comparison_id, version_number: saved.version_number, stage: saved.stage,
-      url: saved.url, spec_digest: digest(spec) };
-    writePrivateJson(accountFile(folder), account);
-    return account;
-  } catch (error) {
-    if (options.strict) throw Error(`The comparison was not published: ${(error as Error).message.replace(/\s+/g, ' ').slice(0, 300)}`);
-    warn(error);
-    return null;
+  const keys = accountsFor(base, id), clients = keys.length ? keys.map(key => base.as(key)) : [base];
+  for (const [index, client] of clients.entries()) {
+    try {
+      const saved = await client.request<{ comparison_id: string; version_number: number; stage: string; url: string }>(`/api/cli/comparisons/${id}`, 'PUT',
+        { name, spec, ...(options.methodId ? { method_id: options.methodId } : {}) });
+      client.remember(id);
+      const account: Account = { server: client.server, config_dir: configRoot(), account: client.accountKey, cache_dir: methodCache(), comparison_id: saved.comparison_id,
+        version_number: saved.version_number, stage: saved.stage, url: saved.url, spec_digest: digest(spec) };
+      writePrivateJson(accountFile(folder), account);
+      return account;
+    } catch (error) {
+      if ((error as { status?: number }).status === 404 && index < clients.length - 1) continue;
+      if (options.strict) throw Error(`The comparison was not published: ${(error as Error).message.replace(/\s+/g, ' ').slice(0, 300)}`);
+      warn(error);
+      return null;
+    }
   }
+  return null;
 }
 
 /** The dashboard page of the comparison that compiled into this Method file, when it is saved in the account. */
 export function comparisonPage(methodFile: string) {
   return /[/\\]\.compare[/\\][^/\\]+[/\\]comparison\.method$/.test(methodFile) && existsSync(accountFile(join(methodFile, '..')))
     ? readAccount(join(methodFile, '..'))?.url : undefined;
+}
+
+/** The Method that runs the comparison (comparison.method in its folder), once it is saved in the account. */
+function methodIdOf(folder: string) {
+  try { const id = JSON.parse(readFileSync(join(folder, 'comparison.method'), 'utf8')).id; return typeof id === 'string' && /^wf_[a-f0-9]{32}$/.test(id) ? id : undefined; }
+  catch { return undefined; }
 }
 
 async function report<T>(folder: string, path: string, body: unknown): Promise<T | null> {
@@ -89,7 +118,8 @@ export type PlannedCell = { key: string; kind: 'run' | 'grade'; arm: string; inp
 /** Send the cells that this version needs. Returns the keys that no version has finished, or null without the account. */
 export async function sendPlan(folder: string, cells: PlannedCell[]): Promise<Set<string> | null> {
   if (!cells.length) return null;
-  const answer = await report<{ missing: string[] }>(folder, '/plan', { cells });
+  const methodId = methodIdOf(folder);
+  const answer = await report<{ missing: string[] }>(folder, '/plan', { cells, ...(methodId ? { method_id: methodId } : {}) });
   return answer ? new Set(answer.missing) : null;
 }
 
@@ -128,7 +158,8 @@ export async function sendStage(folder: string, update: { stage: 'trial' | 'runn
   if (!account) return;
   const order = ['draft', 'trial', 'running', 'done'];
   if (order.indexOf(account.stage) > order.indexOf(update.stage)) return;
-  const answer = await report<{ stage: string }>(folder, '/stage', update);
+  const methodId = methodIdOf(folder);
+  const answer = await report<{ stage: string }>(folder, '/stage', { ...update, ...(methodId ? { method_id: methodId } : {}) });
   if (answer) writePrivateJson(accountFile(folder), { ...account, stage: answer.stage });
 }
 
