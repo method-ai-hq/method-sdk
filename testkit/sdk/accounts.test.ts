@@ -285,3 +285,18 @@ it('a comparison report that got no answer is sent again, so the page gets it wh
   expect(fake.calls.filter(c => c.path.endsWith('/plan'))).toHaveLength(3);
   expect(stderr.mock.calls.map(c => String(c[0])).join('')).not.toContain('did not get everything');
 }, 30_000);
+
+it('a comparison save whose connection closed is sent again: the same spec saves the same version', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'method-accounts-')); dirs.push(root);
+  vi.stubEnv('METHOD_CONFIG_DIR', root);
+  vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const { DEFAULT_SERVER } = await import('../../packages/sdk/src/method-client.js');
+  const { saveComparison } = await import('../../packages/sdk/src/compare-account.js');
+  let drops = 1;
+  const fake = fakeServer(DEFAULT_SERVER, (path, method) => { if (method === 'PUT' && path.startsWith('/api/cli/comparisons/') && drops-- > 0) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_SOCKET' } }); });
+  vi.stubGlobal('fetch', fake.fetcher);
+  await new MethodClient(DEFAULT_SERVER, fake.fetcher, root).login(noBrowser);
+  const account = await saveComparison(join(root, 'comparison'), 'cmp_' + 'b'.repeat(32), 'Big comparison', { question: 'x'.repeat(700_000) }, { strict: true });
+  expect(account?.version_number).toBe(1);
+  expect(fake.calls.filter(c => c.method === 'PUT')).toHaveLength(2);
+}, 30_000);
