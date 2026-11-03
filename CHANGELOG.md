@@ -1,3 +1,9 @@
+# 0.26.4
+
+Use runtime 0.17.1.
+
+- **`method publish NAME.compare` survives a closed connection.** A lost connection was sent again only for a read, so a comparison save that met `UND_ERR_SOCKET` failed. Saving a comparison is idempotent, so the save is sent again after a closed connection, a stall or a server error, as the comparison's reports are.
+
 # 0.26.3
 
 Use runtime 0.17.1.
