@@ -1,3 +1,9 @@
+# 0.25.3
+
+Use runtime 0.17.0.
+
+- **A large run record reaches the dashboard.** The server refuses a run record above 40 MB (`413: Run records exceed 40 MB`), and a comparison's own run record of 211 inputs was 75.6 MB, almost all of it step inputs and outputs. Before a record is sent, each step input or output of 256 KB or more, and then the largest others until the record is at most 20 MB, becomes a stored result file; the record keeps a reference (`{"$method_stored_value": {"sha256", "bytes"}}`) in its place, and the run page loads the value when you open it. Equal values share one file, and a file the server already has is not sent again, so a record that is sent again sends only its new values. That record is now 20 MB, with 97 stored files (21.5 MB). A single step value above 25 MB stops the sync with the step and value named; put such a value in a file output.
+
 # 0.25.2
 
 Use runtime 0.17.0.
