@@ -21,6 +21,7 @@ import { writePrivateJson } from './files.js';
 import { DEFAULT_SERVER, MethodClient } from './method-client.js';
 import { configRoot } from './computer-settings.js';
 import { methodCache } from './prepare.js';
+import { retryable } from './outbox.js';
 
 /** cache_dir: the Method cache of this computer, where the local Method server finds the runs it may show. */
 export type Account = { server: string; config_dir: string; account?: string | undefined; cache_dir: string; comparison_id: string; version_number: number; stage: string; url: string; spec_digest: string };
@@ -106,12 +107,22 @@ function methodIdOf(folder: string) {
   catch { return undefined; }
 }
 
-async function report<T>(folder: string, path: string, body: unknown): Promise<T | null> {
+/**
+ * Send one report. Every report is idempotent (a plan replaces the plan; a cell or a stage is written again), so one that
+ * got no answer, stalled, or met a server error or too many requests is sent again, up to 5 times over about a minute.
+ */
+async function report<T>(folder: string, path: string, body: unknown, pause = (ms: number) => new Promise(r => setTimeout(r, ms))): Promise<T | null> {
   const account = readAccount(folder);
   if (!account) return null;
-  try { return await clientOf(account).request<T>(`/api/cli/comparisons/${account.comparison_id}/versions/${account.version_number}${path}`, 'POST', body); }
-  catch (error) { warn(error); return null; }
+  for (let attempt = 1; ; attempt++) {
+    try { return await clientOf(account).request<T>(`/api/cli/comparisons/${account.comparison_id}/versions/${account.version_number}${path}`, 'POST', body); }
+    catch (error) {
+      if (attempt < REPORT_ATTEMPTS && retryable(error)) { await pause(2_000 * 2 ** (attempt - 1)); continue; }
+      warn(error); return null;
+    }
+  }
 }
+export const REPORT_ATTEMPTS = 5;
 
 /** A cell that a version needs, as the account plans it. */
 export type PlannedCell = { key: string; kind: 'run' | 'grade'; arm: string; input: string; checkpoint: number | null; repeat: number; trial: boolean; target?: string; grader_version?: string };

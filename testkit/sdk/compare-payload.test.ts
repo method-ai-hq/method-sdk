@@ -7,13 +7,17 @@ import { tmpdir } from 'node:os';
 // What a comparison sends to the account: the spec of each version and each stage, captured in place of the account.
 const sent = vi.hoisted(() => ({ specs: [] as any[], stages: [] as any[], cells: [] as any[], plans: [] as any[][], linked: new Set<string>() }));
 // Saving a run to the account: refused (as a frozen copy's save was before SDK 0.22.3) while saving.fail is true.
-const saving = vi.hoisted(() => ({ fail: false }));
+const saving = vi.hoisted(() => ({ fail: false, finished: [] as string[] }));
 vi.mock('../../packages/sdk/src/versions.js', async original => ({ ...(await original() as any),
   prepareVersion: async (_client: unknown, _outbox: unknown, file: string) => {
     if (saving.fail) throw Object.assign(Error(`This Method is saved from ${file}. Make the change in that file and run it there; this copy was not run or saved.`), { code: 'other_home' });
     return { method_id: `wf_${'c'.repeat(32)}`, version_id: `v_${'d'.repeat(32)}`, url: '', unchanged: true, workflow: {} };
   } }));
-vi.mock('../../packages/sdk/src/method-client.js', () => ({ MethodClient: class { constructor(readonly server: string) {} } }));
+vi.mock('../../packages/sdk/src/method-client.js', () => ({ MethodClient: class Client {
+  constructor(readonly server: string, _fetcher?: unknown, _config?: unknown, readonly accountKey?: string) {}
+  as(key: string) { return new Client(this.server, undefined, undefined, key); }
+  account() { return this.accountKey ? { key: this.accountKey } : undefined; }
+} }));
 vi.mock('../../packages/sdk/src/outbox.js', () => ({ Outbox: class { async drain() {} } }));
 vi.mock('../../packages/sdk/src/method-sync.js', async original => {
   const { writeFileSync: write } = await import('node:fs'), { join: joined } = await import('node:path'), { randomUUID } = await import('node:crypto');
@@ -21,7 +25,7 @@ vi.mock('../../packages/sdk/src/method-sync.js', async original => {
     device = false; outbox = { drain: async () => {} };
     constructor(_client: unknown, readonly dir: string) {}
     async start() {} snapshot() {}
-    async finish() { write(joined(this.dir, 'method-sync.json'), JSON.stringify({ id: randomUUID() })); return 'saved'; }
+    async finish() { saving.finished.push(this.dir); write(joined(this.dir, 'method-sync.json'), JSON.stringify({ id: randomUUID() })); return 'saved'; }
   } };
 });
 vi.mock('../../packages/sdk/src/compare-account.js', async original => {
@@ -43,7 +47,7 @@ const { compareStage, compileComparison, delivery } = await import('../../packag
 
 const roots: string[] = [];
 const deliver = delivery.deliver;
-afterEach(() => { delivery.deliver = deliver; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { delete process.env.METHOD_ACCOUNT; delivery.deliver = deliver; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it('sends the account the spec with who decided each value, Method\'s rules and the judge, and each trial with what each learner received and the noise', async () => {
   const root = mkdtempSync(join(tmpdir(), 'method-compare-payload-'));
@@ -165,4 +169,55 @@ it('saves a finished trial run that its cell could not save, and links every tri
     await trial();
     for (const cell of grades) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ measures: { size: expect.any(Number) } });
   } finally { stderr.mockRestore(); }
+}, 600_000);
+
+it('a finished run that another workspace has is saved to the comparison\'s workspace on the next run and linked there, and nothing runs or is graded again', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'method-compare-workspace-'));
+  roots.push(root);
+  for (const [arm, factor] of [['a', 1], ['b', 2]] as const) {
+    mkdirSync(join(root, arm));
+    writeFileSync(join(root, arm, 'agent.method'), JSON.stringify({ format: 'method/3.4', name: `Agent ${arm}`, goal: 'Answer.', inputs: { n: { type: 'number' } },
+      steps: { answer: { in: { n: 'inputs.n' }, do: { kind: 'run', runtime: 'node', entrypoint: 'answer.mjs' }, out: { value: { type: 'number' } } } }, result: 'value' }));
+    writeFileSync(join(root, arm, 'answer.mjs'), `import{readFileSync,appendFileSync}from'node:fs';appendFileSync(${JSON.stringify(join(root, 'ran'))},'x');const{n}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({value:n*${factor}}))`);
+  }
+  writeFileSync(join(root, 'size.mjs'), `import{readFileSync,appendFileSync}from'node:fs';appendFileSync(${JSON.stringify(join(root, 'graded'))},'x');const{output}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({score:output/10}))`);
+  mkdirSync(join(root, 'inputs'));
+  for (const [id, n] of [['one', 1], ['two', 2]] as const) writeFileSync(join(root, 'inputs', `${id}.json`), JSON.stringify({ n }));
+  const file = join(root, 'numbers.compare');
+  writeFileSync(file, JSON.stringify({ question: 'Which agent gives the larger number?', arms: { a: 'a/agent.method', b: 'b/agent.method' }, difference: 'The factor.',
+    inputs: ['inputs/one.json', 'inputs/two.json'], measure: { name: 'size', code: 'size.mjs' }, rule: { margin: 0.1, min_runs: 1 }, runs: 1 }));
+  const { inputs, folder } = await compileComparison(file);
+  const account = (key: string) => writeFileSync(join(folder, 'account.json'), JSON.stringify({ server: 'https://app.example.test', config_dir: root, account: key, cache_dir: root, comparison_id: `cmp_${'e'.repeat(32)}`, version_number: 1, stage: 'draft', url: '', spec_digest: '' }));
+  const comparison = JSON.parse(readFileSync(inputs, 'utf8')).comparison;
+  const trial = async () => {
+    const planned = await compareStage('trial_plan', { comparison });
+    const runs: string[] = [];
+    for (const cell of planned.trial_cells as string[]) runs.push((await compareStage('trial_cell', { cell })).trial_run as string);
+    const items = (await compareStage('trial_gather', { comparison, trial_runs: runs, trial_done: planned.trial_done })).trial_graded as string[];
+    for (const item of items) await compareStage('trial_grade', { item });
+  };
+  const records = () => Object.fromEntries((sent.plans.at(-1) ?? []).filter(c => c.kind === 'run').map(c => [c.key, readFileSync(join(folder, 'cells', `${c.key}.json`), 'utf8')]));
+  // The trial ran while another account was current: its runs are saved in that workspace.
+  sent.linked.clear(); sent.cells.length = 0; saving.finished.length = 0;
+  account('user_other:org_other');
+  await trial();
+  const before = { plan: sent.plans.at(-1)!.map(c => c.key), records: records(), ran: readFileSync(join(root, 'ran'), 'utf8'), graded: readFileSync(join(root, 'graded'), 'utf8') };
+  expect(saving.finished).toHaveLength(8);
+  // The comparison is in another workspace, which has none of them. The next run saves each run there, from its folder.
+  account('user_legal:org_legal');
+  sent.linked.clear(); sent.cells.length = 0; saving.finished.length = 0;
+  await trial();
+  expect(saving.finished).toHaveLength(8);
+  const plan = sent.plans.at(-1)!;
+  for (const cell of plan.filter(c => c.kind === 'run')) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ run_id: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+  for (const cell of plan.filter(c => c.kind === 'grade')) expect(sent.cells.find(c => c.key === cell.key)).toMatchObject({ measures: { size: expect.any(Number) } });
+  // The same cells and grade keys: no run ran again, no grade was made again, and each run's record is as it finished.
+  expect(plan.map(c => c.key)).toEqual(before.plan);
+  expect(records()).toEqual(before.records);
+  expect(readFileSync(join(root, 'ran'), 'utf8')).toBe(before.ran);
+  expect(readFileSync(join(root, 'graded'), 'utf8')).toBe(before.graded);
+  // The next run finds every run saved there: nothing is saved again.
+  saving.finished.length = 0;
+  await trial();
+  expect(saving.finished).toHaveLength(0);
 }, 600_000);

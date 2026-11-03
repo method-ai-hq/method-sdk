@@ -925,17 +925,19 @@ it('a checklist comes from each input\'s expected answer, and a covered measure 
 
 it('estimates the full run as the page counts it: every graded run, the treatment events left, and each arm\'s own time per event', () => {
   const event = (index: number, received: boolean, minutes: number, outcome = received ? 'fixed' : 'stopped') => ({ key: String(index), index, kind: 'correction', input: 'i', learner: 0, received, outcome, tokens: null, duration_ms: minutes * 60_000, at: '' });
-  const plan = { arms: [{ name: 'method', label: 'Method agent' }, { name: 'plain', label: 'plain Claude Code' }], inputs: [{ id: 'one' }, { id: 'two' }, { id: 'three' }, { id: 'four' }],
+  const plan = { arms: [{ name: 'method', label: 'Method agent' }, { name: 'plain', label: 'plain Claude Code', plain: { agent: 'claude' } }], inputs: [{ id: 'one' }, { id: 'two' }, { id: 'three' }, { id: 'four' }],
     learners: 2, checkpoints: [0, 15, 30], events: Array.from({ length: 30 }, (_, i) => ({ index: i + 1 })) };
-  // The trial: learner 1 of each arm got the first 15 corrections; a Method fix takes 10 minutes, a plain edit 2.
-  const treated: any = [{ arm: 'method', learners: [{ events: Array.from({ length: 15 }, (_, i) => event(i + 1, true, 10)) }, { events: [] }] },
+  // The trial: learner 1 of each arm got the first 15 corrections. A plain edit takes 2 minutes. A Method fix takes 6
+  // minutes and tests its change on each earlier correction again, about one run (4 minutes) each: event k takes 6 + 4k.
+  const treated: any = [{ arm: 'method', learners: [{ events: Array.from({ length: 15 }, (_, i) => event(i + 1, true, 6 + 4 * i)) }, { events: [] }] },
     { arm: 'plain', learners: [{ events: Array.from({ length: 15 }, (_, i) => event(i + 1, true, 2)) }, { events: [] }] }];
   const runs = ['method', 'plain'].flatMap(arm => [0, 1].flatMap(repeat => ['one', 'two'].map(input => ({ arm, input, repeat, checkpoint: 0, duration_ms: 4 * 60_000, cost_usd: null }))));
   const estimate = fullRunEstimate(plan, runs, treated);
-  // 2 arms × 4 inputs × 2 learners × 3 checkpoints, as "48 in all" on the page; the 8 trial runs count again.
-  expect(estimate.account).toEqual({ minutes: 300 + 40, runs: 48, reused: 8, events: 90, event_minutes: { method: 10, plain: 2 }, usd: null });
+  // 2 arms × 4 inputs × 2 learners × 3 checkpoints, as "48 in all" on the page; the 8 trial runs count again. The
+  // longest: the Method agent's learner 2 gives all 30 events, 30 × 6 + 4 × (0 + 1 + … + 29) = 1920 minutes; then 40 runs.
+  expect(estimate.account).toEqual({ minutes: 1920 + 40, runs: 48, reused: 8, events: 90, event_minutes: { method: 6, plain: 2 }, usd: null });
   expect(estimate.text).toBe('The full run: 48 graded runs in all (8 done in the trial), and 90 treatment events to give over all learners, each a training run and a fix or edit. '
-    + 'Time: about 340 minutes: about 240 s per run, 4 at a time; per event Method agent about 600 s, plain Claude Code about 120 s, the learners at the same time. Cost: not known: a fix or an edit reports no price.');
+    + 'Time: about 1960 minutes: about 240 s per run, 4 at a time; per event Method agent about 360 s, and about 240 s more for each earlier correction, which its fix tests again, plain Claude Code about 120 s, the learners at the same time. Cost: not known: a fix or an edit reports no price.');
   // A Method fix that stopped in the trial says nothing about how long a fix takes: the Method agent's time per correction
   // is not known yet, and no total is given as if it were known.
   treated[0].learners[0].events = [event(1, false, 0), ...Array.from({ length: 14 }, (_, i) => event(i + 2, false, 0, 'not_given'))];

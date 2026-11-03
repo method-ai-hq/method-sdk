@@ -17,7 +17,7 @@ import { executable } from '@withmethod/runtime/io.js';
 import { MethodClient } from "./method-client.js";
 import { MethodSync as Sync } from "./method-sync.js";
 import { prepareVersion, savedLine, methodContent } from "./versions.js";
-import { Outbox, savedVersions } from "./outbox.js";
+import { Outbox, accountOf, savedVersions } from "./outbox.js";
 import { localSetup } from "./local-setup.js";
 import { readDocument } from "./authoring.js";
 import { withInputsFrom } from "./inputs-from.js";
@@ -53,7 +53,7 @@ export async function run(target: string, flags: ReturnType<typeof parse>["value
       await account.outbox.drain();
       process.stderr.write(savedLine(account.client, account.outbox, account.version) + "\n");
       // Script cards are made after the run, so that this run's inputs can be replayed. They never delay or fail it.
-      if (savedVersions(account.client.server)[account.version.version_id]) (await import("./explain.js")).startBackgroundExplain(path, account.version.workflow, account.version.version_id, account.client.server);
+      if (savedVersions(account.client.server, accountOf(account.client))[account.version.version_id]) (await import("./explain.js")).startBackgroundExplain(path, account.version.workflow, account.version.version_id, account.client.server);
       // The output of this run is judged against the corrections that recent fixes answered, in the background.
       if (result?.status === "completed" && !flags.resume) {
         const { watchedCorrections } = await import("./watch.js");

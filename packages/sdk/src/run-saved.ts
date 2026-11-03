@@ -8,7 +8,7 @@ import { methodCache, pruneCachedRuns } from './prepare.js';
 import { resolveBindings } from './bindings.js';
 import { runCurrentFile } from './current-runtime.js';
 import { MethodSync } from './method-sync.js';
-import { recordKnownVersion } from './outbox.js';
+import { accountOf, recordKnownVersion } from './outbox.js';
 import { writePrivateJson } from './files.js';
 import { workerRunId } from './run-worker.js';
 import type { parse } from './local-cli.js';
@@ -93,7 +93,7 @@ export async function runSaved(saved:any, flags:ReturnType<typeof parse>['values
     if (resuming) assertCheckpointExecutor(JSON.parse(readFileSync(join(directory,'checkpoint.json'),'utf8')));
     else if(saved.package&&!supportedPackageRuntimes.has(saved.package.runtime))throw Object.assign(new Error(`This package records runtime ${saved.package.runtime}; installed executor: ${runtimeVersion}. Use an SDK release that supports this package runtime.`),{code:'needs_update'});
     // The version is on the server: its runs need no save first.
-    recordKnownVersion(client.server,saved.workflow_id,saved.version_id,saved.version_number);
+    recordKnownVersion(client.server,accountOf(client),saved.workflow_id,saved.version_id,saved.version_number);
     if(flags.resume&&existsSync(join(directory,'checkpoint.json'))&&!existsSync(join(directory,'runtime.resolved.json'))){
       const file=join(directory,'saved.method');writePrivateJson(file,saved.workflow);
       return await runCurrentFile(file,{...flags,workspace:flags.workspace??process.cwd(),'run-dir':directory},()=>sync,undefined,client);

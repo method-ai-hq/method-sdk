@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sha256 } from '../../packages/contracts/src/identity.js';
@@ -38,6 +38,15 @@ function fakeServer(server = 'https://example.test', onRequest: (path: string, m
     if (!person) return json({ error: 'unauthorized' }, 401);
     if (path === '/api/cli/me') { const p = people[person]; return json({ user: { id: p.id, name: p.name, email: p.email, organization_id: p.organization_id }, organization: { name: p.workspace, keep_run_content_on_devices: false } }); }
     if (path === '/api/cli/logout') { revoked.add(sha256(token)); return json({ ok: true }); }
+    if (/^\/api\/cli\/comparisons\/cmp_[a-f0-9]{32}\/versions\/1\/plan$/.test(path)) return json({ missing: JSON.parse(String(init.body)).cells.map((c: any) => c.key) });
+    if (path === '/api/cli/files/check') return json({ present: JSON.parse(String(init.body)).hashes });
+    // A Method ID belongs to the workspace that first saves a version of it.
+    const version = /^\/api\/cli\/methods\/(wf_[a-f0-9]{32})\/versions\/(v_[a-f0-9]{32})$/.exec(path);
+    if (version && method === 'PUT') {
+      owned[version[1]!] ??= person;
+      return owned[version[1]!] === person ? json({ version_id: version[2], version_number: 1, newest: true })
+        : json({ message: 'This Method ID belongs to another account. Run method new-id FILE to save this file as a new Method.' }, 409);
+    }
     const id = /^\/api\/cli\/methods\/([^/?]+)/.exec(path)?.[1];
     if (id && method === 'GET') return owned[id] === person ? json({ workflow_id: id, version_id: 'v1', version_number: 1, workflow: {} }) : json({ message: 'Not found.' }, 404);
     // A comparison is saved in the workspace of the account that first saves it; any other workspace does not find it.
@@ -225,3 +234,54 @@ it('one person in two workspaces keeps an account for each, and login --workspac
   expect(s.client().account()?.key).toBe('user_ryan:org_main');
   expect(s.said()).toContain('The current account is Ryan (ryan@example.test), workspace Main.');
 });
+
+it("a comparison's Method file saves in the comparison's workspace: an ID that another workspace has becomes the ID this workspace uses for it, the same in every copy", async () => {
+  const s = setup();
+  vi.stubEnv('METHOD_CACHE_DIR', s.root);
+  await s.client().login(noBrowser);
+  s.fake.approve('shared');
+  await s.client().login(noBrowser);
+  const { prepareVersion } = await import('../../packages/sdk/src/versions.js');
+  const { accountMethodId, saveInAccount } = await import('../../packages/sdk/src/compare.js');
+  const { readDocument } = await import('../../packages/sdk/src/authoring.js');
+  const old = 'wf_' + 'f'.repeat(32), main = 'user_ryan:org_main';
+  const write = (dir: string) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'answer.mjs'), 'console.log(JSON.stringify({value:1}))');
+    writeFileSync(join(dir, 'agent.method'), JSON.stringify({ format: 'method/3.4', id: old, name: 'Agent', goal: 'Answer.', steps: { answer: { do: { kind: 'run', runtime: 'node', entrypoint: 'answer.mjs' }, out: { value: { type: 'number' } } } }, result: 'value' }));
+    return join(dir, 'agent.method');
+  };
+  // Saved last night while the shared account was current: the shared workspace has the Method, and this computer has its version.
+  const first = write(join(s.root, 'arm')), shared = s.client('user_shared:org_shared'), outbox = new Outbox(shared, { write: () => {} });
+  const saved = await prepareVersion(shared, outbox, first, 'Saved by a comparison.', { home: false });
+  expect(await outbox.whenSaved(saved.version_id)).toBe(true);
+  expect(s.fake.owned[old]).toBe('shared');
+  // The comparison is in the main workspace. The version that the shared account saved is not saved there.
+  const mine = await saveInAccount(s.client(main), main, first, false);
+  expect(readDocument(first).id).toBe(accountMethodId(old, main));
+  expect(mine.version.method_id).toBe(accountMethodId(old, main));
+  expect(await mine.outbox.whenSaved(mine.version.version_id)).toBe(true);
+  expect(s.fake.owned[accountMethodId(old, main)]).toBe('ryan');
+  // A frozen copy of the same file, saved by another process, gets the same ID.
+  const copy = write(join(s.root, 'after-8'));
+  expect((await saveInAccount(s.client(main), main, copy, false)).version.method_id).toBe(accountMethodId(old, main));
+}, 30_000);
+
+it('a comparison report that got no answer is sent again, so the page gets it while the comparison runs', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'method-accounts-')); dirs.push(root);
+  vi.stubEnv('METHOD_CONFIG_DIR', root);
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const { DEFAULT_SERVER } = await import('../../packages/sdk/src/method-client.js');
+  const { sendPlan } = await import('../../packages/sdk/src/compare-account.js');
+  let drops = 2;
+  const fake = fakeServer(DEFAULT_SERVER, (path, method) => { if (method === 'POST' && path.endsWith('/plan') && drops-- > 0) throw new TypeError('fetch failed'); });
+  vi.stubGlobal('fetch', fake.fetcher);
+  await new MethodClient(DEFAULT_SERVER, fake.fetcher, root).login(noBrowser);
+  const folder = join(root, 'comparison');
+  mkdirSync(folder);
+  writeFileSync(join(folder, 'account.json'), JSON.stringify({ server: DEFAULT_SERVER, config_dir: root, account: 'user_ryan:org_main', cache_dir: root, comparison_id: 'cmp_' + 'a'.repeat(32), version_number: 1, stage: 'running', url: '', spec_digest: '' }));
+  const missing = await sendPlan(folder, [{ key: 'k1', kind: 'run', arm: 'a', input: 'one', checkpoint: 0, repeat: 0, trial: true }]);
+  expect(missing).toEqual(new Set(['k1']));
+  expect(fake.calls.filter(c => c.path.endsWith('/plan'))).toHaveLength(3);
+  expect(stderr.mock.calls.map(c => String(c[0])).join('')).not.toContain('did not get everything');
+}, 30_000);

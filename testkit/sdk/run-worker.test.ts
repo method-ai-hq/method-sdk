@@ -46,3 +46,21 @@ it('links the run to its dashboard page when it starts and when it finishes',asy
   expect(await waitForRun(root)).toMatchObject({status:'finished',dashboard:'https://app.example/runs/run_saved'});
  } finally {process.execArgv=savedArgs;out.mockRestore();process.exitCode=0;rmSync(root,{recursive:true,force:true});}
 },20000);
+it('run-status, wait and cancel take the run ID that method run printed, and a name that no run has is an error, not "not running"',async()=>{
+ const cache=mkdtempSync(join(tmpdir(),'method-worker-id-'));
+ const {methodMain}=await import('../../packages/sdk/src/method.js');
+ const {mkdirSync}=await import('node:fs');
+ const out=vi.spyOn(process.stdout,'write').mockImplementation(()=>true);
+ vi.stubEnv('METHOD_CACHE_DIR',cache);
+ // A run of a comparison: its folder is named by its execution ID; method run printed the run ID in run-id.json.
+ const dir=join(cache,'runs','880dbfce-e823-42dd-b03f-452fc9120b46'),runId='5d801055-0521-4607-bf6b-c434e6742555';
+ mkdirSync(dir,{recursive:true});
+ writeFileSync(join(dir,'run-id.json'),JSON.stringify({id:runId}));writeFileSync(join(dir,'method.json'),'{}');
+ writeFileSync(join(dir,'worker-request.json'),'{}');writeFileSync(join(dir,'worker.json'),JSON.stringify({status:'finished',pid:process.pid,exit_code:0}));
+ try {
+  await methodMain(['run-status',runId]);
+  expect(JSON.parse(String(out.mock.calls.at(-1)![0]))).toEqual({running:false,status:'finished',pid:process.pid,exit_code:0});
+  await expect(methodMain(['run-status','6e0b5f3c-0000-4000-8000-000000000000'])).rejects.toThrow('No run on this computer has the folder or ID 6e0b5f3c-0000-4000-8000-000000000000');
+  await expect(methodMain(['cancel','no-such-run'])).rejects.toThrow('No run on this computer');
+ } finally {out.mockRestore();vi.unstubAllEnvs();process.exitCode=0;rmSync(cache,{recursive:true,force:true});}
+});

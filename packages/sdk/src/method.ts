@@ -26,6 +26,18 @@ import { methodHelp, overviewHelp as help } from "./method-help.js";
 function safePath(path: string) {
   return authoringPath(path);
 }
+/**
+ * The run folder that wait, cancel and run-status act on: a folder that holds a run, or the run ID that method run
+ * printed (or any other ID of the run). A name that is neither is an error: a run that this computer does not have
+ * cannot be said to be running or stopped.
+ */
+async function runFolderArg(arg: string) {
+  const path=safePath(arg);
+  if(existsSync(join(path,'worker.json'))||existsSync(join(path,'worker-request.json'))||existsSync(join(path,'method.json')))return path;
+  const found=(await import('./local-judgments.js')).findRunFolder(arg);
+  if(found)return found;
+  throw Error(`No run on this computer has the folder or ID ${arg}. Use the run folder or the run ID that method run printed.`);
+}
 /** A run target that can save a version: a saved Method (ID or link), or a Method file that loads. */
 function loads(target?: string) {
   if (!target || !existsSync(target)) return true;
@@ -239,7 +251,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   }
   if (['wait','cancel','run-status'].includes(args[0]??'')) {
     if(!args[1])throw Error('Supply the local run directory.');
-    const directory=safePath(args[1]);
+    const directory=await runFolderArg(args[1]);
     const result=args[0]==='wait'?await waitForRun(directory):args[0]==='cancel'?cancelRun(directory):{running:workerAlive(directory),...(existsSync(join(directory,'worker.json'))?readDocument(join(directory,'worker.json')):{})};
     process.stdout.write(JSON.stringify(result)+'\n');return;
   }
@@ -457,7 +469,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
       // An older saved version carries runtime.json; the file gets it in the Method, as in format 3.4.
       (await import("./legacy.js")).convertLegacyOrThrow(out);
       writeMethodId(out, saved.workflow_id);
-      (await import("./outbox.js")).recordCheckout(client.server, saved.workflow_id, saved.version_id, saved.version_number, methodContent(workflow), { saved_by: saved.saved_by ?? null });
+      (await import("./outbox.js")).recordCheckout(client.server, (await import("./outbox.js")).accountOf(client), saved.workflow_id, saved.version_id, saved.version_number, methodContent(workflow), { saved_by: saved.saved_by ?? null });
       // The new file becomes the Method's home on this computer unless another file already is.
       const home = await import("./home.js");
       try { home.claimHome(client.server, saved.workflow_id, out); } catch { /* a copy for reading */ }

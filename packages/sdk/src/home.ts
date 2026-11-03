@@ -89,7 +89,7 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   catch { return { status: 'skipped' }; }
   const id: string = document.id, options = { signal: AbortSignal.timeout(5000), stallMs: 5000 };
   const methodPath = `/api/cli/methods/${encodeURIComponent(id)}`;
-  const { lastSaved, recordCheckout } = await import('./outbox.js');
+  const { accountOf, lastSaved, recordCheckout } = await import('./outbox.js');
   const record = lastSaved(client.server, id);
   // merge_base: the newest version that the server has as an ancestor of both this computer's version and the newest one.
   let theirs: Saved;
@@ -103,7 +103,7 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   catch { return { status: 'skipped' }; }
   const savedBy = theirs.saved_by ?? null;
   if (ours.version_id === theirs.version_id) {
-    if (record?.version_id !== theirs.version_id) recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy });
+    if (record?.version_id !== theirs.version_id) recordCheckout(client.server, accountOf(client), id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy });
     return { status: 'current' };
   }
   if (record?.version_id === theirs.version_id) return { status: 'current' };
@@ -201,7 +201,7 @@ export async function catchUp(client: Client, file: string, doing = 'running'): 
   const yours = parts(changedSteps(base.workflow, ours.workflow), fileChanges(base.files, ours.files));
   const kept = !isDeepStrictEqual(ours.workflow, base.workflow) || fileChanges(base.files, ours.files).length > 0;
   // theirs is the parent of the next save; a side version of this computer that the file now combines goes with it.
-  recordCheckout(client.server, id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy, ...(kept && (record?.side_version_id ?? beside) ? { merged_version_id: (record?.side_version_id ?? beside)! } : {}) });
+  recordCheckout(client.server, accountOf(client), id, theirs.version_id, theirs.version_number, theirs.workflow, { saved_by: savedBy, ...(kept && (record?.side_version_id ?? beside) ? { merged_version_id: (record?.side_version_id ?? beside)! } : {}) });
   // The base is the newest version itself: nothing came in.
   if (!changedParts(currentFormat(base.workflow), currentFormat(theirs.workflow)).length && !fileChanges(base.files, theirFiles).length) return { status: 'current' };
   const changed = parts(changedSteps(base.workflow, theirs.workflow), fileChanges(base.files, theirFiles));

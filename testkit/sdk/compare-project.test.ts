@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { compareStage, compileComparison, decide, readComparison } from '../../packages/sdk/src/compare.js';
-import { didSummary, methodCommands, whatItDid } from '../../packages/sdk/src/compare-project.js';
+import { comparisonPlugin, didSummary, methodCommands, whatItDid } from '../../packages/sdk/src/compare-project.js';
 import { comparisonRunArgs } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
@@ -266,3 +266,21 @@ it('removes a chat\'s folder while a process that just ended still writes files 
   try { removeTree(root); } finally { await ended; }
   expect(existsSync(root)).toBe(false);
 }, 20_000);
+
+it('a comparison keeps its copy of the Method plugin when an update changes only the plugin\'s version number, so the arm is the same arm; changed skills make a new copy', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'method-plugin-copy-'));
+  try {
+    const copy = comparisonPlugin(folder), manifest = join(copy, '.claude-plugin', 'plugin.json');
+    const installed = JSON.parse(readFileSync(manifest, 'utf8'));
+    // The copy that an earlier version of the method CLI made: the same plugin with its own version number.
+    writeFileSync(manifest, JSON.stringify({ ...installed, version: '0.0.1' }, null, 2));
+    expect(comparisonPlugin(folder)).toBe(copy);
+    expect(JSON.parse(readFileSync(manifest, 'utf8')).version).toBe('0.0.1');
+    // A skill that differs is a different plugin: the copy becomes the installed plugin.
+    const skill = join(copy, 'skills', readdirSync(join(copy, 'skills'))[0]!, 'SKILL.md');
+    writeFileSync(skill, 'An older skill.');
+    comparisonPlugin(folder);
+    expect(readFileSync(skill, 'utf8')).not.toBe('An older skill.');
+    expect(JSON.parse(readFileSync(manifest, 'utf8')).version).toBe(installed.version);
+  } finally { rmSync(folder, { recursive: true, force: true }); }
+});

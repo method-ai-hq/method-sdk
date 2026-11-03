@@ -36,23 +36,26 @@ export const outboxDir = () => join(methodCache(), 'outbox');
 const blobPath = (hash: string) => join(outboxDir(), 'blobs', hash);
 // Two accounts can upload the same file: each has its own item for it.
 const itemKey = (item: Item) => sha256([item.server, ...(item.kind === 'file' && item.account ? [item.account] : []), item.kind, item.kind === 'file' ? item.sha256 : item.kind === 'version' ? item.version_id : item.run_dir].join('\n')).slice(0, 32);
-const savedFile = (server: string) => join(methodCache(), 'versions', `${sha256(server).slice(0, 24)}.json`);
+// A Method ID belongs to one account: a version that one account saved is not saved for another (it holds no version of that Method).
+const savedFile = (server: string, account: string | undefined) => join(methodCache(), 'versions', `${sha256(account ? `${server}\n${account}` : server).slice(0, 24)}.json`);
 const methodFile = (server: string, methodId: string) => join(methodCache(), 'versions', `${sha256(`${server}\n${methodId}`).slice(0, 24)}.json`);
 const read = (path: string) => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
-/** Versions this computer knows the server has: version_id -> {method_id, version_number}. */
-export function savedVersions(server: string): Record<string, Saved> { return read(savedFile(server)) ?? {}; }
+/** The key of the account that a client uses; undefined when signed out. */
+export function accountOf(client: object): string | undefined { try { return (client as Partial<Pick<MethodClient, 'account'>>).account?.()?.key; } catch { return undefined; } }
+/** Versions this computer knows the account has: version_id -> {method_id, version_number}. */
+export function savedVersions(server: string, account: string | undefined): Record<string, Saved> { return read(savedFile(server, account)) ?? {}; }
 /** The last version this computer saved of a Method, for the parent and the change reason of the next one. */
 export function lastSaved(server: string, methodId: string): LastSaved | undefined { return read(methodFile(server, methodId)); }
 
 /** Note a version that the server is known to have (a saved Method run by ID). */
-export function recordKnownVersion(server: string, methodId: string, versionId: string, versionNumber: number) {
-  if (!savedVersions(server)[versionId]) writePrivateJson(savedFile(server), { ...savedVersions(server), [versionId]: { method_id: methodId, version_number: versionNumber } });
+export function recordKnownVersion(server: string, account: string | undefined, methodId: string, versionId: string, versionNumber: number) {
+  if (!savedVersions(server, account)[versionId]) writePrivateJson(savedFile(server, account), { ...savedVersions(server, account), [versionId]: { method_id: methodId, version_number: versionNumber } });
 }
 /** A checkout of a saved version: the next save of this Method on this computer has it as its parent. */
-export function recordCheckout(server: string, methodId: string, versionId: string, versionNumber: number, workflow: unknown, extra: Pick<LastSaved, 'merged_version_id' | 'saved_by'> = {}) {
-  recordKnownVersion(server, methodId, versionId, versionNumber);
+export function recordCheckout(server: string, account: string | undefined, methodId: string, versionId: string, versionNumber: number, workflow: unknown, extra: Pick<LastSaved, 'merged_version_id' | 'saved_by'> = {}) {
+  recordKnownVersion(server, account, methodId, versionId, versionNumber);
   writePrivateJson(methodFile(server, methodId), { version_id: versionId, version_number: versionNumber, workflow, ...extra });
 }
 /** A combine that stopped: the parts that both sides changed, as they were on this computer. */
@@ -62,7 +65,7 @@ export function recordCombineStop(server: string, methodId: string, conflict: Co
 /** A save that the server kept beside a newer version stays off the base: the next run combines it with the newer one. */
 function recordSaved(item: VersionItem, saved: { version_number: number; newest?: boolean; newer?: { saved_by?: string | null } }) {
   const beside = saved.newest === false;
-  writePrivateJson(savedFile(item.server), { ...savedVersions(item.server), [item.version_id]: { method_id: item.method_id, version_number: saved.version_number, ...(beside ? { beside: saved.newer?.saved_by ?? null } : {}) } });
+  writePrivateJson(savedFile(item.server, item.account), { ...savedVersions(item.server, item.account), [item.version_id]: { method_id: item.method_id, version_number: saved.version_number, ...(beside ? { beside: saved.newer?.saved_by ?? null } : {}) } });
   writePrivateJson(methodFile(item.server, item.method_id), beside ? { ...lastSaved(item.server, item.method_id), side_version_id: item.version_id }
     : { version_id: item.version_id, version_number: saved.version_number, workflow: item.body.workflow });
 }
@@ -134,7 +137,7 @@ export class Outbox {
    * false when it cannot be saved now: it is still in the outbox after sending stopped, or the server refused it.
    */
   whenSaved(versionId: string): Promise<boolean> {
-    if (savedVersions(this.client.server)[versionId]) return Promise.resolve(true);
+    if (savedVersions(this.client.server, accountOf(this.client))[versionId]) return Promise.resolve(true);
     if (this.failures.has(versionId)) return Promise.resolve(false);
     if (!this.items().some(item => item.kind === 'version' && item.version_id === versionId)) return Promise.resolve(true);
     this.start();
@@ -166,7 +169,7 @@ export class Outbox {
   stop() { this.stopped = true; this.wake?.(); }
 
   private settleWaiters() {
-    const saved = savedVersions(this.client.server);
+    const saved = savedVersions(this.client.server, accountOf(this.client));
     for (const [id, waiters] of this.waiters) {
       const waiting = this.items().some(item => item.kind === 'version' && item.version_id === id);
       if (saved[id] || this.failures.has(id) || !waiting || !this.running) {

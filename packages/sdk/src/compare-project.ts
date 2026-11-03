@@ -44,6 +44,24 @@ export function methodPluginFolder() {
   throw Error('Method\'s Claude Code plugin is not in this installation of the method CLI, so a project arm cannot have it. Update the method CLI.');
 }
 
+/**
+ * The Method plugin that a comparison's project arms have: a copy in the comparison's folder (method-plugin), made from
+ * this installation's plugin. An update of the method CLI that changes only the plugin's version number keeps the copy,
+ * so the arm stays the same arm and nothing that it received or ran is done again; a plugin whose skills or hooks
+ * changed is a new arm.
+ */
+export function comparisonPlugin(folder: string) {
+  const copy = join(folder, 'method-plugin'), installed = methodPluginFolder();
+  if (!existsSync(copy) || pluginContent(copy) !== pluginContent(installed)) { removeTree(copy); cpSync(installed, copy, { recursive: true }); }
+  return copy;
+}
+/** A plugin's files without the version number in its plugin.json. */
+function pluginContent(dir: string) {
+  const files = projectFiles(dir), manifest = '.claude-plugin/plugin.json';
+  const { version: _version, ...rest } = JSON.parse(readFileSync(join(dir, manifest), 'utf8'));
+  return JSON.stringify(Object.entries({ ...files, [manifest]: rest }).sort(([a], [b]) => a.localeCompare(b)));
+}
+
 /** The hash of each file in a folder, by its path in the folder. Links are not followed. */
 export function projectFiles(root: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -98,7 +116,7 @@ function findProgram(name: string, path: string) {
  * comparison uses.
  */
 export type ChatSettings = { plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean;
-  method?: { cli: string; config: string; cache: string; account?: string | null; server?: string | null } };
+  method?: { cli: string; config: string; cache: string; plugin: string; account?: string | null; server?: string | null } };
 /** One message of a chat and what came back: the agent's last words, its transcript entries, and the tokens it reported. */
 export type Turn = { message: string; reply: string; model: string | null; entries: any[]; tokens: number | null; attempt: string };
 
@@ -154,7 +172,7 @@ export async function openChat(project: string, settings: ChatSettings, artifact
     mkdirSync(bin, { recursive: true, mode: 0o700 });
     symlinkSync(join(m.cli, 'method'), join(bin, 'method'));
     const plugin = join(room.root, 'plugins', 'method');
-    cpSync(methodPluginFolder(), plugin, { recursive: true });
+    cpSync(m.plugin, plugin, { recursive: true });
     pluginArgs.push('--plugin-dir', plugin);
     Object.assign(env, { PATH: `${bin}${delimiter}${env.PATH}`, METHOD_CONFIG_DIR: m.config, METHOD_CACHE_DIR: deskCache!,
       // The plugin's start hook installs the method CLI when it finds none; here it is installed, and nothing is downloaded.

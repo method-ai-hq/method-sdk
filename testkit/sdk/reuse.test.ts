@@ -30,3 +30,22 @@ it('method run reuses unchanged accepted steps of an earlier run after a fix to 
  expect(again).toMatchObject({status:'completed',reused:{finish:1}});
  expect(readFileSync(calls,'utf8')).toBe('xx');
 },60_000);
+
+it('the run record gives each step only the state values that it changed, not the whole state once per item of a list',async()=>{
+ const root=mkdtempSync(join(tmpdir(),'method-changes-'));roots.push(root);
+ const big='x'.repeat(100_000);
+ writeFileSync(join(root,'task.method'),JSON.stringify({format:'method/3.4',name:'Changes',goal:'Keep a large state value, then work on a list.',
+  state:{notes:{type:'text',description:'A large value.',default:''}},
+  steps:{
+   keep:{name:'Keep',purpose:'Writes the large state value and lists three items.',do:{kind:'run',runtime:'node',entrypoint:'keep.mjs'},changes:['state.notes'],out:{items:{type:'list',items:{type:'text'}}}},
+   each:{name:'Each',purpose:'Works on one item.',each:{item:'items'},do:{kind:'run',runtime:'node',entrypoint:'each.mjs'},out:{done:{type:'text'}}},
+  },result:'done'}));
+ writeFileSync(join(root,'keep.mjs'),`console.log(JSON.stringify({items:['a','b','c'],state:{notes:${JSON.stringify(big)}}}))`);
+ writeFileSync(join(root,'each.mjs'),`import{readFileSync}from'node:fs';const{item}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({done:item}))`);
+ const result=await runCurrentFile(join(root,'task.method'),{'run-dir':join(root,'run')});
+ expect(result).toMatchObject({status:'completed'});
+ const inspection=inspectRun(join(root,'run'),{includeFiles:false});
+ expect(inspection.invocations['keep:0']!.changes).toEqual({notes:big});
+ for(const i of [0,1,2])expect(inspection.invocations[`each:${i}`]!.changes).toEqual({});
+ expect(JSON.stringify(inspection).length).toBeLessThan(3*big.length);
+},60_000);

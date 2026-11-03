@@ -3,6 +3,7 @@ import { attachResultFiles } from "./result-files.js";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, sep, basename } from "node:path";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { loadWorkflow } from "../../workflow-language/src/validate.js";
 import { InspectionSchema, type RunInspection } from "../../workflow-language/src/inspection.js";
 
@@ -10,6 +11,15 @@ const finalEvents = new Set(["run.completed", "run.failed"]);
 const statuses: Record<string, RunInspection["status"]> = { completed: "succeeded", needs_input: "waiting_for_you", unconfirmed: "unconfirmed", failed: "failed" };
 /** The runtime's status of a finished run, in the dashboard's words; undefined for a status that is not known. */
 export function runStatus(status: unknown): RunInspection["status"] | undefined { return typeof status === "string" && Object.hasOwn(statuses, status) ? statuses[status] : undefined; }
+
+/**
+ * The state values that a step changed: those that differ from the state before it. Each step's event holds the whole
+ * state, and a step of a list runs once per item, so the whole state with every row would repeat it many times.
+ */
+export function changedState<T>(before: Record<string, T> | undefined, after: Record<string, T> | undefined): Record<string, T> {
+  if (!after || !before) return after ?? {};
+  return Object.fromEntries(Object.entries(after).filter(([key, value]) => !isDeepStrictEqual(before[key], value)));
+}
 
 /** Convert the public trace into the dashboard's stable inspection contract. */
 export function inspectCurrentRun(root: string, activeSnapshot = false, includeFiles: boolean | "references" = false): RunInspection {
@@ -34,6 +44,8 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
   const setup = existsSync(join(root,'setup.json')) ? read('setup.json') : [];
   const ids = (value: unknown) => (Array.isArray(value) ? value : []).filter((id): id is string => typeof id === 'string').slice(0, 500).map(id => id.slice(0, 100));
   const runEvents: NonNullable<RunInspection["events"]> = setup;
+  // The state before each step, so a step's changes are the state values that it changed, not the whole state again.
+  const before = new Map<string, any>();
   for (const event of events) {
     // Keep useful trace fields; do not upload tool arguments, environment values, or process stdout.
     const recorded: NonNullable<RunInspection["events"]>[number] = {
@@ -92,10 +104,10 @@ export function inspectCurrentRun(root: string, activeSnapshot = false, includeF
     }
     row.events.push(recorded);
     if (event.event === "prompt.rendered") (row.prompts ??= []).push({ sequence: event.sequence, phase: event.phase, template: event.template, rendered: event.rendered });
-    if (event.event === "step.started") { row.status = "running"; row.inputs = event.inputs; row.checks = []; delete row.outputs; }
+    if (event.event === "step.started") { row.status = "running"; row.inputs = event.inputs; row.checks = []; delete row.outputs; before.set(id, event.state_before); }
     if (event.event === "step.candidate") { const { state, ...outputs } = event.candidate; row.outputs = outputs; row.status = "returned"; }
     if (event.event === "check.completed") row.checks.push({ id: String(event.sequence), result: event.check.status === "unknown" ? "ambiguous" : event.check.status, summary: event.check.reason, evidence: event.check.evidence, method: typeof workflow.steps[event.step]?.check === "object" && Object.hasOwn(Object(workflow.steps[event.step]!.check), "kind") ? "executor" : "assert" });
-    if (event.event === "step.accepted") { row.status = "passed"; row.outputs = event.outputs; row.changes = event.state; row.verification = event.check.status === "unchecked" ? "unchecked" : "checked"; if (event.observed_effects) row.observed_effects = event.observed_effects; }
+    if (event.event === "step.accepted") { row.status = "passed"; row.outputs = event.outputs; row.changes = changedState(before.get(id), event.state); row.verification = event.check.status === "unchecked" ? "unchecked" : "checked"; if (event.observed_effects) row.observed_effects = event.observed_effects; }
     if (event.event === "process.failed" && event.phase === "action" && !event.tool && event.observed_effects) row.observed_effects = event.observed_effects;
     if (event.event === "step.skipped") row.status = "skipped";
     if (event.event === "human.required") row.status = "waiting_for_you";

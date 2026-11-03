@@ -29,7 +29,7 @@ import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS } from './learner.js';
 import { textDiff } from './text-diff.js';
-import { RIGHT_MESSAGE, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, methodPluginFolder, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
+import { RIGHT_MESSAGE, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
 import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
 
@@ -1008,7 +1008,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
       const project: Project = { agent: 'claude', plugins, model: model.model, effort: model.effort, web, deliverable: doc.deliverable!,
         message: readFileSync(resolve(root, doc.message!), 'utf8'), first_message: doc.first_message ? readFileSync(resolve(root, doc.first_message), 'utf8') : null,
         probe: doc.treatment?.probe ?? null, start_words: projectStart(arm), start };
-      const hash = sha({ ...project, start: folderHash(start), plugin: plugins.includes('method') ? folderHash(methodPluginFolder()) : null, version: 'project/1' });
+      const hash = sha({ ...project, start: folderHash(start), plugin: plugins.includes('method') ? folderHash(comparisonPlugin(folder)) : null, version: 'project/1' });
       arms.push({ name: armName, label: labels[armName], project, models: [model], cache_dir, folders: {}, hash });
       continue;
     }
@@ -1505,7 +1505,7 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
 /** How a project arm's chats run, with this learner's Method cache: the method CLI that runs the comparison, signed in to its account. */
 function chatSettings(project: Project, cache: string, folder: string): ChatSettings {
   return { plugins: project.plugins, model: project.model, effort: project.effort, web: project.web,
-    ...(project.plugins.includes('method') ? { method: { cli: cliBin(), config: configRoot(), cache, account: readAccount(folder)?.account ?? process.env.METHOD_ACCOUNT ?? null, server: process.env.METHOD_SERVER ?? null } } : {}) };
+    ...(project.plugins.includes('method') ? { method: { cli: cliBin(), config: configRoot(), cache, plugin: join(folder, 'method-plugin'), account: readAccount(folder)?.account ?? process.env.METHOD_ACCOUNT ?? null, server: process.env.METHOD_SERVER ?? null } } : {}) };
 }
 /** The first message of a chat on an input: the message filled with the input's values, after the first material when this is the project's first chat. */
 export function projectMessage(project: Pick<Project, 'message' | 'first_message'>, value: unknown, first: boolean) {
@@ -1603,6 +1603,8 @@ async function treat(plan: Plan, limits: number[]): Promise<ArmTreatment[]> {
     learners: await Promise.all(limits.map((limit, learner) => treatLearner(plan, arm, learner, plan.events.slice(0, limit)))),
   })));
 }
+/** The key of an event in a learner's record: the event and, for a plain arm, its builder. */
+const eventKey = (arm: any, event: any) => sha({ index: event.index, kind: event.kind, text: event.text ?? null, input: event.input.hash, builder: arm.plain ? sha({ plain: arm.plain, prompt: builderPrompt }) : null, ...(event.feedback ? { feedback: event.feedback.hash } : {}) });
 async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]): Promise<LearnerTreatment> {
   const base = learnerFolder(plan, arm, learner);
   mkdirSync(base, { recursive: true, mode: 0o700 });
@@ -1618,6 +1620,12 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
     copyFolder(arm.dir, method.dir);
     writeMethodId(join(method.dir, method.file), newMethodId());
     copyFolder(method.dir, join(base, 'after-0'));
+  }
+  // The learner's Method learns in the comparison's workspace (its fixes save there), as its frozen copies run there.
+  const account = readAccount(plan.folder);
+  if (method && account && events.some(event => !records.get(eventKey(arm, event))?.received)) {
+    const { clientOf } = await import('./compare-account.js');
+    await saveInAccount(clientOf(account), account.account, join(method.dir, method.file), true);
   }
   let instructions: string = arm.plain ? arm.plain.instructions : '';
   const freeze = async (at: number) => {
@@ -1635,7 +1643,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
   const done: EventRecord[] = [], missing: LearnerTreatment['missing'] = [];
   let stopped = false;
   for (const event of events) {
-    const key = sha({ index: event.index, kind: event.kind, text: event.text ?? null, input: event.input.hash, builder: arm.plain ? sha({ plain: arm.plain, prompt: builderPrompt }) : null, ...(event.feedback ? { feedback: event.feedback.hash } : {}) });
+    const key = eventKey(arm, event);
     if (stopped) {
       missing.push({ index: event.index, reason: 'not given', after: missing[0]!.index });
       done.push({ key, index: event.index, kind: event.kind, input: event.input.id, learner, received: false, outcome: 'not_given', tokens: null, duration_ms: 0, at: new Date().toISOString() });
@@ -1873,6 +1881,19 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, stage: 'trial' | 'ful
 const recordFile = (folder: string, key: string) => join(folder, 'cells', `${key}.json`);
 const readRecord = (folder: string, key: string) => { try { return JSON.parse(readFileSync(recordFile(folder, key), 'utf8')); } catch { return null; } };
 const writeRecord = (folder: string, key: string, value: unknown) => { mkdirSync(join(folder, 'cells'), { recursive: true, mode: 0o700 }); writePrivateJson(recordFile(folder, key), value); };
+/**
+ * Where a run cell's run is saved: the account whose workspace has it, its run ID there, and whether its content stays
+ * on this computer. It is kept beside the cell's record, not in it: the grade keys read the record as the run finished,
+ * so saving a run again (to the comparison's workspace) grades nothing again.
+ */
+type SavedRun = { account: string | null; run_id: string; device: boolean };
+const savedFile = (folder: string, key: string) => join(folder, 'cells', `${key}.saved.json`);
+const readSaved = (folder: string, key: string): SavedRun | null => { try { return JSON.parse(readFileSync(savedFile(folder, key), 'utf8')); } catch { return null; } };
+/** The run of a run cell as the comparison's workspace has it; null when that workspace does not have it yet. */
+function savedHere(folder: string, key: string) {
+  const account = readAccount(folder), saved = readSaved(folder, key);
+  return account && saved && saved.account === (account.account ?? null) ? saved : null;
+}
 
 /** The account's plan of cells: each run cell and the grade cell of each. */
 function plannedCells(plan: Plan, list: Cell[]): PlannedCell[] {
@@ -1888,11 +1909,11 @@ function plannedCells(plan: Plan, list: Cell[]): PlannedCell[] {
  * linked again.
  */
 async function split(plan: Plan, list: Cell[], all: Cell[]) {
-  // A finished run that its cell could not save to the account when it ran is saved now, before the plan goes up: the
-  // grade keys read the run records as they are, and the run's grade links only to a saved run.
+  // A finished run that the comparison's workspace does not have (it could not be saved when it ran, or it was saved
+  // to another workspace) is saved there now, before the plan goes up: the run's grade links only to a saved run.
   if (readAccount(plan.folder)) for (const cell of list) {
     const record = readRecord(plan.folder, cell.key);
-    if (record && !record.run_id) await saveFinishedRun(cell, record);
+    if (record && !savedHere(plan.folder, cell.key)) await saveFinishedRun(cell, record);
   }
   const missing = await sendPlan(plan.folder, plannedCells(plan, all));
   const run: Cell[] = [], done: any[] = [];
@@ -1900,9 +1921,17 @@ async function split(plan: Plan, list: Cell[], all: Cell[]) {
     const record = readRecord(plan.folder, cell.key);
     if (!record) { run.push(cell); continue; }
     done.push(record);
-    if (missing?.has(cell.key)) await linkRun(plan.folder, record);
   }
+  await linkMissing(plan.folder, done, missing);
   return { run, done };
+}
+/**
+ * Link each finished run that the account lacks (missing, from the plan's answer). Each stage that sends the plan does
+ * this, so a run whose link failed while the comparison ran (no connection, or the run was not saved yet) reaches the
+ * page at the next stage, not only at the end.
+ */
+async function linkMissing(folder: string, runs: any[], missing: Set<string> | null) {
+  if (missing) for (const run of runs) if (missing.has(run.key)) await linkRun(folder, run);
 }
 
 /**
@@ -1932,31 +1961,59 @@ async function cellSync(folder: string, file: string, frozen: boolean) {
   if (!account) return null;
   try {
     const { clientOf } = await import('./compare-account.js');
-    const { Outbox } = await import('./outbox.js');
-    const { prepareVersion } = await import('./versions.js');
     const { MethodSync } = await import('./method-sync.js');
-    const client = clientOf(account), outbox = new Outbox(client);
-    const version = await prepareVersion(client, outbox, file, 'Saved by a comparison.', { home: !frozen });
-    return (runDir: string) => new MethodSync(client, runDir, version.method_id, version.version_id, undefined, readDocument(file).run_data === 'device', outbox);
+    const client = clientOf(account);
+    const { version, outbox } = await saveInAccount(client, account.account, file, !frozen);
+    const save = (runDir: string, runId?: string) => new MethodSync(client, runDir, version.method_id, version.version_id, runId, readDocument(file).run_data === 'device', outbox);
+    return Object.assign(save, { account: account.account ?? null });
   } catch (error) {
     process.stderr.write(`This run is not saved to your Method account: ${(error as Error).message}\n`);
     return null;
   }
 }
 
-/** Save a finished run of a cell to the account from its run folder, as its cell would have when it ran, and keep its run ID in the cell's record. */
+/**
+ * Save the version of a comparison's Method file in the comparison's workspace, now. A Method ID belongs to one
+ * workspace: when another workspace has this file's ID (it was saved while another account was current), the file gets
+ * the ID that this workspace uses for it, made from the old ID and the account, so every copy of the file and every
+ * process that saves it at the same time gets the same one. It is saved again with it.
+ */
+export async function saveInAccount(client: import('./method-client.js').MethodClient, account: string | undefined, file: string, home: boolean) {
+  const { Outbox } = await import('./outbox.js');
+  const { prepareVersion } = await import('./versions.js');
+  // The refusal that gives the file its new ID is not news for the person; every other refusal is said.
+  let outbox = new Outbox(client, { write: line => { if (!/belongs to another account/.test(line)) process.stderr.write(`${line}\n`); } });
+  let version = await prepareVersion(client, outbox, file, 'Saved by a comparison.', { home });
+  if (!version.unchanged && !await outbox.whenSaved(version.version_id) && /belongs to another account/.test(outbox.failure(version.version_id) ?? '')) {
+    writeMethodId(file, accountMethodId(version.method_id, account));
+    outbox = new Outbox(client);
+    version = await prepareVersion(client, outbox, file, 'Saved by a comparison.', { home });
+  }
+  return { version, outbox };
+}
+/** The Method ID that an account uses for a comparison's Method file whose ID another workspace has. */
+export const accountMethodId = (id: string, account: string | undefined) => `wf_${sha(`${id}\n${account ?? ''}`).slice(0, 32)}`;
+
+/**
+ * Save a finished run of a cell to the comparison's workspace from its run folder, as its cell would have when it ran,
+ * under the same run ID, and note where it is saved. A run that an earlier save linked to another Method (in another
+ * workspace) is linked to the cell's Method now.
+ */
 async function saveFinishedRun(cell: Cell, record: any) {
   const file = cell.plain || cell.project ? cell.method! : join(cell.dir!, cell.file!);
   try {
-    const sync = (await cellSync(cell.folder, file, !cell.plain && !cell.project && cell.checkpoint !== null))?.(record.run_dir);
-    if (!sync) return;
+    const syncFor = await cellSync(cell.folder, file, !cell.plain && !cell.project && cell.checkpoint !== null);
+    if (!syncFor) return;
+    const syncFile = join(record.run_dir, 'method-sync.json');
+    let runId: string | undefined;
+    try { runId = JSON.parse(readFileSync(syncFile, 'utf8')).id; } catch { /* never linked */ }
+    let sync;
+    try { sync = syncFor(record.run_dir, runId); }
+    catch { removeTree(syncFile); sync = syncFor(record.run_dir, runId); }
     await sync.start(readDocument(file), (cell.project ? { request: record.request } : cell.plain ? { instructions: cell.plain.instructions, task: taskPrompt(cell.input.value, cell.input.deliverable) } : cell.input.value) as any, {}, false);
-    await sync.finish();
-    await sync.outbox.drain();
-    const runId = JSON.parse(readFileSync(join(record.run_dir, 'method-sync.json'), 'utf8')).id;
-    if (!runId) return;
-    Object.assign(record, { run_id: runId, device: sync.device });
-    writeRecord(cell.folder, cell.key, record);
+    if (await sync.finish() !== 'saved') return;
+    const saved: SavedRun = { account: syncFor.account, run_id: JSON.parse(readFileSync(syncFile, 'utf8')).id, device: sync.device };
+    writePrivateJson(savedFile(cell.folder, cell.key), saved);
   } catch (error) {
     process.stderr.write(`This run is not saved to your Method account: ${(error as Error).message}\n`);
   }
@@ -2038,8 +2095,8 @@ async function runCell(cell: Cell) {
       } else output = result.result ?? null;
     }
   } finally {
-    await sync?.finish();
-    await sync?.outbox.drain();
+    // Saved: the comparison's workspace has the run. Otherwise the next run of the comparison saves it.
+    if (await sync?.finish() === 'saved') writePrivateJson(savedFile(cell.folder, cell.key), { account: syncFor!.account, run_id: JSON.parse(readFileSync(join(runDir, 'run', 'method-sync.json'), 'utf8')).id, device: sync!.device } satisfies SavedRun);
   }
   if (!['completed', 'unconfirmed'].includes(result.status))
     throw Error(`The arm ${cell.arm} ${result.status === 'needs_input' ? 'asked a question' : 'failed'} on the input ${cell.input.id} (learner ${cell.repeat + 1}${pointLabel(cell.checkpoint)}): ${result.failure?.headline ?? result.status}. Its run folder: ${join(runDir, 'run')}. Fix the cause and run the comparison again; finished runs are reused.`);
@@ -2061,16 +2118,17 @@ async function runCell(cell: Cell) {
  * there; otherwise the local Method server shows them to the dashboard, from this computer.
  */
 async function linkRun(folder: string, record: any) {
-  const account = readAccount(folder);
-  if (!account || !record.run_id) return;
-  if (record.device) {
-    registerLocalRun(account.cache_dir, record.run_id, account.server, entry => ({ ...entry, treatment_note: record.treatment_note, transcript: record.transcript_jsonl }));
+  const account = readAccount(folder), saved = savedHere(folder, record.key);
+  // A run that the comparison's workspace does not have yet links when the next run of the comparison saves it.
+  if (!account || !saved) return;
+  if (saved.device) {
+    registerLocalRun(account.cache_dir, saved.run_id, account.server, entry => ({ ...entry, treatment_note: record.treatment_note, transcript: record.transcript_jsonl }));
     await ensureLocalServer(account.cache_dir);
-    await linkCells(folder, [{ key: record.key, run_id: record.run_id }]);
+    await linkCells(folder, [{ key: record.key, run_id: saved.run_id }]);
     return;
   }
   const transcript = record.transcript_jsonl ? await uploadText(folder, readFileSync(record.transcript_jsonl, 'utf8')) : null;
-  await linkCells(folder, [{ key: record.key, run_id: record.run_id, ...(transcript ? { transcript } : {}), ...(record.treatment_note ? { treatment_note: record.treatment_note } : {}) }]);
+  await linkCells(folder, [{ key: record.key, run_id: saved.run_id, ...(transcript ? { transcript } : {}), ...(record.treatment_note ? { treatment_note: record.treatment_note } : {}) }]);
 }
 
 /** Every agent attempt of a run, oldest first, as one transcript: entries numbered again from 0 across the attempts. */
@@ -2225,11 +2283,15 @@ async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTr
  * arm, input, learner and checkpoint), of which reused are the trial's runs that count again. events: the treatment
  * events still to give over every arm and learner, each a training run and a fix or edit. The time: the treatment first,
  * every learner of every arm at the same time, one event at a time at its arm's mean time per event in the trial (its
- * training run and its fix or edit); then the runs still to run, 4 at a time, at the trial's mean time per run. An arm
+ * training run and its fix or edit). A fix of an arm that learns with Method tests its change on each earlier correction
+ * again, so its event k (counting from 0) takes the trial's time per event without those tests plus k times the arm's
+ * mean time per trial run. Then the runs still to run, 4 at a time, at the trial's mean time per run. An arm
  * whose events all ended without being received has no time per event (null): a stopped fix says nothing about how
  * long a fix takes. Then the total time is not known: the text and the page give none (minutes leaves that arm out). The price is
  * known only when every trial run reported one and there are no events (a fix or an edit reports no price).
  */
+/** An arm that learns from a correction with a Method fix: a Method arm, or a project with the Method plugin. */
+const learnsWithMethod = (arm: any) => arm.project ? arm.project.plugins.includes('method') : !arm.plain;
 export function fullRunEstimate(plan: Plan, runs: any[], treated: ArmTreatment[] | null) {
   const total = plan.arms.length * plan.inputs.length * plan.learners * (plan.checkpoints?.length ?? 1);
   // The trial's runs at the start count for the full run when the start is one of its points and the learner is one of its learners.
@@ -2238,11 +2300,18 @@ export function fullRunEstimate(plan: Plan, runs: any[], treated: ArmTreatment[]
   const perRun = runs.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0) / Math.max(runs.length, 1);
   const arms = plan.arms.map((arm: any) => {
     const learners = treated?.find(t => t.arm === arm.name)?.learners ?? [];
-    const finished = learners.flatMap(l => l.events.filter(e => e.received));
-    const perEvent = finished.length ? finished.reduce((sum, e) => sum + e.duration_ms, 0) / finished.length : null;
-    // Each learner of the full run gets every event that it has not received yet.
-    const due = Array.from({ length: plan.learners }, (_, l) => plan.events.length - (learners[l]?.events.filter(e => e.received).length ?? 0));
-    return { arm: arm.name, label: labelOf(plan, arm.name), events: due.reduce((a, b) => a + b, 0), perEvent, longest: perEvent === null ? 0 : Math.max(0, ...due) * perEvent };
+    // A Method fix tests its change on every earlier correction again, so each event takes longer than the one before:
+    // about one run of the arm longer for each earlier correction.
+    const own = runs.filter(r => r.arm === arm.name);
+    const growth = learnsWithMethod(arm) && own.length ? own.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0) / own.length : 0;
+    const before = (l: LearnerTreatment, e: EventRecord) => l.events.filter(x => x.index < e.index && x.kind === 'correction' && x.received).length;
+    const finished = learners.flatMap(l => l.events.filter(e => e.received).map(e => Math.max(0, e.duration_ms - before(l, e) * growth)));
+    const perEvent = finished.length ? finished.reduce((sum, ms) => sum + ms, 0) / finished.length : null;
+    // Each learner of the full run gets every event that it has not received yet, in order.
+    const given = Array.from({ length: plan.learners }, (_, l) => learners[l]?.events.filter(e => e.received).length ?? 0);
+    const due = given.map(n => plan.events.length - n);
+    const time = (from: number) => perEvent === null ? 0 : Array.from({ length: plan.events.length - from }, (_, i) => perEvent + (from + i) * growth).reduce((a, b) => a + b, 0);
+    return { arm: arm.name, label: labelOf(plan, arm.name), events: due.reduce((a, b) => a + b, 0), perEvent, growth, longest: Math.max(0, ...given.map(time)) };
   });
   const events = arms.reduce((n: number, a: any) => n + a.events, 0);
   const minutes = Math.round((Math.max(0, ...arms.map((a: any) => a.longest)) + left * perRun / 4) / 60_000);
@@ -2250,7 +2319,7 @@ export function fullRunEstimate(plan: Plan, runs: any[], treated: ArmTreatment[]
   const usd = !events && runs.length && costs.every(c => typeof c === 'number') ? Number(((costs.reduce((a, b) => a + b, 0) / runs.length) * left).toFixed(2)) : null;
   const eventMinutes = Object.fromEntries(arms.map((a: any) => [a.arm, a.perEvent === null ? null : Number((a.perEvent / 60_000).toFixed(1))]));
   const unknown = events ? arms.filter((a: any) => a.events && a.perEvent === null).map((a: any) => a.label) : [];
-  const perEventText = events ? `; per event ${arms.filter((a: any) => a.events).map((a: any) => `${a.label} ${a.perEvent === null ? 'not known yet, because none was received in the trial' : `about ${Math.round(a.perEvent / 1000)} s`}`).join(', ')}, the learners at the same time` : '';
+  const perEventText = events ? `; per event ${arms.filter((a: any) => a.events).map((a: any) => `${a.label} ${a.perEvent === null ? 'not known yet, because none was received in the trial' : `about ${Math.round(a.perEvent / 1000)} s${a.growth ? `, and about ${Math.round(a.growth / 1000)} s more for each earlier correction, which its fix tests again` : ''}`}`).join(', ')}, the learners at the same time` : '';
   const text = !left && !events ? 'The full run: nothing more to run; the trial ran every cell.'
     : [`The full run: ${plural(total, 'graded run')} in all${reused ? ` (${reused} done in the trial)` : ''}${events ? `, and ${plural(events, 'treatment event')} to give over all learners, each a training run and a fix or edit` : ''}.`,
       unknown.length ? `Time: not known yet: about ${Math.round(perRun / 1000)} s per run, 4 at a time${perEventText}.`
@@ -2409,7 +2478,8 @@ async function grade(item: any) {
   if (kept && measures.every((m: any) => Object.prototype.hasOwnProperty.call(kept.scores ?? {}, m.name))) {
     // A kept grade takes its run as it is now (a run saved to the account later has its run ID now), and links again
     // when it changed or the account lacks it.
-    const record = { ...kept, usage: item.usage ?? null, run_id: run.run_id ?? null, device: run.device ?? false };
+    const saved = savedHere(item.folder, run.key);
+    const record = { ...kept, usage: item.usage ?? null, run_id: saved?.run_id ?? null, device: saved?.device ?? false };
     const changed = JSON.stringify(record) !== JSON.stringify({ ...kept, usage: kept.usage ?? null, run_id: kept.run_id ?? null, device: kept.device ?? false });
     if (changed) writeRecord(item.folder, item.key, record);
     if (changed || item.unlinked) await linkGrade(item.folder, record);
@@ -2443,7 +2513,8 @@ async function grade(item: any) {
     `The judge (${context.judge?.model ?? 'Claude Code\'s default model'}) read in full: ${read.length ? read.join(', ') : 'no source files (the agent read none)'}.`,
     `The document that the judge marked${run.deliverable ? ` (${run.deliverable})` : ''}:\n${run.result === null || run.result === undefined ? '(not handed in)' : outputText(run.result)}`].join('\n\n');
   const record = { key: item.key, target: run.key, grader_version: item.grader_version, arm: run.arm, input: run.input, repeat: run.repeat, checkpoint: run.checkpoint,
-    run_dir: run.run_dir, scores, usage: item.usage ?? null, ...(Object.keys(noise).length ? { noise_scores: noise } : {}), verdicts, ...(Object.keys(printed).length ? { printed } : {}), seen, run_id: run.run_id, device: run.device };
+    run_dir: run.run_dir, scores, usage: item.usage ?? null, ...(Object.keys(noise).length ? { noise_scores: noise } : {}), verdicts, ...(Object.keys(printed).length ? { printed } : {}), seen,
+    run_id: savedHere(item.folder, run.key)?.run_id ?? null, device: savedHere(item.folder, run.key)?.device ?? false };
   writeRecord(item.folder, item.key, record);
   await linkGrade(item.folder, record);
   return record;
@@ -2633,6 +2704,7 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
     // The grade keys hold the runs as they finished: the account gets the trial's plan with them before the grades link.
     const planned = cells(plan, treated, 'trial');
     const missing = await sendPlan(plan.folder, plannedCells(plan, planned));
+    await linkMissing(plan.folder, runs, missing);
     return { trial_graded: gradeItems(plan, runs, planned, {}, true, treated, missing) };
   }
   if (stage === 'check') return { trial_summary: await trialCheck(plan, [...runsOf(bindings.runs), ...runsOf(bindings.done)], runsOf(bindings.grades), treated), ...reported };
@@ -2664,6 +2736,7 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
     // The grade keys hold the runs as they finished: the account gets the plan with them before the grades link.
     const planned = cells(plan, treated, 'full');
     const missing = await sendPlan(plan.folder, plannedCells(plan, planned));
+    await linkMissing(plan.folder, all(), missing);
     return { graded: gradeItems(plan, all().filter(r => r.repeat < plan.learners), planned, marks, false, treated, missing) };
   }
   if (stage === 'grade') return { grade: JSON.stringify(await grade(JSON.parse(bindings.item))) };
@@ -2674,10 +2747,8 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
     const result = decide(plan, grades, treated, runs, noise);
     // The account gets every finished cell that it lacks, then the decision.
     const missing = await sendPlan(plan.folder, plannedCells(plan, cells(plan, treated, 'full')));
-    if (missing) {
-      for (const run of runs) if (missing.has(run.key)) await linkRun(plan.folder, run);
-      for (const g of grades) if (missing.has(g.key)) await linkGrade(plan.folder, g);
-    }
+    await linkMissing(plan.folder, runs, missing);
+    if (missing) for (const g of grades) if (missing.has(g.key)) await linkGrade(plan.folder, g);
     const minutes = Math.round(runs.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0) / 60_000);
     const usd = runs.length && runs.every(r => typeof r.cost_usd === 'number') ? runs.reduce((sum, r) => sum + r.cost_usd, 0) : null;
     await sendStage(plan.folder, { stage: 'done', decision: result.decision, received: accountReceived(result.received), cost_estimate: { minutes, runs: runs.length, usd } });

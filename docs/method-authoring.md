@@ -782,12 +782,12 @@ Reconnect to a local run, or get what a fix did with a correction.
 Usage:
 
 ```sh
-method wait RUN_DIRECTORY
+method wait RUN_DIRECTORY_OR_ID
 method wait [JUDGMENT_ID] [--timeout SECONDS] [--json]
 ```
 
 Arguments and defaults:
-With a run directory: reconnects to the same local worker; closing this output connection leaves the worker active. With a judgment ID (from method judge --json), or with nothing: waits for the fix of that correction, or of every correction that this computer is fixing, for up to --timeout seconds (default 100), and prints what it did. A wait that ends first says so in one line; the fix goes on, and method wait can run again.
+With a run directory or the run ID that method run printed: reconnects to the same local worker; closing this output connection leaves the worker active. With a judgment ID (from method judge --json), or with nothing: waits for the fix of that correction, or of every correction that this computer is fixing, for up to --timeout seconds (default 100), and prints what it did. A wait that ends first says so in one line; the fix goes on, and method wait can run again.
 
 Result and changes:
 For a run: live output, then a final line with the run status (succeeded, unconfirmed, waiting_for_you, or failed), the headline of a failure, and the dashboard link of a synced run. For a fix: one plain line per correction for the person (Fixed, No fix found yet, Could not test a fix safely, a question, ...). After a fix it shows what the fixed agent gives now, from the test; nothing was sent. After a question, one more line says how to send the person's answer. --json prints {outcomes: [{judgment, status, outcome, lines, next?}]}.
@@ -810,17 +810,17 @@ Read worker status without waiting.
 Usage:
 
 ```sh
-method run-status RUN_DIRECTORY
+method run-status RUN_DIRECTORY_OR_ID
 ```
 
 Arguments and defaults:
-Local run directory.
+Local run directory, or the run ID that method run printed.
 
 Result and changes:
 Worker status and whether its process is active.
 
 Errors:
-Unreadable run directory.
+No run on this computer has that folder or ID.
 
 Example:
 
@@ -835,7 +835,7 @@ Stop a local run process.
 Usage:
 
 ```sh
-method cancel RUN_DIRECTORY
+method cancel RUN_DIRECTORY_OR_ID
 ```
 
 Arguments and defaults:
@@ -845,7 +845,7 @@ Result and changes:
 Cancellation request. The checkpoint remains available.
 
 Errors:
-Unreadable run directory.
+No run on this computer has that folder or ID.
 
 Example:
 

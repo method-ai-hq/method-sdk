@@ -6,7 +6,7 @@ import { loadWorkflow, parseDocumentValue, serializeWorkflow } from '../../workf
 import type { MethodClient } from './method-client.js';
 import { buildPackage } from './method-files.js';
 import { authoringPath, readDocument } from './authoring.js';
-import { Outbox, lastSaved, savedVersions } from './outbox.js';
+import { Outbox, accountOf, lastSaved, savedVersions } from './outbox.js';
 import { claimHome } from './home.js';
 
 export const methodIdPattern = /^wf_[a-f0-9]{32}$/;
@@ -87,7 +87,7 @@ export async function prepareVersion(client: MethodClient, outbox: Outbox, file:
   const { pack, sources, tooLarge } = await buildPackage(file, workflow);
   const versionId = versionIdFor(id, pack.digest);
   const url = `${client.server}/methods/${id}?version=${versionId}`;
-  if (savedVersions(client.server)[versionId]) return { method_id: id, version_id: versionId, url, unchanged: true, workflow };
+  if (savedVersions(client.server, accountOf(client))[versionId]) return { method_id: id, version_id: versionId, url, unchanged: true, workflow };
   const previous = lastSaved(client.server, id);
   if (tooLarge.length) process.stderr.write(`Not saved with this version (over 20 MB each; they stay on this computer): ${tooLarge.join(', ')}\n`);
   for (const f of pack.files) outbox.add({ kind: 'file', server: client.server, sha256: f.sha256, size: f.size }, sources[f.sha256]);
@@ -101,7 +101,7 @@ export async function prepareVersion(client: MethodClient, outbox: Outbox, file:
 
 /** The one line a run prints about its version. */
 export function savedLine(client: MethodClient, outbox: Outbox, version: PreparedVersion) {
-  const known = savedVersions(client.server)[version.version_id];
+  const known = savedVersions(client.server, accountOf(client))[version.version_id];
   if (known?.beside !== undefined) return `Saved beside ${known.beside ? `${known.beside}'s` : 'a'} newer version; your next run combines them.`;
   if (known) return `Saved as version ${known.version_number}: ${version.url}`;
   const failure = outbox.failure(version.version_id);
@@ -128,6 +128,6 @@ export async function publish(client: MethodClient, file: string, reason?: strin
   const published = await client.request<any>(`/api/cli/methods/${encodeURIComponent(version.method_id)}/versions/${encodeURIComponent(version.version_id)}/publish`, 'POST', { reason: publishReason });
   // Script cards never hold up a publish: cards that a run did not make yet are made in the background.
   startBackgroundExplain(file, version.workflow, version.version_id, client.server);
-  return { workflow_id: version.method_id, version_id: version.version_id, version_number: published.version_number ?? savedVersions(client.server)[version.version_id]?.version_number,
+  return { workflow_id: version.method_id, version_id: version.version_id, version_number: published.version_number ?? savedVersions(client.server, accountOf(client))[version.version_id]?.version_number,
     url: version.url, unchanged: version.unchanged, ...(gate.line ? { cases: gate.line } : {}), ...issues, published_at: published.published_at, publish_reason: published.publish_reason };
 }
