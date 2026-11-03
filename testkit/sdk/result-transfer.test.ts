@@ -44,3 +44,34 @@ it('retains HTTP status and the server reason when an error is HTML',async()=>{
  const client=new MethodClient('https://example.test',async()=>new Response('<title>Worker exceeded resource limits | Cloudflare</title>',{status:503}) as any);
  await expect(client.request('/health','GET',undefined,false)).rejects.toThrow('503: Worker exceeded resource limits');
 });
+it('moves large step values to stored files, once each, and keeps the record under its budget',async()=>{
+ const {moveLargeValues,transferValues,STORED_VALUE_BYTES}=await import('../../packages/sdk/src/result-transfer.js');
+ const {storedValue,storedValues}=await import('../../packages/workflow-language/src/result-files.js');
+ const big='x'.repeat(STORED_VALUE_BYTES), medium='y'.repeat(50_000), small={verdict:'pass'};
+ const row=(step:string,inputs:any,outputs:any)=>({step_id:step,status:'passed' as const,checks:[],changes:{},events:[],inputs,outputs});
+ const inspection={schema:'method-run/1',status:'succeeded',inputs:{comparison:big},invocations:{'gather:0':row('gather',{comparison:big},{runs:medium}),'decide:0':row('decide',{runs:medium,note:small},{result:small})}} as any;
+ const first=moveLargeValues(inspection,STORED_VALUE_BYTES+20_000);
+ // The large value always moves, the medium one moves to fit the budget, small ones and the run inputs stay.
+ expect(storedValue(first.inspection.invocations['gather:0'].inputs.comparison)).toMatchObject({bytes:STORED_VALUE_BYTES+2});
+ expect(storedValue(first.inspection.invocations['decide:0'].inputs.runs)).toEqual(storedValue(first.inspection.invocations['gather:0'].outputs.runs));
+ expect(first.inspection.invocations['decide:0'].inputs.note).toEqual(small);
+ expect(first.inspection.inputs.comparison).toBe(big);
+ expect(first.values.size).toBe(2);expect(storedValues(first.inspection)).toHaveLength(2);
+ expect(Buffer.byteLength(JSON.stringify(first.inspection))).toBeLessThan(STORED_VALUE_BYTES+20_000);
+ expect(inspection.invocations['gather:0'].inputs.comparison).toBe(big);
+ // A record sent again gives the same references and moves nothing more.
+ expect(moveLargeValues(inspection,STORED_VALUE_BYTES+20_000).inspection).toEqual(first.inspection);
+ expect(moveLargeValues(first.inspection,STORED_VALUE_BYTES+20_000).values.size).toBe(0);
+ const bigHash=storedValue(first.inspection.invocations['gather:0'].inputs.comparison)!.sha256;
+ // The server has the large value already, so only the other one is sent.
+ const received=new Set([bigHash]),sent:string[]=[];
+ const client={request:async(_p:string,_m:string,b:any)=>({missing:b.files.filter((f:any)=>!received.has(f.sha256)).map((f:any)=>f.sha256)}),transfer:async(p:string,b:Uint8Array)=>{expect(hash(b)).toBe(p.split('/').at(-1));sent.push(p.split('/').at(-1)!);return new Uint8Array();}} as unknown as MethodClient;
+ await transferValues(client,first.values);
+ expect(sent).toEqual([storedValue(first.inspection.invocations['gather:0'].outputs.runs)!.sha256]);
+ expect(JSON.parse(new TextDecoder().decode(first.values.get(sent[0]!)))).toBe(medium);
+});
+it('refuses a step value above 25 MB with the step and the value named',async()=>{
+ const {moveLargeValues}=await import('../../packages/sdk/src/result-transfer.js');
+ const inspection={invocations:{'gather:0':{step_id:'gather',status:'passed',checks:[],changes:{},events:[],outputs:{runs:'z'.repeat(26_000_000)}}}} as any;
+ expect(()=>moveLargeValues(inspection)).toThrow('The output runs of step gather is 26.0 MB');
+});

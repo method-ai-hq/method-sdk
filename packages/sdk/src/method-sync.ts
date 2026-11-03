@@ -1,4 +1,4 @@
-import { transferResults } from "./result-transfer.js";
+import { moveLargeValues, transferResults, transferValues } from "./result-transfer.js";
 import { MAX_RESULT_BYTES, MAX_RESULT_TRANSFER_BYTES } from "../../workflow-language/src/result-files.js";
 import { existsSync, readFileSync } from "node:fs";
 import { Outbox, type RunItem } from "./outbox.js";
@@ -94,6 +94,10 @@ export class MethodSync {
       this.deviceChecked = true;
     }
     if (this.device) inspection = deviceOnly(inspection);
+    // Large step values go first as stored files; the record keeps a reference to each.
+    const moved = moveLargeValues(inspection);
+    await transferValues(this.client, moved.values);
+    inspection = moved.inspection;
     const payload = {
       workflow_id: this.state.workflow_id,
       version_id: this.state.version_id,

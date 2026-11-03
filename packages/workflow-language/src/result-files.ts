@@ -82,3 +82,27 @@ export const AttachedFileSchema = z.strictObject({
     .optional(),
 });
 export type AttachedFile = z.infer<typeof AttachedFileSchema>;
+
+/**
+ * A step value too large for the run record. The record keeps this reference in the value's place, and the value's JSON
+ * is a stored result file. A run page reads the value when a person opens it.
+ */
+export const STORED_VALUE = "$method_stored_value";
+export type StoredValue = { [STORED_VALUE]: { sha256: string; bytes: number } };
+const StoredValueSchema = z.strictObject({ [STORED_VALUE]: z.strictObject({ sha256: hash, bytes: z.number().int().min(0) }) });
+/** The stored file of a value that the record keeps as a reference, or undefined for a recorded value. */
+export function storedValue(value: unknown): StoredValue[typeof STORED_VALUE] | undefined {
+  if (!value || typeof value !== "object" || !Object.hasOwn(value, STORED_VALUE)) return undefined;
+  const parsed = StoredValueSchema.safeParse(value);
+  return parsed.success ? parsed.data[STORED_VALUE] : undefined;
+}
+/** Each stored value that a run record refers to, once. Only step inputs and outputs are stored this way. */
+export function storedValues(run: { invocations: Record<string, { inputs?: Record<string, unknown> | undefined; outputs?: Record<string, unknown> | undefined }> }) {
+  const found = new Map<string, { sha256: string; bytes: number }>();
+  for (const row of Object.values(run.invocations))
+    for (const value of [...Object.values(row.inputs ?? {}), ...Object.values(row.outputs ?? {})]) {
+      const stored = storedValue(value);
+      if (stored) found.set(stored.sha256, stored);
+    }
+  return [...found.values()];
+}
