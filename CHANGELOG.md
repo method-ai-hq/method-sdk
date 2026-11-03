@@ -1,3 +1,11 @@
+# 0.26.2
+
+Use runtime 0.17.1.
+
+- **A comparison's trial reaches its page.** A comparison saved its file with the current account and then read the current account again for its record. When another session changed the current account in between, the record named another workspace: every stage then reported to a comparison that workspace does not have (`404: Comparison not found`), and the trial's runs were saved there. The save now uses one account, the one whose workspace has the comparison, and records that account; when the account it knows answers 404, it asks the other signed-in accounts. The next `method run` of the file corrects an earlier record.
+- **The page says when a comparison's run stopped, and why.** The save, the plan and each stage name the Method that runs the comparison, so the page reads its newest run: a run that failed or was stopped shows as stopped, with its reason, not as running.
+- **A changed file after the trial started is a new version.** The page keeps each version with the runs of the file they ran.
+
 # 0.26.1
 
 Use runtime 0.17.1.
