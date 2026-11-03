@@ -1,3 +1,9 @@
+# 0.25.2
+
+Use runtime 0.17.0.
+
+- **A comparison's Method arms work with your own OpenRouter key.** Each arm runs in a clean room that keeps only `PATH`, the language and the user of your environment, and an own-key request reads the key from the environment when it is sent, so every hosted model and classify step of an arm was sent without a key (`401: Missing Authentication header (your own key, OPENROUTER_API_KEY)`). The arm's room now gets the own key when `method config model-key` is on.
+
 # 0.25.1
 
 Use runtime 0.17.0.
