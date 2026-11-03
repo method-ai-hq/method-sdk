@@ -1,3 +1,9 @@
+# 0.26.0
+
+Use runtime 0.17.0.
+
+- **A comparison asks a few literal questions, not "Keep this?" for every value.** A `.compare` file has `questions`: 7 or fewer, each about a choice whose wrong answer would make the result meaningless. A question shows the real thing first (`{quote: TEXT}`, or `{file: PATH}`, whose text the page shows and not its name), asks one direct question (`ask`), says what a "no" means (`if_no`), and can name the workspace member who answers it (`for`). `method validate` refuses a question that shows no real thing, names a file or an arm's short name such as `plain_told`, or says arm, plugin or project, and prints the questions as the page asks them in place of `writer_choices`. The page no longer asks about each of the writer's choices, or whether an assumption is true; it still marks who decided each value. A "no" with the person's words holds the run until the file changes. The comparisons guide has nine rules, and the support-replies example asks three questions.
+
 # 0.25.3
 
 Use runtime 0.17.0.
