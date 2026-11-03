@@ -455,6 +455,29 @@ it('a judge feedback writer is one Claude session that reads the task, the outpu
   expect(JSON.stringify(call)).not.toMatch(/arms|plain|learner/);
 }, 600_000);
 
+it('refuses questions that show no real thing, name a file, an arm or a word of the file, or are more than 7, and prints the rest as the page asks them', async () => {
+  const { root, file } = fixture({ arms: { plain_told: 'a/agent.method', method: 'b/agent.method' } });
+  const good = JSON.parse(readFileSync(file, 'utf8'));
+  writeFileSync(join(root, 'message.md'), 'Answer with a number.\n');
+  const question = { show: ['Every run starts with this message:', { file: 'message.md' }], ask: 'Would you ask for a number like this?', if_no: 'The test measures a task that nobody gives.' };
+  const write = (questions: unknown[]) => { writeFileSync(file, JSON.stringify({ ...good, questions })); return () => readComparison(file); };
+  expect(write([question])().questions).toHaveLength(1);
+  // A plain word that is an arm's short name (method) is the study's own word.
+  expect(write([{ ...question, ask: 'Would the agent with Method get this right?' }])().questions).toHaveLength(1);
+  expect(write([{ ...question, show: ['Every run starts with a message.'] }])).toThrow('Question 1 shows no real thing. Add {quote: TEXT} or {file: PATH}');
+  expect(write([{ ...question, show: [{ file: 'gone.md' }] }])).toThrow('Question 1 shows gone.md, which is not there.');
+  expect(write([{ ...question, ask: 'Message: Each chat starts with the message in message.md. Keep this?' }])).toThrow('Question 1 names the file message.md. Say what it is, and show its words with {file: message.md}.');
+  expect(write([question, { ...question, if_no: 'Then plain_told wins by its start.' }])).toThrow('Question 2 names the arm plain_told.');
+  expect(write([{ ...question, ask: 'Is the Method plugin set up in the arm?' }])).toThrow('Question 1 says "plugin", a word of the file, not of the study.');
+  expect(write(Array(8).fill(question))).toThrow('It has 8 questions. Keep the 7 or fewer whose wrong answer would make the result meaningless');
+  // The quotes and files shown are the real thing: they may name files.
+  expect(write([{ ...question, show: [{ quote: 'Save your answers as answers.json.' }] }])().questions).toHaveLength(1);
+  const { questionsWords } = await import('../../packages/sdk/src/compare.js');
+  expect(questionsWords(write([question])(), root).values).toEqual(['Every run starts with this message:\n“Answer with a number.”\nWould you ask for a number like this?\nIf no: The test measures a task that nobody gives.']);
+  writeFileSync(file, JSON.stringify(good));
+  expect(questionsWords(readComparison(file), root)).toEqual({ reminder: expect.stringContaining('This file has no questions.'), values: [] });
+});
+
 it('decided_by_you names the notes of a part as notes.PART', () => {
   const { file } = fixture({ notes: { inputs: ['Each input runs alone.'] }, decided_by_you: ['notes.inputs'] });
   expect(decisions(readComparison(file)).find(d => d.what === 'note')).toMatchObject({ part: 'inputs', by: 'you' });
@@ -772,11 +795,13 @@ it('prints the answers on the comparison page for the agent, holds the run while
   const id = () => JSON.parse(readFileSync(file, 'utf8')).id as string;
   vi.spyOn(MethodClient.prototype, 'token').mockReturnValue('method_x');
   vi.spyOn(MethodClient.prototype, 'transfer').mockResolvedValue({} as any);
-  const kept = { kind: 'writer_choice', question: 'The decision rule. Keep this?', choice: 'yes', words: null, by: 'Ryan', at: '2026-10-27T00:00:00Z', change: false,
-    to_do: 'Ryan kept the writer\'s choice “The decision rule”. Add rule to decided_by_you.' };
+  const kept = { kind: 'question', question: 'Would 1 more point out of 10 convince you?', choice: 'yes', words: null, by: 'Ryan', at: '2026-10-27T00:00:00Z', change: false,
+    to_do: 'Ryan said yes to “Would 1 more point out of 10 convince you?”.' };
+  const no = { kind: 'question', question: 'Is this a fair start for plain Claude Code?', choice: 'no', words: 'Give it the same guide.', by: 'Ryan', at: '2026-10-27T00:00:00Z', change: true,
+    to_do: 'Ryan said no to “Is this a fair start for plain Claude Code?”. Their words: “Give it the same guide.” Change the comparison, and the question with it so that it shows the change.' };
   const said = { kind: 'correction', question: 'Would you give this correction on three?', choice: 'differently', words: 'Bigger, because small reads as wrong.', by: 'Gráinne', at: '2026-10-27T00:00:00Z', change: true,
     to_do: 'Gráinne would say the correction on inputs/three.json differently. Their words: “Bigger, because small reads as wrong.” Use their words for that event, and say in its source that they are theirs.' };
-  const page = { url: 'https://example.test/comparisons/x', open: 1, approved: { trial: false, full_run: false }, answers: [kept, said] as any[] };
+  const page = { url: 'https://example.test/comparisons/x', open: 1, approved: { trial: false, full_run: false }, answers: [kept, no, said] as any[] };
   const specs: any[] = [];
   vi.spyOn(MethodClient.prototype, 'request').mockImplementation(async (path: string, _verb?: string, body?: any) => {
     if (path.endsWith('/answers')) return structuredClone(page) as any;
@@ -784,20 +809,20 @@ it('prints the answers on the comparison page for the agent, holds the run while
     return { comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1` } as any;
   });
   // The page shows where the correction's words come from.
-  await expect(comparisonRunArgs(['run', file])).rejects.toThrow(`The comparison page has answers that change the file (https://example.test/comparisons/x):\n- ${kept.to_do}\n- ${said.to_do}\nChange the file, then publish again: method publish numbers.compare. The run starts when no answer waits for a change.`);
+  await expect(comparisonRunArgs(['run', file])).rejects.toThrow(`The comparison page has answers that change the file (https://example.test/comparisons/x):\n- ${no.to_do}\n- ${said.to_do}\nChange the file, then publish again: method publish numbers.compare. The run starts when no answer waits for a change.`);
   expect(specs[0].treatment.list).toEqual([{ input: 'inputs/three.json', text: 'It needs to be bigger because small is wrong.', source: 'Written by us: a rule kind she called realistic.' }]);
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   await methodMain(['publish', file]);
   const printed = JSON.parse(stdout.mock.calls.map(c => String(c[0])).join(''));
   stdout.mockRestore();
-  expect(printed).toMatchObject({ questions_open: 1, answers: [kept.to_do, said.to_do],
+  expect(printed).toMatchObject({ questions_open: 1, answers: [no.to_do, said.to_do],
     next: 'The comparison page has answers that change the file. Make each change in answers, then publish again: method publish numbers.compare' });
 
-  // Once the file has the change, the run starts and prints what is left for the agent. The trial waits for a yes on the page.
+  // Once the file has the change, the run starts; a plain yes needs nothing. The trial waits for a yes on the page.
   page.answers = [kept];
   const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   const args = await comparisonRunArgs(['run', file]);
-  expect(stderr.mock.calls.map(c => String(c[0])).join('')).toBe(`Answers on the comparison page (https://example.test/comparisons/x):\n- ${kept.to_do}\n`);
+  expect(stderr.mock.calls.map(c => String(c[0])).join('')).toBe('');
   stderr.mockRestore();
   const generated = () => JSON.parse(readFileSync(args[1]!, 'utf8'));
   expect(generated().steps.trial_approve).toMatchObject({ name: 'Trial approval', ask: 'Run the trial of "Which agent gives the larger number?"? Answer "Run the trial?" on the comparison page, https://example.test/comparisons/x, then run the comparison again. Or, when the person said it here, pass their answer: start: true to run it, or start: false to stop.' });
@@ -1175,19 +1200,21 @@ it('method test --baseline answers which version is better', () => {
   expect(baselineAnswer(counts(1, 0, 1)).answer).toBe("Can't tell yet");
 });
 
-it('method authoring comparisons teaches the eight rules with a support-reply example, and its example comparison is valid', async () => {
+it('method authoring comparisons teaches the nine rules with a support-reply example, and its example comparison is valid', async () => {
   const { authoringGuide } = await import('../../packages/sdk/src/method-help.js');
   const { exampleDirectory } = await import('../../packages/sdk/src/authoring-example.js');
   const guide = authoringGuide('comparisons');
-  expect(guide.match(/^\d\. /gm)).toHaveLength(8);
+  expect(guide.match(/^\d\. /gm)).toHaveLength(9);
   expect(guide).toContain('Show, do not explain: every word on the page is backed by the literal thing the agent sees or the grader checks.');
-  expect(guide).toContain('Publish the draft with `method publish NAME.compare` and give the user the link before any run, so they can review every part.');
+  expect(guide).toContain('Publish the draft with `method publish NAME.compare` and give the user the link before any run.');
+  expect(guide).toContain('Write the `questions` that the page asks: 3 to 7');
   expect(guide).toContain('Write the question so that it names the treatment and the test.');
   expect(guide).toContain('"It needs to be X because Y"');
   expect(guide).toContain('method authoring example support-replies');
   expect(guide).not.toMatch(/legal|lawyer|DLA|Piper|Raccine/i);
   const doc = readComparison(join(exampleDirectory('support-replies').directory, 'replies.compare'));
   expect(doc.treatment!.events.filter(e => e.correction)).toHaveLength(20);
+  expect(doc.questions).toHaveLength(3);
   expect(authoringGuide('all')).toContain('# Comparisons');
 });
 

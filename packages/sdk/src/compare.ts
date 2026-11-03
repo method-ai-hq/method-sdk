@@ -84,6 +84,12 @@ const assumptionSchema = z.union([text, z.strictObject({
   check: text.optional().describe('How to check it.'),
   limit: z.literal(true).optional().describe('true for a known limit of the comparison, which needs no if_false or check.'),
 })]);
+const questionSchema = z.strictObject({
+  show: z.array(z.union([text, z.strictObject({ quote: text }), z.strictObject({ file: text })])).min(1).describe('What the question shows first, in order: your sentences (text), and at least one real thing word for word: {quote: TEXT} (a real correction, a real label with the words of its source) or {file: PATH} (a file beside this file, such as the message that each chat starts with; the page shows its text, not its name).'),
+  ask: text.describe('One direct question that a smart person who is not a programmer answers yes or no, about the real thing shown, such as "Would a lawyer correct an assistant like this?".'),
+  if_no: text.describe('What a "no" means for the result, such as "The test teaches from corrections that no real reviewer gives."'),
+  for: text.optional().describe('The workspace member who answers it, such as the expert, by name. Without it the person who made the comparison answers.'),
+});
 export const comparisonSchema = z.strictObject({
   id: z.string().regex(comparisonIdPattern).optional().describe('The comparison\'s ID in your Method account. Method writes it on the first run; keep it.'),
   question: text.describe('One sentence in your words that names the treatment and the test.'),
@@ -124,6 +130,7 @@ export const comparisonSchema = z.strictObject({
     .optional().describe(`Notes that the page shows with their part: ${noteParts.join(', ')}.`),
   samples: z.record(text, text).optional().describe('Outputs made by code, not by an agent, by input ID: a file in the form of the deliverable, such as the decision that keeps every draft. Before the trial, Method runs the feedback writer and each code measure on them, and the page shows exactly what an arm gets back and how a run is scored. Give one for a teaching input (with a code feedback writer) and one for a measured input (with a code measure).'),
   labels: z.record(text, text).optional().describe('Words that the page uses as labels, each with the exhibit that shows the literal thing: prompt (what each agent receives), files (the files in its folder), correction, hidden answer, output, a measure\'s name, or the path of a file that the files exhibit shows (such as matter/email/request.txt). Method links each measure\'s name, correction, hidden answer, the handed-in file and the input noun itself.'),
+  questions: z.array(questionSchema).min(1).optional().describe('The questions that the comparison page asks, one at a time: 7 or fewer, each about a choice whose wrong answer would make the result meaningless. Each shows the real thing, asks one direct question and says what a "no" means. The page shows every other value; it does not ask about it.'),
   decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin, arms.plain (which agent the arm is), arms.plain.instructions (its starting instructions) or notes.PART (the notes of a part). Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
 }).describe('A comparison: one question about two or more agents.');
 export type Comparison = z.infer<typeof comparisonSchema>;
@@ -370,6 +377,7 @@ export function readComparison(file: string): Comparison {
     for (const room of [...inputs, ...teaching].map(other => inputRoom(root, other)).filter(Boolean)) if (`${resolve(root, sample)}/`.startsWith(`${room}/`)) problems.push(`The sample output ${sample} is in the folder of an input, which the arms get. Keep it outside.`);
   }
   for (const id of Object.keys(doc.about_inputs?.names ?? {})) if (!inputs.includes(id) && !teaching.includes(id)) problems.push(`about_inputs names ${id}, which is not an input.`);
+  problems.push(...questionProblems(doc, root));
   for (const entry of doc.decided_by_you ?? []) {
     const [part, field] = entry.split('.');
     // A note is decided by part: notes.PART names the notes of that part.
@@ -377,6 +385,41 @@ export function readComparison(file: string): Comparison {
   }
   if (problems.length) throw Error(`${basename(path)} cannot run. ${problems.join(' ')}`);
   return doc;
+}
+
+/** The most questions that a comparison page asks. */
+const MAX_QUESTIONS = 7;
+/**
+ * What is wrong with the questions: more than 7, one that shows no real thing, a file that is not there, or words of
+ * Method's file instead of the study's (a file name, an arm's short name such as plain_told, or arm, plugin, project).
+ * The quotes and files that a question shows are the real thing, so they may hold any words.
+ */
+function questionProblems(doc: Comparison, root: string): string[] {
+  const questions = doc.questions ?? [], problems: string[] = [];
+  if (questions.length > MAX_QUESTIONS) problems.push(`It has ${questions.length} questions. Keep the ${MAX_QUESTIONS} or fewer whose wrong answer would make the result meaningless; the page shows everything else.`);
+  // An arm's short name that is not a plain word (plain_told, arm-2); a plain word such as method may be the study's own word.
+  const ids = Object.keys(doc.arms).filter(id => /[_\-\d]/.test(id));
+  questions.forEach((question, i) => {
+    const n = `Question ${i + 1}`;
+    if (!question.show.some(item => typeof item !== 'string')) problems.push(`${n} shows no real thing. Add {quote: TEXT} or {file: PATH} to show: the real message, correction or label, word for word.`);
+    for (const item of question.show) if (typeof item !== 'string' && 'file' in item && !existsSync(resolve(root, item.file))) problems.push(`${n} shows ${item.file}, which is not there.`);
+    const words = [question.ask, question.if_no, ...question.show.filter((item): item is string => typeof item === 'string')].join('\n');
+    const file = words.match(/[\w./-]+\.(?:md|json|jsonl|py|mjs|js|ts|method|compare|txt|ya?ml|csv)\b/i)?.[0];
+    if (file) problems.push(`${n} names the file ${file}. Say what it is, and show its words with {file: ${file}}.`);
+    const id = ids.find(id => new RegExp(`(^|[^\\w-])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w-]|$)`).test(words));
+    if (id) problems.push(`${n} names the arm ${id}. Say which agent it is, such as "the plain agent".`);
+    const word = words.match(/\b(arms?|plugins?|projects?)\b/i)?.[0];
+    if (word) problems.push(`${n} says "${word}", a word of the file, not of the study. Say what the person would call it, such as "the agent with Method".`);
+  });
+  return problems;
+}
+
+/** The questions as method validate prints them for the writer to read again: what each shows, asks and means. */
+export function questionsWords(doc: Comparison, root: string) {
+  const reminder = 'The page asks only these, one at a time. Each shows the real thing, asks one direct question, and says what a "no" means. Read each as the person would: no file names, no short names of arms.';
+  if (!doc.questions?.length) return { reminder: `This file has no questions. Write 3 to ${MAX_QUESTIONS} under questions: the choices whose wrong answer would make the result meaningless.`, values: [] };
+  return { reminder, values: doc.questions.map(question => [...question.show.map(item => typeof item === 'string' ? item : `“${'quote' in item ? item.quote : short(readFileSync(resolve(root, item.file), 'utf8').trim(), 1500)}”`),
+    question.ask, `If no: ${question.if_no}`, ...(question.for ? [`For ${question.for}.`] : [])].join('\n')) };
 }
 
 /** A model as an arm runs it: the agent (claude, codex, or hosted for a Method model), the model and the effort. */
@@ -502,7 +545,7 @@ export function deliverableWords(doc: Comparison) {
 export type PagePart = 'arms' | 'same_for_both' | 'inputs' | 'treatment' | 'main_measure' | 'other_measures' | 'runs_per_point' | 'rule' | 'noise' | 'run_rules' | 'trial' | 'assumptions';
 /** The page part of a note's part in the file: measure is the main measure, runs the runs per point. Notes on the question have no part on the page. */
 const notePart = (part: string): PagePart | null => part === 'question' ? null : part === 'measure' ? 'main_measure' : part === 'runs' ? 'runs_per_point' : part as PagePart;
-/** entries: the decided_by_you entries that make the value the person's, so an answer "Keep this?" on the page names the exact edit. */
+/** entries: the decided_by_you entries that make the value the person's. */
 export type Decision = { part: PagePart; what: string; value: string; by: 'you' | 'writer' | 'method'; entries: string[] };
 const short = (value: string, max = 300) => value.length > max ? `${value.slice(0, max - 1)}…` : value;
 /**
@@ -808,6 +851,10 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     ...(doc.expected ? { expected_answers: true } : {}),
     judge: { agent: settings.judge.agent, model: settings.judge.model ?? 'Claude Code\'s default model' },
     assumptions: assumptionsOf(doc),
+    ...(doc.questions ? { questions: doc.questions.map(question => ({
+      // A file shows its text, never its name.
+      show: question.show.map(item => typeof item === 'string' ? { said: item } : 'quote' in item ? { quote: item.quote } : { quote: short(readFileSync(resolve(root, item.file), 'utf8').trim(), 8000) }),
+      ask: question.ask, if_no: question.if_no, ...(question.for ? { for: question.for } : {}) })) } : {}),
     ...(Object.keys(notes).length ? { notes } : {}),
     decisions: decisions(doc),
     method_rules: methodRules(doc, { ...settings, labels: Object.fromEntries(arms.map(arm => [arm.name, arm.label])) }),
@@ -1107,11 +1154,11 @@ export async function publishComparison(args: string[]) {
 }
 
 /**
- * What the agent does about the answers on the comparison page: each answer that asks for a change of the file, and
- * each writer's choice that the person kept (it goes into decided_by_you). Approvals and plain yeses need nothing.
+ * What the agent does about the answers on the comparison page: each answer that asks for a change of the file.
+ * Approvals and plain yeses need nothing.
  */
 export function pageToDo(page: PageAnswers | null) {
-  return (page?.answers ?? []).filter(answer => answer.change || answer.kind === 'writer_choice').map(answer => answer.to_do);
+  return (page?.answers ?? []).filter(answer => answer.change).map(answer => answer.to_do);
 }
 
 /**

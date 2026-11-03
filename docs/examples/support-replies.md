@@ -81,6 +81,25 @@ assumptions:
 notes:
   inputs: [Each ticket runs alone with an empty work folder.]
   treatment: [The corrections come from the support lead's notes on four past tickets.]
+questions:
+  - show:
+      - "After each past ticket, each agent gets one correction, such as:"
+      - quote: It needs to ask for one photo of the damage first, because we approve a damaged-item refund only with a photo.
+      - quote: It needs to apologize once, in the first sentence, because repeated apologies read as a script.
+    ask: Does your support lead correct replies in words like these?
+    if_no: The agents learn from feedback that the support lead does not give, so the result says nothing about the support lead's corrections.
+  - show:
+      - "A new ticket says:"
+      - quote: My order has not moved for a week. What now?
+      - "A reply gets points for each of these:"
+      - {file: expected/t-202.json}
+    ask: Is this what a good reply to this ticket must do?
+    if_no: An agent can win by following rules that the support lead does not have.
+  - show:
+      - "The plain Claude Code agent starts from these instructions, the same words as the Method agent's prompt:"
+      - {file: plain-instructions.md}
+    ask: Is this a fair start for plain Claude Code?
+    if_no: The Method agent can win by a better start, not by following corrections better.
 decided_by_you: [arms]
 ```
 
@@ -164,7 +183,7 @@ A comparison of a Method agent against plain Claude Code. Both get the same 20 c
 - `support-reply.method` is the Method arm. It saves its reply to `work/reply.md`; `deliverable: work/reply.md` makes the plain arm hand in the same file.
 - `plain-instructions.md` is the plain arm's starting instructions: the same words as the Method's prompt. A builder edits them after each correction.
 - `expected/` holds each new ticket's checklist. Each item names the corrections that cover it (`covered_by`, by their place in the file), so the main measure counts only items that a correction given so far covers.
-- The user named the arms (`decided_by_you`). The question rephrases the user's request, so it is the writer's. Every other value is the writer's choice, and the comparison page asks the user to review it.
+- The user named the arms (`decided_by_you`). The question rephrases the user's request, so it is the writer's. Every other value is the writer's choice. The comparison page asks the user only the three `questions`, each about the real words: the corrections, one checklist, and the plain agent's start.
 ```
 
 ## Installed files

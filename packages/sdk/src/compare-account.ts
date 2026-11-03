@@ -134,7 +134,7 @@ export async function sendStage(folder: string, update: { stage: 'trial' | 'runn
 
 /**
  * The answers on the comparison's page for this version (questions for you): what the person or the expert said about
- * the writer's choices, the corrections and the assumptions, each with what the agent does about it (to_do) and whether
+ * the writer's questions and the corrections, each with what the agent does about it (to_do) and whether
  * the run waits for a change of the file (change), and whether the trial and the full run are approved. open: the
  * questions that nobody has answered yet. Null without the account, or when it did not answer.
  */

@@ -64,13 +64,14 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
     measure: { name: 'size', code: 'size.mjs', description: 'The number over ten.' }, rule: { margin: 0.1, min_runs: 1, at: 2 }, runs: 1,
     treatment: { events: [{ correction: 'It needs to be bigger because small is wrong.', input: 'inputs/teach.json' }, { correction: 'It needs a unit because readers ask.', input: 'inputs/teach.json' }], checkpoints: [0, 2] },
     assumptions: [{ text: 'The measure is fair.', if_false: 'The sizes say nothing.', check: 'Read 5 runs.' }], decided_by_you: ['question', 'rule'], notes: { treatment: ['Both corrections are about size.'] },
-    samples: { 'inputs/one.json': 'samples/one.txt' }, labels: { 'small number': 'size' } }));
+    samples: { 'inputs/one.json': 'samples/one.txt' }, labels: { 'small number': 'size' },
+    questions: [{ show: ['A run hands in:', { file: 'samples/one.txt' }, { quote: 'It needs to be bigger because small is wrong.' }], ask: 'Is a bigger number better?', if_no: 'The measure rewards the wrong thing.', for: 'Gráinne' }] }));
   mkdirSync(join(root, 'samples'));
   writeFileSync(join(root, 'samples', 'one.txt'), '4');
   delivery.deliver = async (event: any) => ({ received: true, outcome: event.index === 1 ? 'fixed' : 'no_change_needed' });
   const { inputs } = await compileComparison(file);
   const spec = sent.specs.at(-1);
-  expect(Object.keys(spec).sort()).toEqual(['arms', 'assumptions', 'decisions', 'difference', 'exhibits', 'inputs', 'judge', 'learners', 'main_measure', 'method_rules', 'notes', 'other_measures', 'question', 'rule', 'runs_per_point', 'treatment']);
+  expect(Object.keys(spec).sort()).toEqual(['arms', 'assumptions', 'decisions', 'difference', 'exhibits', 'inputs', 'judge', 'learners', 'main_measure', 'method_rules', 'notes', 'other_measures', 'question', 'questions', 'rule', 'runs_per_point', 'treatment']);
   // The exhibits: the literal correction each arm gets, the sample output, and the measure's code run on it, with the labels that link to them.
   expect(spec.exhibits.see.map((e: any) => e.id)).toEqual(['correction', 'output']);
   expect(spec.exhibits.see[0].blocks.map((b: any) => b.text)).toEqual(['It needs to be bigger because small is wrong.', 'It needs to be bigger because small is wrong.']);
@@ -84,7 +85,9 @@ it('sends the account the spec with who decided each value, Method\'s rules and 
   expect(spec.other_measures).toEqual([{ name: 'Usage per correction', how: 'usage', higher_is_better: false, description: expect.any(String) }]);
   expect(spec.judge).toEqual({ agent: 'claude', model: 'Claude Code\'s default model' });
   expect(spec.learners).toBe(1);
-  // Each value names the decided_by_you entries that would make it the person's, for a "Keep this?" answer on the page.
+  // The questions that the page asks: a file shows its text, never its name.
+  expect(spec.questions).toEqual([{ show: [{ said: 'A run hands in:' }, { quote: '4' }, { quote: 'It needs to be bigger because small is wrong.' }], ask: 'Is a bigger number better?', if_no: 'The measure rewards the wrong thing.', for: 'Gráinne' }]);
+  // Each value says who decided it, with the decided_by_you entries that make it the person's.
   expect(spec.decisions).toEqual(expect.arrayContaining([{ part: 'rule', what: 'decision rule', value: expect.any(String), by: 'you', entries: ['rule'] },
     { part: 'treatment', what: 'note', value: 'Both corrections are about size.', by: 'writer', entries: ['notes.treatment'] }]));
   expect(spec.assumptions[0]).toEqual({ text: 'Each agent received its full treatment.', if_false: expect.any(String), check: expect.any(String), by: 'method', checked_by: 'treatment' });

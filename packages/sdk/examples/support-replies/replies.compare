@@ -66,4 +66,23 @@ assumptions:
 notes:
   inputs: [Each ticket runs alone with an empty work folder.]
   treatment: [The corrections come from the support lead's notes on four past tickets.]
+questions:
+  - show:
+      - "After each past ticket, each agent gets one correction, such as:"
+      - quote: It needs to ask for one photo of the damage first, because we approve a damaged-item refund only with a photo.
+      - quote: It needs to apologize once, in the first sentence, because repeated apologies read as a script.
+    ask: Does your support lead correct replies in words like these?
+    if_no: The agents learn from feedback that the support lead does not give, so the result says nothing about the support lead's corrections.
+  - show:
+      - "A new ticket says:"
+      - quote: My order has not moved for a week. What now?
+      - "A reply gets points for each of these:"
+      - {file: expected/t-202.json}
+    ask: Is this what a good reply to this ticket must do?
+    if_no: An agent can win by following rules that the support lead does not have.
+  - show:
+      - "The plain Claude Code agent starts from these instructions, the same words as the Method agent's prompt:"
+      - {file: plain-instructions.md}
+    ask: Is this a fair start for plain Claude Code?
+    if_no: The Method agent can win by a better start, not by following corrections better.
 decided_by_you: [arms]
