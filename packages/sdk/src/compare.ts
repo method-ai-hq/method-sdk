@@ -23,6 +23,7 @@ import { methodContent, methodIdPattern, newMethodId, writeMethodId } from './ve
 import { packageFileNames } from './method-files.js';
 import { writePrivateJson } from './files.js';
 import { configRoot } from './computer-settings.js';
+import { ownKeyForRoom } from './own-model-key.js';
 import { linkCells, readAccount, readAnswers, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PageAnswers, type PlannedCell } from './compare-account.js';
 import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
@@ -1305,6 +1306,7 @@ export function fixOutcome(outcome: string | undefined): { received: boolean; ou
  * steps run on (and, for a fix, the user's own agent, which runs the fix), a short TMPDIR, and a copy of each bound
  * folder. Method's own sign-in, cache and server stay: the arm's runs and judgments belong to the user's account.
  * Without web, its Claude Code and Codex steps (and its fix's) run without web search and fetch (METHOD_WEB=off).
+ * The computer's own OpenRouter key (method config model-key) goes in too, so its hosted model and classify steps work.
  */
 async function armRoom(file: string, cacheDir: string, fix: boolean, folders: Record<string, string> = {}, web = false) {
   const { cleanRoomEnv } = await import('@withmethod/runtime/clean-room.js');
@@ -1317,7 +1319,7 @@ async function armRoom(file: string, cacheDir: string, fix: boolean, folders: Re
   if (fix || models.length) { const local = await localAgent(); if (local) agents.add(local); }
   const room = await cleanRoomEnv([...agents].filter((agent): agent is 'claude' | 'codex' => agent === 'claude' || agent === 'codex'), process.env, { folders });
   Object.assign(room.env, { METHOD_CONFIG_DIR: configRoot(), METHOD_CACHE_DIR: cacheDir, ...(web ? {} : { METHOD_WEB: 'off' }), ...(process.env.METHOD_SERVER ? { METHOD_SERVER: process.env.METHOD_SERVER } : {}),
-    ...(process.env.METHOD_ACCOUNT ? { METHOD_ACCOUNT: process.env.METHOD_ACCOUNT } : {}) });
+    ...(process.env.METHOD_ACCOUNT ? { METHOD_ACCOUNT: process.env.METHOD_ACCOUNT } : {}), ...ownKeyForRoom() });
   return room;
 }
 /**

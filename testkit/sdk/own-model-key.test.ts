@@ -96,3 +96,20 @@ it('method config model-key takes the key in the one nearby key file in place of
   await modelKeyCommand([], async () => { throw Error('The form must not open.'); });
   expect(String(written.mock.calls.at(-1)?.[0])).toContain('the key already saved on this computer');
 });
+
+it('a clean room (a comparison arm) gets the own key, so its hosted steps are not sent without one', async () => {
+  const { ownKeyForRoom } = await import('../../packages/sdk/src/own-model-key.js');
+  const { cleanRoomEnv } = await import('@withmethod/runtime/clean-room.js');
+  computer();
+  expect(ownKeyForRoom()).toEqual({});
+  await modelKeyCommand([], async () => {});
+  vi.stubEnv(ownKeyName, 'sk-or-room');
+  // The room keeps only PATH, the language and the user of the caller: the key goes in through ownKeyForRoom.
+  const room = await cleanRoomEnv([], process.env);
+  try {
+    expect(room.env[ownKeyName]).toBeUndefined();
+    expect(ownKeyForRoom()).toEqual({ [ownKeyName]: 'sk-or-room' });
+  } finally { await room.remove(); }
+  await configCommand(['model-key', '--off']);
+  expect(ownKeyForRoom()).toEqual({});
+});

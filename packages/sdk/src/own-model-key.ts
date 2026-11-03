@@ -53,6 +53,19 @@ export function ownKeyModels(env: string): HostedModels {
 }
 
 /** Put the own key's value into this process's environment (a shell value is used first). required: fail without one. */
+/**
+ * The own key for a clean room (a comparison arm, a fix): its name and value when this computer uses its own key and
+ * has a value for it, else nothing. A clean room keeps only PATH, the language and the user of the caller's
+ * environment, and an own-key request reads the key from the environment when it is sent, so without this every hosted
+ * model and classify step in the room is sent without a key (401 Missing Authentication header).
+ */
+export function ownKeyForRoom(): Record<string, string> {
+  const env = ownKeyEnv();
+  if (!env) return {};
+  const value = process.env[env] || resolveSecrets([env])[env];
+  return value ? { [env]: value } : {};
+}
+
 export function loadOwnKey(env: string, required = true) {
   const value = resolveSecrets([env])[env];
   if (!value) {
