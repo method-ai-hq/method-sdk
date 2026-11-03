@@ -1,3 +1,11 @@
+# 0.26.1
+
+Use runtime 0.17.1.
+
+- **A rerun does not apply the same correction twice.** A fix records its change with its outcome before it saves the version. When a fix that stopped is taken again, a correction whose change is already recorded keeps that outcome and is not learned again; a change that was not fully written goes back to the version before it, and the fix runs again from there. A comparison event keeps its judgment in its folder, so a continued comparison waits for that judgment and does not give the correction to a new training run.
+- **Comparisons remove folders while files still appear in them.** When a process that has just ended (a Claude Code cache flush) adds files during the removal, the removal starts again, so an event no longer stops with ENOTEMPTY. A case whose snapshot copies are not on this computer replays.
+- **A code measure may print `{"score": null}`** for an input it does not measure: that run is left out of the measure's mean, spread and rule for that input, and every other measure still scores it.
+
 # 0.26.0
 
 Use runtime 0.17.0.
