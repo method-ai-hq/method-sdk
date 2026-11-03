@@ -1265,6 +1265,9 @@ function placeFolders(dir: string, folders: Record<string, string>) {
 }
 async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: string; file: string }, workDir: string, before?: Delivered): Promise<Delivered> {
   const file = join(learner.dir, learner.file);
+  // A correction whose judgment was made but whose record was not written (the comparison stopped while its fix ran)
+  // continues from that judgment, so the fix that already saved its change is not given the correction again.
+  if (!before?.judgment_id) before = judgedHere(workDir) ?? before;
   if (before?.judgment_id && before.run_id) {
     let earlier = await waitForFix(before.run_id, before.judgment_id, env, file);
     // A fix that stopped (an error, a usage limit) gave its correction back: the same judgment of the same run is fixed
@@ -1273,7 +1276,7 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
       await command(['__fix', file, '--judgment', before.judgment_id], env);
       earlier = await waitForFix(before.run_id, before.judgment_id, env, file);
     }
-    if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return { ...earlier, ...(before.text ? { text: before.text } : {}) };
+    if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return { ...earlier, ...(before.text ? { text: before.text } : {}), ...(before.output !== undefined ? { output: before.output } : {}) };
     // A correction given again is a new judgment of a new run: the old judgment's case does not stay as a second one.
     removeTree(join(learner.dir, 'cases', correctionCaseId(before.judgment_id)));
   }
@@ -1316,7 +1319,15 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   try { judgment = JSON.parse(judged.stdout); } catch { return { received: false, outcome: 'stopped', run_id: runId, reason: 'Method could not take the correction', detail: `method judge failed: ${judged.stderr.trim() || judged.stdout.trim()}` }; }
   const id = judgment?.judgment?.id;
   if (!id || !judgment.fix) return { received: false, outcome: 'stopped', run_id: runId, text, reason: 'Method started no fix for this correction', ...(judgment?.stopped?.failure?.headline ? { detail: judgment.stopped.failure.headline } : {}) };
+  writePrivateJson(join(workDir, 'judged.json'), { run_id: runId, judgment_id: id, text, output: kept });
   return { ...await waitForFix(runId, id, env, file), text, output: kept };
+}
+/** The judgment that an event's delivery made in its folder, with the words and output it judged, or undefined. */
+function judgedHere(workDir: string): Delivered | undefined {
+  try {
+    const judged = JSON.parse(readFileSync(join(workDir, 'judged.json'), 'utf8'));
+    return typeof judged?.judgment_id === 'string' && typeof judged.run_id === 'string' ? { received: false, outcome: 'stopped', ...judged } : undefined;
+  } catch { return undefined; }
 }
 /** The most of a handed-in output that a treatment record keeps, for the trial's worked example. */
 const keptOutput = (output: string | null) => output === null ? null : output.slice(0, 20_000);

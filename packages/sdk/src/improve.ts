@@ -8,12 +8,12 @@ import { readDocument } from './authoring.js';
 import type { MethodClient } from './method-client.js';
 import { removeTree, writePrivateJson } from './files.js';
 import { currentVersion, methodContent, methodIdPattern } from './versions.js';
-import { saveLocalProposal, writeMethodFile } from './proposals.js';
+import { localProposals, saveLocalProposal, writeMethodFile } from './proposals.js';
 import { changedSteps } from './merge.js';
-import { localJudgments, runFolderIndex, type LocalJudgment } from './local-judgments.js';
+import { localJudgments, localMethodFolder, runFolderIndex, type LocalJudgment } from './local-judgments.js';
 import type { CorrectionOutcome } from './fix-lines.js';
 import { fixFolder, markWorking, saveError, saveOutcome, storedOutcome } from './fix-outcomes.js';
-import { recordChange, saveVersion, snapshot } from './undo.js';
+import { recordChange, restoreSnapshot, saveVersion, snapshot } from './undo.js';
 import { learnCorrection, writtenFile, type CaseRunner, type LearnerModel, type Learned } from './learner.js';
 
 // The fix loop on this computer. method judge starts it in its own process for a wrong judgment, and method run starts
@@ -105,8 +105,17 @@ export async function fixCorrections(client: MethodClient, file: string, options
   const outcomes: CorrectionOutcome[] = [];
   let applied = 0, log = '';
   try {
+    restoreUnfinished(file);
+    // A fix of a correction that ended here and saved its change: its outcome stands, and it does not run again.
+    for (const j of claimed) {
+      const ended = endedFix(file, j.id);
+      if (!ended) continue;
+      const { path: _path, source: _source, file: _file, ...record } = ended;
+      if (!record.applied_version_id) await saveFixVersion(client, file, record);
+      outcomes.push(record.outcomes[0]);
+    }
     // A correction of a step whose text changed since its run is not fixed: the change may already answer it.
-    outcomes.push(...await changedSinceRun(client, methodId, claimed, methodContent(document)));
+    outcomes.push(...await changedSinceRun(client, methodId, claimed.filter(j => !outcomes.some(c => c.id === j.id)), methodContent(readDocument(file))));
     const fresh = claimed.filter(j => !outcomes.some(c => c.id === j.id));
     if (fresh.length) process.stderr.write(`Testing fixes for ${fresh.length} correction${fresh.length === 1 ? '' : 's'} of ${file}.\n`);
     const runCases = options.runCases ?? ((await import('./quality.js')).runCases as unknown as CaseRunner);
@@ -177,18 +186,44 @@ async function applyLearned(client: MethodClient, file: string, methodId: string
   const baseWorkflow = methodContent(readDocument(file));
   const content = methodContent(parseDocumentValue(readFileSync(join(learned.room!, name), 'utf8')) as any);
   loadWorkflow(content);
+  const baseVersion = await currentVersion(file).catch(() => undefined);
+  // Until the change and its record are written, the folder can go back to this snapshot (restoreUnfinished).
+  localMethodFolder(file);
+  writePrivateJson(unfinishedPath(file), { judgment: j.id, before });
   for (const path of learned.changed) if (path !== name) copy(path);
   if (!isDeepStrictEqual(content, baseWorkflow)) writeMethodFile(file, methodId, content);
   writePrivateJson(writtenFile(folder), learned.written);
   const summary = learned.outcome.summary ?? 'Method changed the agent from a correction.';
   recordChange(file, 'fix', summary, j.note?.trim() ? `the fix for "${j.note.trim().slice(0, 300)}"` : 'the last fix', before);
-  const baseVersion = await currentVersion(file).catch(() => undefined);
-  const version = await saveVersion(client, file, `Method fixed it from a correction: ${summary}`.slice(0, 500));
-  saveLocalProposal(file, { id: `lp_${randomBytes(8).toString('hex')}`, method_id: methodId, base_version_id: baseVersion?.version_id ?? null, status: 'applied', cause: summary,
+  // The fix has ended when its change is recorded with its outcome: a later fix of this correction takes this record.
+  const record = { id: `lp_${randomBytes(8).toString('hex')}`, method_id: methodId, base_version_id: baseVersion?.version_id ?? null, status: 'applied', cause: summary,
     evidence: { kind: 'change', steps: changedSteps(baseWorkflow, content), judgment: j.id, note: j.note, summary, diff: learned.diff, files: learned.changed, tries: learned.tries },
-    created_at: new Date().toISOString(), applied_at: new Date().toISOString(), base_workflow: baseWorkflow, proposed_workflow: content, judgments: [j.id], outcomes: [learned.outcome],
-    ...(version ? { applied_version_id: version.version_id } : {}) });
+    created_at: new Date().toISOString(), applied_at: new Date().toISOString(), base_workflow: baseWorkflow, proposed_workflow: content, judgments: [j.id], outcomes: [learned.outcome] };
+  saveLocalProposal(file, record);
+  rmSync(unfinishedPath(file), { force: true });
+  await saveFixVersion(client, file, record);
   return true;
+}
+/** Save the version of a recorded change and keep its ID in the record. Nothing when the version cannot be saved now. */
+async function saveFixVersion(client: MethodClient, file: string, record: any) {
+  const version = await saveVersion(client, file, `Method fixed it from a correction: ${record.cause}`.slice(0, 500));
+  if (version) saveLocalProposal(file, { ...record, applied_version_id: version.version_id });
+}
+
+// A fix stops in one of two places. Before its change is recorded (unfinished.json), the folder goes back to the snapshot
+// and the correction is fixed again. After it, the change stays and its recorded outcome is the correction's outcome:
+// the same correction is never applied twice.
+const unfinishedPath = (file: string) => join(dirname(resolve(file)), '.method', 'fix-unfinished.json');
+/** Put the folder back as it was before a change that a stopped fix did not finish writing. */
+function restoreUnfinished(file: string) {
+  let unfinished: any;
+  try { unfinished = JSON.parse(readFileSync(unfinishedPath(file), 'utf8')); } catch { return; }
+  if (unfinished?.before) restoreSnapshot(file, unfinished.before);
+  rmSync(unfinishedPath(file), { force: true });
+}
+/** The recorded change of a fix of this correction that ended on this computer, or undefined. */
+function endedFix(file: string, judgmentId: string) {
+  return localProposals(file).find((p: any) => p.status === 'applied' && Array.isArray(p.judgments) && p.judgments.includes(judgmentId) && p.outcomes?.[0]?.id === judgmentId) as any;
 }
 
 // One fix at a time per Method on this computer. A correction that arrives while a fix runs joins it: the running fix

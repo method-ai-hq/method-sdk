@@ -375,6 +375,41 @@ it('corrections that arrive during a fix join it: ten corrections of one Method 
   expect(existsSync(join(s.root, 'cache', 'fixes', METHOD_ID, 'lock'))).toBe(false);
 }, 120_000);
 
+it('a fix that stopped after it saved its change is not run again: the rerun records its outcome, and a fix stopped mid-change starts from the version before it', async () => {
+  const s = setup(); noStart(); const learner = fakeLearner(s.root, 'change');
+  const { folder, file } = await project(s.root);
+  const before = readFileSync(join(folder, 'write.mjs'), 'utf8');
+  const client = fakeClient();
+  await methodMain(['judge', 'run_1', 'wrong', '--note', 'Escalate the non-compete.'], () => client);
+  await backgroundFix(client, file, [id]);
+  expect(learner.briefs).toHaveLength(1);
+  const versions = client.calls.filter((c: any) => c.verb === 'PUT').length;
+  // The process stopped after the change was saved and before its outcome reached the account: the correction is still
+  // taken here with no outcome, and its record says the fix stopped.
+  client.outcomes.length = 0;
+  writeFileSync(join(s.root, 'cache', 'fixes', METHOD_ID, 'taken.json'), JSON.stringify({ [id]: null }));
+  (await import('../../packages/sdk/src/fix-outcomes.js')).markWorking(METHOD_ID, file, [id], 2 ** 22 + 12345);
+  await backgroundFix(client, file, [id]);
+  expect(learner.briefs).toHaveLength(1);
+  expect(readFileSync(join(folder, 'write.mjs'), 'utf8')).toBe(escalating);
+  expect(client.calls.filter((c: any) => c.verb === 'PUT')).toHaveLength(versions);
+  expect(client.outcomes).toEqual([{ id, outcome: 'fixed', detail: 'replies now escalate restrictions that the playbook does not cover' }]);
+  expect(storedOutcome(METHOD_ID, id)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed' } });
+  // A second correction whose fix stopped while it wrote its change: the folder goes back to the version before it,
+  // and the fix runs again from there.
+  const second = 'jdg_' + 'b'.repeat(32);
+  client.judgments.push({ id: second, run_id: 'run_1', method_id: METHOD_ID, step_id: null, verdict: 'wrong', note: 'Escalate exclusivity.', corrected: null, source: 'agent', created_at: '2026-10-13T11:00:00Z', pending: true });
+  const fixed = readFileSync(file, 'utf8');
+  writeFileSync(join(folder, '.method', 'fix-unfinished.json'), JSON.stringify({ judgment: second, before: { text: fixed, files: { 'write.mjs': Buffer.from(escalating).toString('base64') } } }));
+  writeFileSync(join(folder, 'write.mjs'), 'half written');
+  await backgroundFix(client, file, [second]);
+  expect(learner.briefs).toHaveLength(2);
+  expect(readFileSync(join(folder, 'write.mjs'), 'utf8')).toBe(escalating);
+  expect(existsSync(join(folder, '.method', 'fix-unfinished.json'))).toBe(false);
+  expect(storedOutcome(METHOD_ID, second)).toMatchObject({ status: 'done', outcome: { outcome: 'no_change_needed' } });
+  expect(before).not.toBe(escalating);
+}, 60_000);
+
 it('a fix whose process stopped does not hold the Method: its lock is taken over', async () => {
   const s = setup(); noStart(); fakeLearner(s.root, 'none');
   const { file } = await project(s.root);

@@ -67,13 +67,17 @@ export function undoLast(file: string, id?: string) {
   if (!last || (id && last.id !== id)) throw Error(`Method has not changed ${basename(file)} on this computer${id ? ' since that change' : ''}, so there is nothing to undo.`);
   if (fileHash(readFileSync(file)) !== last.after.sha256 || Object.entries(last.after.files).some(([path, sha]) => hashOf(inFolder(file, path)) !== sha))
     throw Error(`${basename(file)} changed after Method's last change, so undo would lose that work. Undo the change by hand, or restore an earlier version on the Method page.`);
-  writeFileSync(file, last.before.text);
-  for (const [path, content] of Object.entries(last.before.files)) {
+  restoreSnapshot(file, last.before);
+  writePrivateJson(last.path, { ...stripPath(last), undone_at: new Date().toISOString() });
+  return last;
+}
+/** Write the Method file and the named files back as a snapshot took them. */
+export function restoreSnapshot(file: string, before: UndoRecord['before']) {
+  writeFileSync(file, before.text);
+  for (const [path, content] of Object.entries(before.files)) {
     const full = inFolder(file, path);
     if (content === null) rmSync(full, { force: true }); else { mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, Buffer.from(content, 'base64')); }
   }
-  writePrivateJson(last.path, { ...stripPath(last), undone_at: new Date().toISOString() });
-  return last;
 }
 
 /**
