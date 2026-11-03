@@ -250,3 +250,19 @@ it('says what a chat did with the project in plain words', () => {
   expect(didSummary(did)).toBe('Saved notes to CLAUDE.md. Changed a.md. Built a Method (nda.method). Ran method judge (wrong). Ran method run.');
   expect(methodCommands([{ kind: 'command', text: 'echo methodical' }]).commands).toEqual([]);
 });
+
+it('removes a chat\'s folder while a process that just ended still writes files into it', async () => {
+  const { spawn } = await import('node:child_process');
+  const { removeTree } = await import('../../packages/sdk/src/files.js');
+  const root = mkdtempSync(join(tmpdir(), 'busy-tree-')); roots.push(root);
+  const cache = join(root, 'home', 'Library', 'Caches', 'claude');
+  mkdirSync(cache, { recursive: true });
+  for (let i = 0; i < 200; i++) writeFileSync(join(cache, `old-${i}`), 'x');
+  // As a Claude Code cache flush does: for a short time, new files keep appearing in the folder.
+  const code = `const{writeFileSync}=require("node:fs");const end=Date.now()+1000;let i=0;console.log("go");while(Date.now()<end){try{writeFileSync(${JSON.stringify(cache)}+"/new-"+(i++),"x")}catch{}}`;
+  const writer = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise(done => writer.stdout!.once('data', done));
+  const ended = new Promise(done => writer.on('close', done));
+  try { removeTree(root); } finally { await ended; }
+  expect(existsSync(root)).toBe(false);
+}, 20_000);

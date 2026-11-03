@@ -1235,3 +1235,24 @@ it('shows the literal things first: each agent\'s prompt and files as the run bu
   const plainDoc = { ...readComparison(bare.file), samples: undefined };
   expect((await comparisonExhibits(plainDoc, bare.root, await armSources(plainDoc, bare.root))).errors).toEqual([expect.stringContaining('The measure size has no exhibit')]);
 });
+
+it('a code measure that prints {"score": null} for an input leaves that run out of the measure there; every other measure still scores it', async () => {
+  // size measures the new inputs (one, two); kept measures only the input taught before (three). Each prints null for the other kind.
+  const { root, file } = fixture({ inputs: ['inputs/one.json', 'inputs/two.json', 'inputs/three.json'], other_measures: [{ name: 'kept', code: 'kept.mjs' }] });
+  const only = (inputs: string[]) => `import{readFileSync}from'node:fs';const{input,output}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({score:${JSON.stringify(inputs)}.includes(input)?Number(output)/10:null}))`;
+  writeFileSync(join(root, 'size.mjs'), only(['inputs/one.json', 'inputs/two.json']));
+  writeFileSync(join(root, 'kept.mjs'), only(['inputs/three.json']));
+  const result = await runComparison(root, file, 'first');
+  // size: a 0.15, b 0.30 on one and two only; kept: a 0.3, b 0.6 on three only.
+  expect(result.result).toMatch(/^Can't tell yet: Agent b is ahead of Agent a by 0\.15 on size/);
+  expect(result.result).toContain('Agent a: 0.15 (n=1)');
+  expect(result.result).toContain('Agent b: 0.60 (n=1)');
+  const { plan } = await compileComparison(file);
+  const grades = ['a', 'b'].flatMap(arm => ['inputs/one.json', 'inputs/two.json', 'inputs/three.json'].flatMap(input => [0, 1].map(repeat =>
+    ({ arm, input, repeat, checkpoint: null, scores: { size: input === 'inputs/three.json' ? null : arm === 'a' ? 0.1 : 0.5, kept: input === 'inputs/three.json' ? (arm === 'a' ? 0.2 : 0.4) : null } }))));
+  // Input three has no size run at all: n counts only the inputs that size applies to.
+  const noThree = grades.filter(g => !(g.input === 'inputs/three.json' && g.repeat === 1));
+  const decided = decide({ ...plan, learners: 2, rule: { ...plan.rule, min_runs: 2 } }, noThree, null);
+  expect(decided.answer).toBe('Agent b is better');
+  expect(decided.text).toContain('Agent b: 0.50 (n=2)');
+}, 600_000);

@@ -6,7 +6,7 @@ import { packagePath } from '../../contracts/src/method-package.js';
 import { loadWorkflow, parseDocumentValue } from '../../workflow-language/src/validate.js';
 import { readDocument } from './authoring.js';
 import type { MethodClient } from './method-client.js';
-import { writePrivateJson } from './files.js';
+import { removeTree, writePrivateJson } from './files.js';
 import { currentVersion, methodContent, methodIdPattern } from './versions.js';
 import { saveLocalProposal, writeMethodFile } from './proposals.js';
 import { changedSteps } from './merge.js';
@@ -157,7 +157,7 @@ function saveTaken(methodId: string, taken: Record<string, CorrectionOutcome | n
 
 /** Remove the learner's copies of the Method; its tries (sessions, transcripts and gate failures) stay for the log. */
 function cleanRoom(learned: Learned) {
-  for (const dir of [learned.room, learned.base]) if (dir) rmSync(dir, { recursive: true, force: true });
+  for (const dir of [learned.room, learned.base]) if (dir) removeTree(dir);
 }
 
 /**

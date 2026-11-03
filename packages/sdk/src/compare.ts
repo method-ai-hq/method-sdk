@@ -12,7 +12,7 @@
  * instructions; runs count separate learners; corrections arrive one at a time; one Claude judge that reads every
  * source in full and scores "partly" as half; a noise check before approval; usage per correction.
  */
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -21,7 +21,7 @@ import { loadWorkflow, parseDocumentValue } from '../../workflow-language/src/va
 import { authoringPath, readDocument } from './authoring.js';
 import { methodContent, methodIdPattern, newMethodId, writeMethodId } from './versions.js';
 import { packageFileNames } from './method-files.js';
-import { writePrivateJson } from './files.js';
+import { removeTree, writePrivateJson } from './files.js';
 import { configRoot } from './computer-settings.js';
 import { ownKeyForRoom } from './own-model-key.js';
 import { linkCells, readAccount, readAnswers, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PageAnswers, type PlannedCell } from './compare-account.js';
@@ -45,7 +45,7 @@ export const noteParts = ['question', 'arms', 'same_for_both', 'inputs', 'treatm
 const measureSchema = z.strictObject({
   name: text.describe('A short name for the number, for example "corrected items right".'),
   description: text.optional().describe('What the number is, in plain words, as the page shows it.'),
-  code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, output, expected, run_dir, artifacts, probe} as JSON on stdin and prints {"score": NUMBER}. probe: a project arm\'s answer to the treatment\'s probe at the run\'s checkpoint, or null.'),
+  code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, output, expected, run_dir, artifacts, probe} as JSON on stdin and prints {"score": NUMBER}, or {"score": null} for an input that it does not measure. probe: a project arm\'s answer to the treatment\'s probe at the run\'s checkpoint, or null.'),
   rubric: z.array(text).min(1).optional().describe('Sentences that must be true of the output. The judge marks each one met, partly or not met; the score is the mean (partly counts as half).'),
   checklist: z.literal('expected').optional().describe('expected: each input\'s checklist is its expected answer, a list of items. Each item is a criterion for that input only. The judge marks each one met, partly or not met.'),
   covered: z.boolean().optional().describe('With checklist: expected, true scores only the items that a correction given so far covers (an item names its events in covered_by).'),
@@ -151,16 +151,6 @@ const requiredParts: Record<string, string> = {
 const sha = (value: unknown) => createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export const isFileInput = (id: string) => /\.json$/i.test(id);
-/** Remove a folder that may hold read-only folders (an agent may make the files it got read-only): make it writable first. */
-export function removeFolder(path: string) {
-  const writable = (dir: string) => {
-    let entries: import('node:fs').Dirent[];
-    try { chmodSync(dir, 0o700); entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) if (entry.isDirectory() && !entry.isSymbolicLink()) writable(join(dir, entry.name));
-  };
-  writable(path);
-  rmSync(path, { recursive: true, force: true });
-}
 /** The time that Method's learner or a plain builder has for one correction: the learner's own limit, 2 hours. */
 export { FIX_LIMIT_MS };
 /** How many learners of each arm the trial runs at the start, for the noise check. */
@@ -721,7 +711,7 @@ async function copyArm(source: string, target: string) {
   const idFile = join(target, 'id.json');
   const id = existsSync(idFile) ? JSON.parse(readFileSync(idFile, 'utf8')).id : newMethodId();
   const method = join(target, 'method');
-  rmSync(method, { recursive: true, force: true });
+  removeTree(method);
   mkdirSync(method, { recursive: true, mode: 0o700 });
   for (const name of packageFileNames(root, workflow)) { mkdirSync(dirname(join(method, name)), { recursive: true }); cpSync(join(root, name), join(method, name)); }
   if (!packageFileNames(root, workflow).includes(file)) cpSync(source, join(method, file));
@@ -732,7 +722,7 @@ async function copyArm(source: string, target: string) {
   const { localSetup } = await import('./local-setup.js');
   const environment = (await localSetup(source, {})).config.environment ?? {};
   const env = join(target, 'environment');
-  removeFolder(env);
+  removeTree(env);
   const folders: Record<string, string> = {};
   for (const [envName, definition] of Object.entries(workflow.environment ?? {}) as Array<[string, any]>) {
     const bound = environment[envName];
@@ -987,7 +977,7 @@ export const feedbackWriting = {
         if (feedback !== undefined) return feedback;
       }
       throw Error(`The feedback writer ${writer.name} did not answer {"correction": TEXT or null, "checked": "all" or what it checked}: ${last.slice(0, 300)}`);
-    } finally { rmSync(work, { recursive: true, force: true }); }
+    } finally { removeTree(work); }
   },
 };
 
@@ -1269,7 +1259,7 @@ function placeFolders(dir: string, folders: Record<string, string>) {
     cpSync(from, target, { recursive: true, verbatimSymlinks: true });
   }
   return () => {
-    for (const envName of Object.keys(folders)) removeFolder(join(dir, envName));
+    for (const envName of Object.keys(folders)) removeTree(join(dir, envName));
     for (const [target, saved] of aside) renameSync(saved, target);
   };
 }
@@ -1285,10 +1275,10 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
     }
     if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return { ...earlier, ...(before.text ? { text: before.text } : {}) };
     // A correction given again is a new judgment of a new run: the old judgment's case does not stay as a second one.
-    rmSync(join(learner.dir, 'cases', correctionCaseId(before.judgment_id)), { recursive: true, force: true });
+    removeTree(join(learner.dir, 'cases', correctionCaseId(before.judgment_id)));
   }
   const runDir = join(workDir, 'run');
-  removeFolder(workDir);
+  removeTree(workDir);
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
   writePrivateJson(join(workDir, 'inputs.json'), event.input.value);
   // A training run reuses nothing: its output is this learner's work now, as a plain arm's training run is.
@@ -1442,7 +1432,7 @@ async function runSession(methodFile: string, runDir: string, folders: Record<st
   // A ready folder is the room as it is (the session works on its own copy); folders are copied into a room by name.
   const room = typeof folders === 'string' ? folders : join(dirname(runDir), 'room');
   if (typeof folders !== 'string') {
-    removeFolder(room);
+    removeTree(room);
     mkdirSync(room, { recursive: true, mode: 0o700 });
     for (const [envName, dir] of Object.entries(folders)) cpSync(dir, join(room, envName), { recursive: true });
   }
@@ -1451,7 +1441,7 @@ async function runSession(methodFile: string, runDir: string, folders: Record<st
   try {
     await hooks.before?.(inputs);
     return await runMethod(methodFile, { allow_local_processes: true }, { runDir, inputs, fresh: true, ...(hooks.onStart ? { onStart: hooks.onStart, onEvent: hooks.onEvent } : {}) });
-  } finally { if (typeof folders !== 'string') removeFolder(room); }
+  } finally { if (typeof folders !== 'string') removeTree(room); }
 }
 /** The text of a file that a session wrote in its room (a copy under its attempt folder in artifacts/session), or null. */
 function sessionFile(runDir: string, session: any, path: string): string | null {
@@ -1462,7 +1452,7 @@ function sessionFile(runDir: string, session: any, path: string): string | null 
 
 /** The builder of a plain arm, for one correction: a training run with the current instructions (on the input's folders), then the edit. */
 async function buildIn(event: any, arm: any, instructions: string, workDir: string, plan: Plan, log: Array<{ index: number; input: string; text: string }> = []): Promise<Built> {
-  removeFolder(workDir);
+  removeTree(workDir);
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
   const folders = cellFolders(arm, event.input);
   const train = join(workDir, 'training', 'run');
@@ -1524,7 +1514,7 @@ const sumTokens = (list: Array<number | null>) => list.every(t => t !== null) ? 
 async function projectEvent(event: any, arm: any, learner: { project: string; cache: string; memory: string }, workDir: string, plan: Plan, first: boolean): Promise<Built> {
   const project: Project = arm.project, start = join(workDir, 'start');
   if (existsSync(start)) for (const part of ['project', 'cache', 'memory'] as const) copyTree(join(start, part), learner[part]);
-  removeFolder(join(workDir, 'artifacts'));
+  removeTree(join(workDir, 'artifacts'));
   placeInput(learner.project, event.input, event.input.deliverable);
   for (const part of ['project', 'cache', 'memory'] as const) copyTree(learner[part], join(start, part));
   const before = projectFiles(learner.project), memoryBefore = projectFiles(learner.memory);
@@ -1547,7 +1537,7 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   } finally { await chat.close(); }
   const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable, { before: memoryBefore, after: projectFiles(learner.memory) });
   const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory });
-  removeFolder(start);
+  removeTree(start);
   // A Method fix's tokens are not reported: a chat that started one reports none, so usage falls back to minutes.
   const tokens = did.judged.includes('wrong') ? null : sumTokens(turns.map(t => t.tokens));
   if (event.kind !== 'correction') return { received: true, outcome: 'given', did, tokens };
@@ -1572,7 +1562,7 @@ async function freezeProject(arm: any, learner: { project: string; cache: string
       const chat = await openChat(join(work, 'project'), chatSettings(arm.project, join(work, 'cache'), plan.folder), join(work, 'artifacts'), join(work, 'memory'));
       let reply: string;
       try { reply = (await chat.send(arm.project.probe)).reply; } finally { await chat.close(); }
-      for (const part of ['project', 'cache', 'memory']) removeFolder(join(work, part));
+      for (const part of ['project', 'cache', 'memory']) removeTree(join(work, part));
       writeFileSync(answer, reply, { mode: 0o600 });
     }
     probe = readFileSync(answer, 'utf8');
@@ -1581,7 +1571,7 @@ async function freezeProject(arm: any, learner: { project: string; cache: string
 }
 
 /** Copy a folder without its run records. */
-const copyFolder = (from: string, to: string) => { removeFolder(to); cpSync(from, to, { recursive: true, filter: path => !['.method-runs', 'node_modules'].includes(basename(path)) }); };
+const copyFolder = (from: string, to: string) => { removeTree(to); cpSync(from, to, { recursive: true, filter: path => !['.method-runs', 'node_modules'].includes(basename(path)) }); };
 const readRecords = (file: string) => {
   const records = new Map<string, any>();
   try { for (const line of readFileSync(file, 'utf8').split('\n').filter(Boolean)) { const r = JSON.parse(line); records.set(r.key, r); } } catch { /* nothing yet */ }
@@ -1973,7 +1963,7 @@ const chatModels = (result: any): string[] => { try { const model = JSON.parse(r
 async function runCell(cell: Cell) {
   process.env.METHOD_CACHE_DIR = cell.cache_dir;
   const runDir = join(cell.folder, 'runs', cell.arm, cell.key.slice(0, 16));
-  removeFolder(runDir);
+  removeTree(runDir);
   mkdirSync(runDir, { recursive: true, mode: 0o700 });
   const { runMethod } = await import('@withmethod/runtime/runner.js');
   const started = Date.now();
@@ -2335,7 +2325,7 @@ export const judging = {
    */
   async judge(request: { method: string; document: string; documentName: string; items: Array<{ id: string; text: string }>; expected: string | null; folders: Record<string, string>; read: string[]; work: string }): Promise<Verdict[]> {
     const room = join(request.work, 'room');
-    removeFolder(request.work);
+    removeTree(request.work);
     mkdirSync(join(room, 'document'), { recursive: true, mode: 0o700 });
     writeFileSync(join(room, 'document', request.documentName), request.document);
     writeFileSync(join(room, 'checklist.json'), JSON.stringify(request.items, null, 2));
@@ -2390,7 +2380,7 @@ async function judged(run: any, context: GradeContext, items: Array<{ id: string
   mkdirSync(join(context.folder, 'judge-work'), { recursive: true, mode: 0o700 });
   const work = mkdtempSync(join(context.folder, 'judge-work', `${key.slice(0, 16)}-`));
   const verdicts = (await judging.judge({ method: context.judge_method, document, documentName: run.deliverable ? basename(run.deliverable) : 'output.md', items: items.map(i => ({ id: i.id, text: i.text })), expected: expectedText,
-    folders, read, work }).finally(() => rmSync(work, { recursive: true, force: true }))).map(v => v.verdict !== 'not_met' && words(v.quote) && !quotedIn(v.quote, document) ? { ...v, verdict: 'not_met' as const, reason: `The quote is not in the document: "${v.quote.slice(0, 120)}"` } : v);
+    folders, read, work }).finally(() => removeTree(work))).map(v => v.verdict !== 'not_met' && words(v.quote) && !quotedIn(v.quote, document) ? { ...v, verdict: 'not_met' as const, reason: `The quote is not in the document: "${v.quote.slice(0, 120)}"` } : v);
   mkdirSync(dirname(cache), { recursive: true, mode: 0o700 });
   writeFileSync(cache, JSON.stringify(verdicts), { mode: 0o600 });
   return { verdicts, read };
@@ -2472,9 +2462,10 @@ async function codeScore(m: any, run: any, expected: unknown) {
   const result = await runScript(m.code.path, measureStdin(run, expected));
   let score: unknown;
   try { const value = JSON.parse(result.stdout); score = typeof value === 'number' ? value : value?.score; } catch { /* below */ }
-  if (result.code !== 0 || typeof score !== 'number' || !Number.isFinite(score))
-    throw Error(`The measure ${m.name} (${basename(m.code.path)}) gave no score for ${run.arm} on ${run.input}${result.stderr.trim() ? `: ${result.stderr.trim().split('\n').at(-1)}` : `; it must print {"score": NUMBER}`}.`);
-  return { score, printed: result.stdout };
+  // {"score": null}: the measure does not apply to this input; the run is left out of this measure there.
+  if (result.code !== 0 || (score !== null && (typeof score !== 'number' || !Number.isFinite(score))))
+    throw Error(`The measure ${m.name} (${basename(m.code.path)}) gave no score for ${run.arm} on ${run.input}${result.stderr.trim() ? `: ${result.stderr.trim().split('\n').at(-1)}` : `; it must print {"score": NUMBER}, or {"score": null} for an input it does not measure`}.`);
+  return { score: score as number | null, printed: result.stdout };
 }
 
 /**
@@ -2512,11 +2503,14 @@ export function decide(plan: Plan, grades: any[], treated: ArmTreatment[] | null
   const main = plan.measures.find((m: any) => m.main);
   const points: Array<number | null> = plan.checkpoints ?? [null];
   const at: number | null = plan.rule.at ?? null;
-  // n: the fewest learners behind the point on any input; the mean leaves out runs that have no number on the measure
-  // (an input with no covered item yet).
+  // n: the fewest learners behind the point on any input that the measure applies to (a code measure prints
+  // {"score": null} for an input it does not measure); the mean leaves out runs that have no number on the measure
+  // (such an input, or an input with no covered item yet).
   const point = (arm: string, checkpoint: number | null, measure: string) => {
     const own = grades.filter(g => g.arm === arm && g.checkpoint === checkpoint && g.repeat < plan.learners);
-    const n = Math.min(...plan.inputs.map((input: any) => own.filter(g => g.input === input.id).length));
+    const code = !!plan.measures.find((m: any) => m.name === measure)?.code;
+    const outside = (input: string) => code && grades.some(g => g.input === input) && grades.filter(g => g.input === input).every(g => g.scores?.[measure] === null);
+    const n = Math.min(...plan.inputs.filter((input: any) => !outside(input.id)).map((input: any) => own.filter(g => g.input === input.id).length));
     const values = own.map(g => g.scores[measure]).filter((v): v is number => typeof v === 'number');
     return { n, mean: values.length ? mean(values) : null };
   };

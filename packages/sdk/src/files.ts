@@ -1,4 +1,4 @@
-import { closeSync, openSync, renameSync, writeFileSync, fsyncSync, mkdirSync, lstatSync, realpathSync, readFileSync } from "node:fs";
+import { chmodSync, closeSync, openSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, fsyncSync, mkdirSync, lstatSync, realpathSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { FileArtifactSchema, type Json } from "../../workflow-language/src/schema.js";
@@ -12,6 +12,27 @@ export function writePrivateJson(path: string, value: unknown): void {
   renameSync(temporary, path);
   const parent = openSync(dirname(path), "r");
   try { fsyncSync(parent); } finally { closeSync(parent); }
+}
+
+/**
+ * Remove a file or folder; every folder in it is made writable first, as an agent may make files read-only. A process
+ * that has just ended (an agent's cache flush) can still add files while the folder is removed: then the removal
+ * starts again and takes the new files too. (rmSync's own maxRetries only retries the last rmdir, so new files stay.)
+ */
+export function removeTree(path: string): void {
+  const writable = (dir: string) => {
+    let entries: import("node:fs").Dirent[];
+    try { chmodSync(dir, 0o700); entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) if (e.isDirectory() && !e.isSymbolicLink()) writable(`${dir}/${e.name}`);
+  };
+  for (let attempt = 1; ; attempt++) {
+    try { if (statSync(path).isDirectory()) writable(path); } catch { /* not there */ }
+    try { rmSync(path, { recursive: true, force: true }); return; }
+    catch (error: any) {
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(error.code) || attempt === 10) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 * attempt);
+    }
+  }
 }
 
 export function checkedFile(value: unknown, roots: string[]): { path: string; sha256: string; bytes: Buffer } {

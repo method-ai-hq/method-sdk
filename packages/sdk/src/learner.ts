@@ -5,7 +5,7 @@ import { methodIssues } from '@withmethod/runtime/document.js';
 import { loadWorkflow, parseDocumentValue } from '../../workflow-language/src/validate.js';
 import { authoringGuide } from './method-help.js';
 import { methodContent } from './versions.js';
-import { writePrivateJson } from './files.js';
+import { removeTree, writePrivateJson } from './files.js';
 import type { CorrectionOutcome, CouldNotTestReason, TestedOutput } from './fix-lines.js';
 import { correctionName } from './fix-lines.js';
 import { textDiff } from './text-diff.js';
@@ -413,7 +413,7 @@ export async function learnCorrection(file: string, correction: LearnerCorrectio
   const now = options.now ?? Date.now, deadline = now() + (options.limitMs ?? FIX_LIMIT_MS);
   const folder = dirname(resolve(file)), name = basename(file);
   const base = join(options.workDir, 'base'), room = join(options.workDir, 'room');
-  rmSync(options.workDir, { recursive: true, force: true });
+  removeTree(options.workDir);
   mkdirSync(options.workDir, { recursive: true, mode: 0o700 });
   const done = (outcome: Omit<CorrectionOutcome, 'id'>, tries: number): Learned => ({ outcome: { id: correction.id, ...outcome } as CorrectionOutcome, changed: [], diff: '', tries, log: options.workDir });
   try { copyMethod(folder, base); copyMethod(folder, room); }

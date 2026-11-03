@@ -13,7 +13,8 @@
  * (loaded with --plugin-dir, as Claude Code loads a plugin for one session) and the method CLI on PATH, signed in to the
  * comparison's Method account. A project without it has no plugin and no method command on PATH.
  */
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { removeTree } from './files.js';
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -326,16 +327,6 @@ export function placeInput(project: string, input: { room: string | null }, deli
     cpSync(join(input.room, entry.name), target, { recursive: true, verbatimSymlinks: true });
   }
   if (deliverable) removeTree(join(project, deliverable));
-}
-/** Remove a file or folder; every folder in it is made writable first, as an agent may make files read-only. */
-function removeTree(path: string) {
-  const walk = (dir: string) => {
-    let entries: import('node:fs').Dirent[];
-    try { chmodSync(dir, 0o700); entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) if (e.isDirectory() && !e.isSymbolicLink()) walk(join(dir, e.name));
-  };
-  try { if (statSync(path).isDirectory()) walk(path); } catch { /* not there */ }
-  rmSync(path, { recursive: true, force: true });
 }
 
 /** The handed-in file of a chat, or null. */
