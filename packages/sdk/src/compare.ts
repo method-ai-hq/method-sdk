@@ -13,7 +13,7 @@
  * source in full and scores "partly" as half; a noise check before approval; usage per correction.
  */
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { z } from 'zod/v4';
@@ -27,7 +27,7 @@ import { ownKeyForRoom } from './own-model-key.js';
 import { linkCells, readAccount, readAnswers, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PageAnswers, type PlannedCell } from './compare-account.js';
 import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
-import { FIX_LIMIT_MS } from './learner.js';
+import { FIX_LIMIT_MS, paragraphs, textPlaces, writtenFile } from './learner.js';
 import { textDiff } from './text-diff.js';
 import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
@@ -115,6 +115,7 @@ export const comparisonSchema = z.strictObject({
     checkpoints: z.array(z.number().int().min(0)).min(1).describe('The number of events after which the arms are measured.'),
     seed: z.number().int().optional().describe('Shuffle the events once with this seed: one order, the same for every arm. Without it the events come in the order given.'),
     probe: text.optional().describe('With project arms: a question asked in a new chat in a copy of each project at each checkpoint after the start, such as "Which rules do you follow for these reviews?". The answer is kept, and a code measure gets it as probe.'),
+    redesign: z.array(z.number().int().min(0)).min(1).optional().describe('The numbers of events after which each arm gets one redesign session, the same points for every arm (0: before the first event). A .method arm, and a project arm with the Method plugin, run method redesign on their Methods: one agent session rewrites each Method from the problem and keeps every earlier correction. A project arm without the plugin gets one chat with the notes message: "Read every correction so far and your notes, and rewrite your notes so that they work on the next task." A checkpoint at the same point measures after the session.'),
   }).optional().describe('A list of events that each arm gets in order, with checkpoints.'),
   about_inputs: z.strictObject({
     noun: text.optional().describe('What one input is, in one word, such as "task" or "ticket".'),
@@ -131,6 +132,7 @@ export const comparisonSchema = z.strictObject({
   samples: z.record(text, text).optional().describe('Outputs made by code, not by an agent, by input ID: a file in the form of the deliverable, such as the decision that keeps every draft. Before the trial, Method runs the feedback writer and each code measure on them, and the page shows exactly what an arm gets back and how a run is scored. Give one for a teaching input (with a code feedback writer) and one for a measured input (with a code measure).'),
   labels: z.record(text, text).optional().describe('Words that the page uses as labels, each with the exhibit that shows the literal thing: prompt (what each agent receives), files (the files in its folder), correction, hidden answer, output, a measure\'s name, or the path of a file that the files exhibit shows (such as matter/email/request.txt). Method links each measure\'s name, correction, hidden answer, the handed-in file and the input noun itself.'),
   questions: z.array(questionSchema).min(1).optional().describe('The questions that the comparison page asks, one at a time: 7 or fewer, each about a choice whose wrong answer would make the result meaningless. Each shows the real thing, asks one direct question and says what a "no" means. The page shows every other value; it does not ask about it.'),
+  user_files: z.array(text).optional().describe('Files of the arms\' starting folders that are the user\'s own words, word for word, such as a question list or a rule book that the user gave (paths in the starting folder). Every other text of a starting Method (its goal, its prompts and its other .md and .txt files) was written for the comparison, so a fix or a redesign may change it.'),
   decided_by_you: z.array(text).optional().describe('The parts or values that the user stated, such as question, rule.margin, arms.plain (which agent the arm is), arms.plain.instructions (its starting instructions) or notes.PART (the notes of a part). Mark a value only when the user stated it. The question counts as the user\'s only when it is in the user\'s own words; a question that the writer rephrased is the writer\'s. The page shows them as decided by you; every other value is the writer\'s choice for review.'),
 }).describe('A comparison: one question about two or more agents.');
 export type Comparison = z.infer<typeof comparisonSchema>;
@@ -337,6 +339,8 @@ export function readComparison(file: string): Comparison {
       if (writer.code && !['.mjs', '.js', '.py'].includes(extname(writer.code))) problems.push(`The code of the feedback writer ${writerName} must be a .mjs, .js or .py file.`);
       if (!events.some(event => event.feedback === writerName)) problems.push(`No event uses the feedback writer ${writerName}.`);
     }
+    for (const at of doc.treatment.redesign ?? []) if (at > events.length) problems.push(`The redesign point ${at} is after the last event (${events.length}).`);
+    if (doc.treatment.redesign && Object.values(doc.arms).some((arm: any) => typeof arm === 'object' && arm.instructions !== undefined)) problems.push('A redesign point needs .method or project arms: an arm with instructions has no redesign session yet.');
     events.forEach((event, i) => {
       const kinds = [event.correction !== undefined ? 'correction' : null, event.feedback !== undefined ? 'feedback' : null, event.model !== undefined ? 'model' : null].filter(Boolean);
       if (event.model !== undefined && (event.correction !== undefined || event.feedback !== undefined || event.input !== undefined)) problems.push(`Event ${i + 1}: a model event names only the model.`);
@@ -634,6 +638,11 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
     add('treatment', 'For each correction the page says what the agent did in the project: the files it wrote or changed, the Methods it built, and the method commands it ran.');
     add('main_measure', `A checkpoint is measured on copies of each project and its ${who ?? 'agent\'s'} memory: each checking input is a new chat in a fresh copy, so measuring never changes them.`);
   } else add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
+  if (doc.treatment?.redesign) {
+    const points = [...new Set(doc.treatment.redesign)].sort((x, y) => x - y).map(n => n === 0 ? 'before the first event' : `after event ${n}`);
+    add('treatment', `Each arm gets one redesign session at the same points: ${points.join(', ')}. An agent with Method runs method redesign on its Methods: one agent session rewrites each Method from the problem, with the guide's design rules, every correction so far and its saved checks, and the change is kept only when every earlier correction still holds. An agent without Method gets one chat that says: "${NOTES_MESSAGE}" A checkpoint at the same point measures after the session.`);
+  }
+  if (doc.user_files?.length) add('arms', `Only ${doc.user_files.join(', ')} ${doc.user_files.length === 1 ? 'is' : 'are'} the user's own words in the starting folders; every other text of a starting Method was written for the comparison, so a fix may change it.`);
   add('same_for_both', web ? 'The tools are the tested difference, so the agents may use the web.' : 'No agent can use the web.');
   if (doc.deliverable) add('same_for_both', 'Only the handed-in file is measured.');
   if (doc.deliverable && plain.length) add('same_for_both', 'A plain agent\'s last message is not its output.');
@@ -1130,6 +1139,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
     arms, inputs: doc.inputs.map(id => resolveInput(id)),
     events, feedback_hash: feedbackHash,
     checkpoints: doc.treatment ? [...doc.treatment.checkpoints].sort((a, b) => a - b) : null,
+    redesign: doc.treatment?.redesign ? [...new Set(doc.treatment.redesign)].sort((a, b) => a - b) : null, user_files: doc.user_files ?? [],
     measures: [measure(doc.measure, true), ...(doc.other_measures ?? []).map(m => measure(m, false))],
     expected, checklists,
     rule: doc.rule, rule_sentence: ruleSentence(doc), learners: doc.runs,
@@ -1226,7 +1236,9 @@ export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed',
 type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; reason?: string; detail?: string; change?: ChangeRecord; did?: Did;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
-type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot> };
+type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot>; redesigns?: RedesignRecord[] };
+/** One redesign session of a learner: after which event, whether it ended, and its line for the page. */
+type RedesignRecord = { at_event: number; received: boolean; line: string; did?: Did };
 /** Treatment of one arm: each learner's. */
 type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[] };
 
@@ -1610,7 +1622,7 @@ const readRecords = (file: string) => {
   return records;
 };
 /** The folder of one learner's treatment: its own copy of the arm, its own cache and its record. */
-const learnerFolder = (plan: Plan, arm: any, learner: number) => join(plan.folder, 'arms', arm.name, `treatment-${(plan.feedback_hash ? sha({ arm: arm.hash, feedback: plan.feedback_hash }) : arm.hash).slice(0, 12)}`, `learner-${learner + 1}`);
+const learnerFolder = (plan: Plan, arm: any, learner: number) => join(plan.folder, 'arms', arm.name, `treatment-${(plan.redesign ? sha({ arm: arm.hash, feedback: plan.feedback_hash ?? null, redesign: plan.redesign, user_files: plan.user_files }) : plan.feedback_hash ? sha({ arm: arm.hash, feedback: plan.feedback_hash }) : arm.hash).slice(0, 12)}`, `learner-${learner + 1}`);
 
 /**
  * Give each learner of each arm its events in order, up to its limit (limits[learner]), one at a time, and freeze a
@@ -1636,9 +1648,10 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
   const method = arm.plain || arm.project ? null : { dir: join(base, 'method'), file: arm.file, cache: join(base, 'cache') };
   // A project learner: its own project folder, from the arm's start, and its own Method cache.
   const project = arm.project ? { project: join(base, 'project'), cache: join(base, 'cache'), memory: join(base, 'memory') } : null;
-  if (project && !existsSync(project.project)) { copyTree(arm.project.start, project.project); for (const dir of [project.cache, project.memory]) mkdirSync(dir, { recursive: true, mode: 0o700 }); }
+  if (project && !existsSync(project.project)) { copyTree(arm.project.start, project.project); writerOwnsStart(project.project, plan.user_files ?? []); for (const dir of [project.cache, project.memory]) mkdirSync(dir, { recursive: true, mode: 0o700 }); }
   if (method && !existsSync(join(method.dir, method.file))) {
     copyFolder(arm.dir, method.dir);
+    writerOwnsStart(method.dir, plan.user_files ?? []);
     writeMethodId(join(method.dir, method.file), newMethodId());
     copyFolder(method.dir, join(base, 'after-0'));
   }
@@ -1660,9 +1673,28 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
     if (!existsSync(join(dir, arm.file))) copyFolder(method!.dir, dir);
     snapshots[at] = { dir, file: arm.file, hash: folderHash(dir, arm.file), cache_dir: method!.cache };
   };
-  await freeze(0);
+  const redesigns: RedesignRecord[] = [];
+  // A redesign session at a point: once, recorded in the learner's record, before that point's checkpoint is frozen.
+  const redesignAt = async (at: number) => {
+    if (!plan.redesign?.includes(at)) return true;
+    const key = sha({ redesign: at, arm: arm.name });
+    if (!records.get(key)?.received) {
+      const started = Date.now();
+      let result: Omit<RedesignRecord, 'at_event'>;
+      try { result = await redesigning.session(plan, arm, { method, project }, join(base, 'redesign', String(at))); }
+      catch (error) { result = { received: false, line: `The redesign session stopped: ${(error as Error).message}` }; }
+      const record = { key, kind: 'redesign', at_event: at, learner, ...result, duration_ms: Date.now() - started, at: new Date().toISOString() };
+      writeFileSync(recordFile, JSON.stringify(record) + '\n', { flag: 'a', mode: 0o600 });
+      records.set(key, record);
+    }
+    const record = records.get(key);
+    redesigns.push({ at_event: at, received: record.received, line: record.line, ...(record.did ? { did: record.did } : {}) });
+    return record.received;
+  };
   const done: EventRecord[] = [], missing: LearnerTreatment['missing'] = [];
   let stopped = false;
+  if (!await redesignAt(0)) { stopped = true; missing.push({ index: 0, reason: redesigns.at(-1)!.line }); }
+  await freeze(0);
   for (const event of events) {
     const key = eventKey(arm, event);
     if (stopped) {
@@ -1693,23 +1725,96 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       ...(record.change ? { change: record.change } : {}), ...(record.did ? { did: record.did } : {}), ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
     if (!record.received) { missing.push({ index: event.index, reason: record.reason ?? 'not received', ...(record.detail ? { detail: record.detail } : {}) }); stopped = true; continue; }
     if (arm.plain && typeof record.instructions === 'string') instructions = record.instructions;
+    if (!await redesignAt(event.index)) { missing.push({ index: event.index, reason: redesigns.at(-1)!.line }); stopped = true; continue; }
     if (plan.checkpoints?.includes(event.index)) await freeze(event.index);
   }
-  return { learner, events: done, missing, snapshots };
+  return { learner, events: done, missing, snapshots, ...(redesigns.length ? { redesigns } : {}) };
 }
+
+/** The message of a project arm without the Method plugin at a redesign point: the same session as the Method arm's redesign. */
+export const NOTES_MESSAGE = 'Read every correction so far and your notes, and rewrite your notes so that they work on the next task.';
+
+/** The .method files of a folder, leaving out Method's private folders, run records and saved checks. */
+function methodFiles(dir: string): string[] {
+  const found: string[] = [];
+  const walk = (sub: string) => {
+    for (const entry of readdirSync(sub, { withFileTypes: true })) {
+      if (['.method', '.method-runs', 'node_modules', 'cases', '.git', '.fix'].includes(entry.name)) continue;
+      const path = join(sub, entry.name);
+      if (entry.isDirectory()) walk(path); else if (entry.isFile() && entry.name.endsWith('.method')) found.push(path);
+    }
+  };
+  walk(dir);
+  return found.sort();
+}
+
+/**
+ * The comparison's writer wrote the starting Methods, not the user: every paragraph of their goal, prompts and .md and
+ * .txt files is recorded as Method's own (.method/written.json), so a fix or a redesign may change it. The files that
+ * the user gave word for word (user_files) stay the user's.
+ */
+function writerOwnsStart(dir: string, userFiles: string[]) {
+  const theirs = new Set(userFiles.map(f => f.replace(/^\.\//, '')));
+  for (const file of methodFiles(dir)) {
+    const folder = dirname(file), places: Record<string, string[]> = {};
+    let document: any;
+    try { document = readDocument(file); } catch { continue; }
+    for (const [place, text] of textPlaces(document, folder)) {
+      if (place.startsWith('file:') && theirs.has(relative(dir, join(folder, place.slice(5))).split(sep).join('/'))) continue;
+      places[place] = paragraphs(text).map(p => createHash('sha256').update(p).digest('hex'));
+    }
+    writePrivateJson(writtenFile(folder), { format: 'method-written/1', places });
+  }
+}
+
+/**
+ * One redesign session of a learner. A .method arm, or a project arm with the Method plugin: method redesign on each of
+ * its Methods, in the arm's clean room and its own Method cache. A project arm without the plugin: one chat with the
+ * notes message. Received when every session ended.
+ */
+async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: string; file: string; cache: string } | null; project: { project: string; cache: string; memory: string } | null }, workDir: string): Promise<{ received: boolean; line: string; did?: Did }> {
+  mkdirSync(workDir, { recursive: true, mode: 0o700 });
+  const files = learner.method ? [join(learner.method.dir, learner.method.file)] : arm.project?.plugins?.includes('method') ? methodFiles(learner.project!.project) : null;
+  if (files) {
+    if (!files.length) return { received: true, line: 'there is no Method in the project to redesign.' };
+    const lines: string[] = [];
+    for (const file of files) {
+      const room = await armRoom(file, learner.method?.cache ?? learner.project!.cache, true);
+      try {
+        const done = await command(['redesign', file, '--json'], room.env);
+        writeFileSync(join(workDir, `${basename(file)}.log`), `${done.stdout}\n${done.stderr}`, { mode: 0o600 });
+        let out: any;
+        try { out = JSON.parse(done.stdout); } catch { return { received: false, line: `method redesign ${basename(file)} failed: ${done.stderr.trim().split('\n').at(-1) ?? ''}` }; }
+        lines.push(out.line);
+      } finally { await room.remove(); }
+    }
+    return { received: true, line: lines.join(' ') };
+  }
+  const project = learner.project!;
+  const before = projectFiles(project.project), memoryBefore = projectFiles(project.memory);
+  const chat = await openChat(project.project, chatSettings(arm.project, project.cache, plan.folder), join(workDir, 'artifacts'), project.memory);
+  let turn;
+  try { turn = await chat.send(NOTES_MESSAGE); } finally { await chat.close(); }
+  const did = whatItDid(before, projectFiles(project.project), turn.entries, null, { before: memoryBefore, after: projectFiles(project.memory) });
+  return { received: true, line: `the agent was asked: "${NOTES_MESSAGE}" ${didSummary(did, arm.project.agent)}`, did };
+}
+
+/** The redesign session of a learner; tests replace it. */
+export const redesigning = { session: redesignSession };
 
 /** The treatment that a run at a checkpoint received, in words, for its page. Null without a treatment over time. */
 function treatmentNote(plan: Plan, arm: any, checkpoint: number | null, learner?: LearnerTreatment) {
   if (checkpoint === null) return null;
   const given = plan.events.filter((e: any) => e.index <= checkpoint);
-  if (!given.length) return 'Nothing was given to the agent before this run.';
+  if (!given.length) return learner?.redesigns?.some(r => r.at_event === 0) ? `Before the first event, a redesign session: ${learner.redesigns.find(r => r.at_event === 0)!.line}` : 'Nothing was given to the agent before this run.';
   const how = arm.project ? 'Each event was one new chat in the project folder; a correction was the second message of its chat. The events, in this order' : arm.plain ? `After each correction a ${arm.plain.agent === 'codex' ? 'Codex' : 'Claude Code'} session edited the agent's instructions. The corrections, one at a time, in this order` : 'Method learned from each correction, one at a time, in this order';
   const record = (e: any) => learner?.events.find(x => x.index === e.index);
   const outcome = (e: any) => { const r = record(e); return r && e.kind === 'correction' ? ` (${outcomeWords[r.outcome]}${r.did ? `; ${didSummary(r.did, arm.project?.agent).replace(/\.$/, '')}` : ''})` : ''; };
   const name = (id: string) => plan.names?.[id] ?? id.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, '');
   // A feedback writer's words are this copy's own.
   const words = (e: any) => record(e)?.text ?? e.text ?? (e.feedback ? `(from the feedback writer ${e.feedback.name})` : '');
-  return [`Copy ${(learner?.learner ?? 0) + 1}. ${how}:`, ...given.map((e: any) => `${e.index}. ${e.kind === 'correction' ? `Correction on ${name(e.input.id)}: ${words(e)}${outcome(e)}` : `New input: ${name(e.input.id)}`}`)].join('\n');
+  const redesigned = (at: number) => learner?.redesigns?.filter(r => r.at_event === at && at <= checkpoint).map(r => `${at === 0 ? 'Before the first event' : `After event ${at}`}, a redesign session: ${r.line}`) ?? [];
+  return [`Copy ${(learner?.learner ?? 0) + 1}. ${how}:`, ...redesigned(0), ...given.flatMap((e: any) => [`${e.index}. ${e.kind === 'correction' ? `Correction on ${name(e.input.id)}: ${words(e)}${outcome(e)}` : `New input: ${name(e.input.id)}`}`, ...redesigned(e.index)])].join('\n');
 }
 
 /** A reason as the end of a sentence: one period, never two. */

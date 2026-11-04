@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, feedbackWriting, fixOutcome, judging, noiseCheck, tooEasyCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
+import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, redesigning, feedbackWriting, fixOutcome, judging, noiseCheck, tooEasyCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { baselineAnswer } from '../../packages/sdk/src/quality.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
@@ -542,6 +542,30 @@ it('runs counts separate learners: each Method learner has its own Method ID, fo
   expect(cells).toHaveLength(16);
   expect(new Set(cells.filter(c => c.arm === 'a' && c.checkpoint === 2).map(c => c.dir)).size).toBe(2);
   expect(cells.filter(c => c.arm === 'a' && c.checkpoint === 2).map(c => c.repeat).sort()).toEqual([0, 0, 1, 1]);
+}, 600_000);
+
+it('a redesign point gives every learner one redesign session there, once, before that checkpoint is frozen; the writer\'s starting words are not the user\'s', async () => {
+  const { file } = fixture({ teaching: ['inputs/three.json'], runs: 1, rule: { margin: 0.1, min_runs: 1, at: 2 },
+    treatment: { events: [{ correction: 'One.', input: 'inputs/three.json' }, { correction: 'Two.', input: 'inputs/three.json' }], checkpoints: [0, 2], redesign: [0, 1] } });
+  const log: string[] = [];
+  delivery.deliver = async (event: any) => { log.push(`event ${event.index}`); return { received: true, outcome: 'fixed' }; };
+  const session = redesigning.session;
+  redesigning.session = async (_plan: any, arm: any, learner: any) => {
+    log.push(`redesign ${arm.name}`);
+    // The starting Method's paragraphs are recorded as Method's own, so the redesign may change them.
+    expect(JSON.parse(readFileSync(join(learner.method.dir, '.method', 'written.json'), 'utf8')).places).not.toEqual({});
+    return { received: true, line: 'Rewrote it from the problem.' };
+  };
+  try {
+    const comparison = await stagePlan(file);
+    const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+    expect(log.filter(l => l.startsWith('redesign'))).toHaveLength(4);
+    expect(treated[0].learners[0].redesigns.map((r: any) => r.at_event)).toEqual([0, 1]);
+    // A rerun gives no session again.
+    log.length = 0;
+    await compareStage('treat', { comparison, go: true });
+    expect(log.filter(l => l.startsWith('redesign'))).toEqual([]);
+  } finally { redesigning.session = session; }
 }, 600_000);
 
 it('says what happened to each correction for each learner; could not test and a stopped fix are not received, and the trial stops', async () => {
