@@ -327,7 +327,7 @@ async function writeBrief(room: string, base: string, file: string, corrections:
 }
 
 /** The prompt of the learner's session, for one correction or several, with the ID of each one's check. */
-export function learnerPrompt(file: string, caseIds: string[]) {
+export function learnerPrompt(file: string, caseIds: string[], retry?: { tries: number; of: number; failure: string }) {
   const one = caseIds.length === 1, id = caseIds[0]!;
   const outcomes = `{"outcome": "fixed", "summary": "ONE PLAIN SENTENCE FOR THE PERSON: what the agent does differently now"}
    {"outcome": "no_change_needed", "detail": "WHY, IN PLAIN WORDS FOR THE PERSON"}: the run, or the Method as it is now, already does what the correction asks. Write the check anyway (with --passing-run ${one ? '.fix/run' : 'ITS RUN'} in place of --run when this run already meets it): it must pass on the Method as it is.
@@ -335,14 +335,17 @@ export function learnerPrompt(file: string, caseIds: string[]) {
    {"outcome": "no_fix_found", "detail": "WHY, IN PLAIN WORDS FOR THE PERSON"}: the cause is outside the Method (the input, the data, a tool), or no change works.`;
   return `You are the learner of a Method: a workflow in this folder, in the file ${file}. ${one ? 'A person corrected one of its runs' : `People corrected ${caseIds.length} of its runs`}. Change the Method so that it does what ${one ? 'the person asks' : 'each correction asks'} on every later run, as a careful person who builds Methods with the Method CLI would.
 
-Read these first:
+${retry ? `This is try ${retry.tries} of ${retry.of}. An earlier try read the brief and left its work in this folder, with its notes in .fix/notes.md. Read only .fix/notes.md, .fix/correction.md, ${file} and the files that the failure below names; do not read .fix/guide.md whole again, and do not run method authoring. Method checked the earlier work, and it did not pass:
+${retry.failure}
+Fix this, test your new check again, and write .fix/result.json again. The steps and the conditions below still hold.
+` : `Read these first:
 - .fix/correction.md: ${one ? 'the correction in the person\'s words' : 'each correction in the person\'s words, with its run and the ID of its check'}.
 - ${one ? '.fix/run.md and .fix/run/: the run that the person corrected' : '.fix/run-1.md and .fix/run-1/, .fix/run-2.md and .fix/run-2/, ...: each run that a person corrected'}: its inputs, its step outputs, its result, what its agent steps did, and the files it wrote.
 - .fix/corrections.md: every earlier correction of this Method, with what happened to it.
-- .fix/guide.md: how to build a Method that just works, and the commands of a fix.
+- .fix/guide.md: how to build a Method that just works, and the commands of a fix. It has all that a fix needs: do not run method authoring.
 - ${file}, the files it names, and learned.json (rules learned from earlier corrections).
 Read each file once.
-
+`}
 Then:
 1. Write the check of ${one ? 'this correction' : 'each correction'}: method case new ${file} --run ${one ? '.fix/run' : 'ITS RUN'} --id ${one ? id : 'ITS CHECK ID'} --note "THE PERSON'S WORDS" and what the correction says, not a copy of the result. It must fail on ${one ? 'this run' : 'its run'} and pass on a right result.
    - A result of parts (answers, fields, lines, items) where the person corrected some: --expect FILE with a parts check, [{"kind": "parts", "ref": "outputs.NAME.LIST", "key": "THE FIELD THAT NAMES A PART", "corrected": {"PART": {"FIELD": "THE VALUE THE PERSON GAVE"}}, "kept": {"PART": {"FIELD": "ITS VALUE IN THIS RUN"}}}]. The person read the parts that they did not correct and left them: put each in kept, so that a later change cannot make it worse. Leave a part out only when the correction says that it was not checked. Compare labels and short values (an answer, a status, a number), never quotes or long text: a later run may quote other words and still be right.
@@ -364,7 +367,7 @@ When you finish, Method checks your work, and gives you the exact failure when i
 - Each rule for every input holds on the inputs of the newest earlier checks too (at most ${HELD_OUT}).
 - Every earlier check that passed before still passes. Change no file in cases/ except your new check${one ? '' : 's'}.
 - method validate ${file} gives no errors.
-Send nothing and change no real service. A file that you delete stays in the folder: to stop using it, take it out of ${file}. Keep notes for a later try in .fix/notes.md.`;
+Send nothing and change no real service. A file that you delete stays in the folder: to stop using it, take it out of ${file}. Before you write .fix/result.json, write in .fix/notes.md, in a few lines, the cause that you found, what you changed and how you tested it: a later try reads these notes in place of the brief.`;
 }
 
 // ---------- The gate ----------
@@ -445,15 +448,28 @@ export function broken(rows: any[], casesDir: string, correction: LearnerCorrect
 // ---------- A general fix ----------
 
 /** The text that a change added to the Method's files (not its checks), with what it takes from one input. */
-export function changeLookups(base: string, room: string, changed: string[], inputs: ReturnType<typeof checkInputs>) {
+export function changeLookups(base: string, room: string, changed: string[], inputs: ReturnType<typeof checkInputs>, document?: any) {
   const read = (root: string, path: string) => { const full = join(root, path); try { const b = lstatSync(full).isFile() ? readFileSync(full) : null; return b && !b.subarray(0, 8192).includes(0) ? b.toString('utf8') : null; } catch { return null; } };
   const found: { path: string; lookup: Lookup }[] = [];
-  for (const path of changed.filter(p => !p.startsWith('cases/'))) {
+  const isMethod = methodPaths(document);
+  for (const path of changed.filter(p => !p.startsWith('cases/') && isMethod(p))) {
     const after = read(room, path);
     if (after === null) continue;
     for (const lookup of inputLookups(addedLines(read(base, path) ?? '', after), inputs)) found.push({ path, lookup });
   }
   return found;
+}
+
+/**
+ * The files that make up a Method, as the one-input test reads them: the .method file, learned.json, and each file or
+ * folder that the Method names in files. Any other file of its folder, such as a result that a chat saved there (an
+ * answers.json, a memo), is not what the Method does next time, so it is not a rule. Without the document: every file.
+ */
+export function methodPaths(document: any): (path: string) => boolean {
+  if (!document) return () => true;
+  const clean = (p: string) => p.replace(/^\.\//, '').replace(/\/+$/, '');
+  const listed = (Array.isArray(document.files) ? document.files : []).filter((f: unknown): f is string => typeof f === 'string').map(clean);
+  return path => /\.method$/.test(path) || path === 'learned.json' || listed.some((f: string) => path === f || path.startsWith(`${f}/`));
 }
 
 /** The earlier checks on whose inputs a new rule for every input is judged: the newest that passed, at most this many. */
@@ -539,7 +555,7 @@ async function gate(ctx: { file: string; base: string; room: string; caseIds: st
   // A general fix: each new check tests what its correction says, and the change looks up no one input.
   const inputs = checkInputs(join(room, 'cases'));
   for (const id of tested) problems.push(...checkCopies(join(room, 'cases', id), inputs));
-  const lookups = changeLookups(base, room, changed, inputs);
+  const lookups = changeLookups(base, room, changed, inputs, document);
   if (lookups.length) problems.push(lookupFailure(lookups));
   if (problems.length) return { pass: false, failure: problems.join('\n') };
   const casesDir = join(room, 'cases');
@@ -654,7 +670,7 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
     rmSync(join(room, '.fix', 'result.json'), { force: true });
     const tryDir = join(options.workDir, 'tries', String(tries));
     mkdirSync(tryDir, { recursive: true, mode: 0o700 });
-    const text = tries === 1 ? prompt : `${prompt}\n\nThis is try ${tries} of ${maxTries}. Your earlier work is still in this folder. Method checked it, and it did not pass:\n${failure}\nFix this, test your new check again, and write .fix/result.json again.`;
+    const text = tries === 1 ? prompt : learnerPrompt(name, options.caseIds, { tries, of: maxTries, failure });
     const session = await learnerAgent.session({ room, prompt: text, model: options.model, timeoutMs: left, workDir: tryDir });
     tokens += sessionTokens(session.run_dir);
     if (session.status === 'timeout') return done(each(noFix(`the time for one correction (${FIX_LIMIT_MS / 3_600_000} hours) ran out`)), tries);

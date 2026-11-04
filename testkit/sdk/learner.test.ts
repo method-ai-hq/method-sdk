@@ -185,6 +185,11 @@ it('refuses a change to the person\'s own words with the exact failure; the next
   const learned = await learn(file, correction(badRun), root);
   expect(prompts).toHaveLength(2);
   expect(prompts[1]).toContain('This is try 2 of 3.');
+  // A later try reads its notes and the failure, not the brief and the guide again.
+  expect(prompts[0]).toContain('Read these first:');
+  expect(prompts[1]).not.toContain('Read these first:');
+  expect(prompts[1]).toContain('Read only .fix/notes.md, .fix/correction.md, reply.method');
+  expect(prompts[1]).toContain('do not read .fix/guide.md whole again, and do not run method authoring');
   expect(prompts[1]).toContain('You changed the person\'s own words in the file guide.md: "Pawsome accepts standard clauses.". Put the paragraph back word for word.');
   expect(learned.outcome).toMatchObject({ outcome: 'fixed' });
   expect(learned.tries).toBe(2);
@@ -589,11 +594,14 @@ it('a change that copies the text of the corrected input is refused as a rule fo
   const lookup = async (dir: string) => {
     await ndaCheck(dir);
     room.write(dir, 'rules.json', JSON.stringify([{ question: 1, answer: 'no', evidence: NDA_B.split('. ')[0] }]) + '\n');
+    // A data file that a step reads is one of the Method's files.
+    const method = room.method(dir); room.save(dir, { ...method, files: [...(method.files ?? []), 'rules.json'] });
     room.write(dir, 'answer.mjs', answerScript(`JSON.parse(readFileSync(new URL('./rules.json',import.meta.url),'utf8')).some(r=>text.includes(r.evidence))?'no':'yes'`));
     room.result(dir, { outcome: 'fixed', summary: 'Answers follow your corrections.' });
   };
   const general = async (dir: string) => {
     rmSync(join(dir, 'rules.json'), { force: true });
+    const method = room.method(dir); room.save(dir, { ...method, files: (method.files ?? []).filter((f: string) => f !== 'rules.json') });
     room.write(dir, 'answer.mjs', answerScript(`/written approval/.test(text)?'no':'yes'`));
     room.result(dir, { outcome: 'fixed', summary: 'Sharing that needs written approval is now a no.' });
   };

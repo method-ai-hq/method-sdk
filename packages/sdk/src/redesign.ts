@@ -93,7 +93,7 @@ async function gate(file: string, base: string, room: string, written: Written, 
   for (const issue of (methodIssues(readFileSync(roomFile, 'utf8')) as any[]).filter(i => i.level === 'error')) problems.push(`method validate: ${issue.step ? `step ${issue.step}: ` : ''}${issue.message}${issue.fix ? ` ${issue.fix}` : ''}`);
   for (const { place, paragraph } of changedUserText(textPlaces(parseDocumentValue(readFileSync(baseFile, 'utf8')), base), textPlaces(document, room), written))
     problems.push(`You changed the person's own words in ${placeName(place)}: "${clip(paragraph, 200)}". Put the paragraph back word for word; you may move it, unchanged, to another prompt or file.`);
-  const lookups = changeLookups(base, room, changedFiles(base, room), checkInputs(join(room, 'cases')));
+  const lookups = changeLookups(base, room, changedFiles(base, room), checkInputs(join(room, 'cases')), document);
   if (lookups.length) problems.push(lookupFailure(lookups));
   if (problems.length) return { failure: problems.join('\n') };
   const casesDir = join(room, 'cases');

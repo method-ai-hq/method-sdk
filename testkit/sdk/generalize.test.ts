@@ -60,3 +60,20 @@ it('a check that requires a copy of a whole result, or compares copied quotes, i
 it('the added text of a change is the lines that the file did not have', () => {
   expect(addedLines('a\nb\nc', 'a\nB\nc\nd')).toBe('B\nd');
 });
+
+it('reads only the Method\'s own files: a result that a chat saved in the folder is not a rule', async () => {
+  const { changeLookups, methodPaths } = await import('../../packages/sdk/src/learner.js');
+  const dir = cases({ 'correction-147': ['NDA_147.txt', NDA_147], 'correction-183': ['NDA_183.txt', NDA_183] });
+  const inputs = checkInputs(dir);
+  const base = mkdtempSync(join(tmpdir(), 'method-base-')), room = mkdtempSync(join(tmpdir(), 'method-room-')); roots.push(base, room);
+  const copied = JSON.stringify({ answers: [{ question: 6, answer: 'no', quote: NDA_147.slice(0, 190) }] });
+  for (const path of ['answers.json', 'rules/one.md', 'learned.json']) { mkdirSync(join(room, path, '..'), { recursive: true }); writeFileSync(join(room, path), copied); }
+  const document = { files: ['rules/', 'check.py'] };
+  const paths = (found: { path: string }[]) => [...new Set(found.map(f => f.path))].sort();
+  // The handed-in answers.json is not a file of the Method; a listed folder and learned.json are.
+  expect(paths(changeLookups(base, room, ['answers.json', 'rules/one.md', 'learned.json'], inputs, document))).toEqual(['learned.json', 'rules/one.md']);
+  expect(methodPaths(document)('nda.method')).toBe(true);
+  expect(methodPaths(document)('memo.md')).toBe(false);
+  // Without the Method's document, every changed file is read, as before.
+  expect(paths(changeLookups(base, room, ['answers.json'], inputs))).toEqual(['answers.json']);
+});
