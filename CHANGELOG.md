@@ -1,3 +1,14 @@
+# 0.36.0
+
+Use runtime 0.20.0.
+
+A fix works on the next input, not only on the corrected one. On the Codex NDA comparison, the learner stored 41 rules of exact NDA text plus label, because each saved check required all 17 answers and quotes of its NDA to equal the corrected result; none matched a new NDA.
+
+- **A saved check tests what the correction says.** The learner writes a parts check (`{"kind": "parts", "ref", "key", "corrected", "kept"}`): each corrected part has the value the person gave, and each part the person read and left keeps its value, so a later change cannot make it worse. Values are compared as labels (letter case, spaces, typographic quotes and end punctuation do not count); quotes and other fields that the check does not name are not compared. The gate refuses a new check that requires a whole result to equal a copy, or that compares text copied from its input.
+- **A rule for one input is refused.** The gate refuses a change whose added lines hold 80 or more letters and digits that are in the input of only one saved check, or the file name of a saved check's input. Text in the inputs of two or more checks is a general phrase. This costs no model run (0.2 s on the NDA Method with 15 checks, where it finds 14 of the 15 checks in the 41 old rules). `method redesign` refuses the same.
+- **Rules for every input are tested on inputs the change was not taught on.** `method case new --every-input "RULE"` adds a rule that holds for any input, such as a correction's reason. After the earlier checks pass, the gate judges each such rule on the inputs of the 8 newest earlier checks, on the changed Method; a rule that fails there goes back to the learner as a rule for one input.
+- The learner's instructions, the guide and `method redesign` say: write the general rule from the correction's reason; never store an input's text, its file name or answers for one input.
+
 # 0.35.0
 
 Use runtime 0.19.0.
