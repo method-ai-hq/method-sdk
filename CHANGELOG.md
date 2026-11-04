@@ -1,3 +1,11 @@
+# 0.28.0
+
+Use runtime 0.18.0.
+
+- **A comparison's project arm can be Codex** (`{project: codex, plugins?: [method], files?, model?, effort?}`): Codex used as a person uses it. Each piece of work is a new Codex chat in the project folder, and a correction is the next message of the same chat. The project folder (with its AGENTS.md) and what Codex keeps in its home (its AGENTS.md and memories) carry over between chats. With the Method plugin, the plugin is added as the Method installer adds it to Codex, its hooks run, and a Method fix that a chat starts runs on Codex. The page shows the model that each chat ran on and the tokens that Codex reported.
+- Claude Code and Codex project arms are in one comparison only when it tests the model (`tested: model`).
+- When every arm runs on Codex, the judge and a feedback writer's judge run on Codex with the arms' model.
+
 # 0.27.0
 
 Use runtime 0.18.0.
