@@ -1,3 +1,11 @@
+# 0.32.0
+
+Use runtime 0.18.2.
+
+- **A fix counts its tokens.** The learner's sessions and every test run of its gate add up to the fix's tokens, kept with its outcome (`method wait --json`). `method redesign --json` prints its tokens too.
+- **A comparison's usage per correction includes the fix.** A project arm's correction counts the chat's tokens and the tokens of each Method fix that the chat started; a .method arm's correction counts its fix's tokens; each redesign session shows its tokens.
+- A case run says how many tokens its model work reported (runtime 0.18.2).
+
 # 0.31.0
 
 Use runtime 0.18.1.
