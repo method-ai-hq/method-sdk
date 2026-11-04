@@ -1,3 +1,9 @@
+# 0.34.3
+
+Use runtime 0.18.2.
+
+- **A comparison keeps its copy of the Method plugin after the trial starts.** Before, an update of the method CLI whose plugin skills changed gave the comparison a new copy of the plugin, which made the project arm a new arm: a comparison that ran again after the update started its treatment again from the first event. Before the trial starts, a changed plugin still gives a new copy.
+
 # 0.34.2
 
 Use runtime 0.18.2.
