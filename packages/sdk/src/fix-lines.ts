@@ -18,9 +18,8 @@ export type CorrectionOutcome = {
   reason?: CouldNotTestReason;
   /** question: one question in the person's terms. */
   question?: string;
-  /** fixed: how often the fix passed on this result, and on how many earlier results it was checked; later: how many
-   * more times each earlier result is being checked now, when it was checked once before the fix was applied. */
-  tested?: { times: number; earlier: number; later?: number };
+  /** fixed: how often the fix passed on this result, and on how many earlier results it was checked. */
+  tested?: { times: number; earlier: number };
   /** held and already_changed: the other person; held: what they asked for. no_change_needed, no_fix_found, could_not_test: why, in plain words. */
   by?: string; detail?: string;
   /** missing_file: the file that is gone. For --json only; never in a line. */
@@ -39,9 +38,6 @@ export const waitingLine = (n: number) => n === 1 ? 'Working on a correction tha
 export const stillWorkingLine = 'Still working on it. Run method wait again.';
 /** The line that method wait prints each minute while a fix works. */
 export const workingForLine = (minutes: number) => `Still working on it (${plural(minutes, 'minute')} so far).`;
-/** A fix that was applied after one test of each earlier result, and undone when a later test broke one of them. */
-export const undidLine = (note: string | null | undefined, broke: string[] = []) =>
-  `I undid the fix${quoted(note ?? undefined)}: when I tested it again, it broke ${broke.length ? broke.join('; ') : 'an earlier correction'}. I'm trying again.`;
 export const nothingWaitingLine = 'Nothing is being fixed on this computer.';
 /** A correction that no computer here is fixing now: a computer with Claude Code or Codex fixes it on the Method's next run. */
 export const waitsForComputerLine = 'This correction will be fixed the next time this Method runs on a computer with Claude Code or Codex.';
@@ -60,9 +56,7 @@ export function outcomeLine(o: CorrectionOutcome): string {
   const why = (text: string | undefined, fallback: string) => text?.trim() ? sentence(text) : fallback;
   switch (o.outcome) {
     case 'fixed': {
-      const tested = !o.tested ? '' : o.tested.later && o.tested.earlier
-        ? ` Tested ${plural(o.tested.times, 'time')} on this result and once on ${plural(o.tested.earlier, 'earlier one')}; I'm testing ${o.tested.earlier === 1 ? 'it' : 'those'} ${o.tested.later} more times and will undo this if one fails.`
-        : ` Tested ${plural(o.tested.times, 'time')} on this result${o.tested.earlier ? ` and on ${plural(o.tested.earlier, 'earlier one')}` : ''}.`;
+      const tested = !o.tested ? '' : ` Tested ${plural(o.tested.times, 'time')} on this result${o.tested.earlier ? ` and on ${plural(o.tested.earlier, 'earlier one')}` : ''}.`;
       return `Fixed${o.summary?.trim() ? `: ${sentence(o.summary)}` : ''}.${tested} Undo: method undo.`;
     }
     case 'no_change_needed': return `No change needed: ${why(o.detail, 'this result already does what you asked')}. I kept your note as a check for later changes.`;

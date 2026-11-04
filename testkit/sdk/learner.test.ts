@@ -432,7 +432,6 @@ it('the learner tests only its new check; Method tests the new check first, and 
   // The failed new check went back to the agent before any earlier check ran; its next try passed, and then the earlier one ran once.
   expect(calls.map(c => c.ids)).toEqual([[CASE], [CASE], ['correction-term']]);
   expect(calls[2]).toMatchObject({ gate: true, baseline: expect.stringContaining('base') });
-  expect(calls[2].firstRun).toBeUndefined();
 }, 60_000);
 
 it('two corrections that wait together go to one session, and one change fixes both', async () => {
@@ -472,78 +471,6 @@ it('the loop splits waiting corrections that found no change together, and fixes
   expect(prompts[0]).toContain('People corrected 2 of its runs');
   expect(prompts[1]).toContain('A person corrected one of its runs');
   expect(client.outcomes.map((o: any) => [o.id, o.outcome])).toEqual([[JUDGMENT, 'fixed'], [other, 'no_change_needed']]);
-}, 60_000);
-
-it('a slow Method shows Fixed after one test of each earlier correction; a later test that breaks one undoes the fix, and it is fixed again', async () => {
-  const root = setup();
-  const { folder, file } = await project(root);
-  const before = readFileSync(file, 'utf8');
-  const client = fakeClient([{ id: JUDGMENT, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: '2026-10-28T10:00:00Z', pending: true, noted_by: 'Ryan' }]);
-  // The new check's runs took 4 minutes each with a live model step, so a full test of the earlier one would be slow;
-  // the first later test breaks Gráinne's check.
-  const seen: any[] = [];
-  let broke = false;
-  const spy = (async (f: string, flags: any, options: any) => {
-    seen.push(options);
-    const report = await runCases(f, flags, options);
-    if (options.newIds?.length) for (const row of report.cases) for (const a of row.candidate.attempts) Object.assign(a, { duration_ms: 240_000, live_model_steps: ['write'] });
-    if (options.firstRun) for (const row of report.cases) if (row.verdict === 'pass') row.more = 2;
-    if (options.moreRuns && !broke) {
-      broke = true;
-      expect(storedOutcome(METHOD_ID, JUDGMENT)?.outcome).toMatchObject({ outcome: 'fixed', tested: { times: 1, earlier: 1, later: 2 } });
-      expect(readFileSync(file, 'utf8')).not.toBe(before);
-      report.cases = report.cases.map((row: any) => ({ ...row, verdict: 'regression', candidate: { ...row.candidate, status: 'fail', attempts: [{ status: 'fail', results: [{ status: 'fail', reason: 'The reply sends the term clause to Legal.' }] }] } }));
-    }
-    return report;
-  }) as any;
-  const had: boolean[] = [];
-  const prompts = stub(async dir => { had.push(existsSync(join(dir, 'cases', 'correction-term'))); await codeStep(dir); });
-  await backgroundFix(client, file, [JUDGMENT], { runCases: spy });
-  // The fix again has the check that broke; the first one had no earlier check.
-  expect(had).toEqual([false, true]);
-  expect(seen.filter(o => o.firstRun)).toHaveLength(1);
-  expect(seen.filter(o => o.moreRuns === 2)).toHaveLength(1);
-  // The fix was undone and fixed again with the failure, tested in full.
-  expect(prompts).toHaveLength(2);
-  expect(prompts[1]).toContain('Then Method tested the earlier checks again, and the change broke one, so Method undid it:\nYour change breaks the check correction-term');
-  const { storedOutcomes } = await import('../../packages/sdk/src/fix-outcomes.js');
-  expect(storedOutcomes(METHOD_ID).find(r => r.kind === 'undone')?.line).toBe('I undid the fix ("Non-competes go to Legal"): when I tested it again, it broke Gráinne\'s correction ("Accept the term clause"). I\'m trying again.');
-  expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 1 } } });
-  expect(storedOutcome(METHOD_ID, JUDGMENT)?.outcome?.tested?.later).toBeUndefined();
-  expect(client.outcomes).toEqual([{ id: JUDGMENT, outcome: 'fixed', detail: 'Replies now send non-compete clauses to Legal.' }]);
-  expect(readFileSync(join(folder, 'legal.json'), 'utf8')).toBe('["non-compete"]\n');
-  // Three versions: the fix, the undo, and the fix again.
-  expect(client.calls.filter((c: any) => c.verb === 'PUT').map((c: any) => c.body.reason.split(':')[0])).toEqual(['Method fixed it from a correction', 'Undid Method\'s change', 'Method fixed it from a correction']);
-}, 60_000);
-
-it('the Fixed line says when each earlier result was tested once and is being tested again', () => {
-  expect(outcomeLine({ id: JUDGMENT, outcome: 'fixed', summary: 'Replies now send non-compete clauses to Legal.', tested: { times: 3, earlier: 49, later: 2 } }))
-    .toBe('Fixed: Replies now send non-compete clauses to Legal. Tested 3 times on this result and once on 49 earlier ones; I\'m testing those 2 more times and will undo this if one fails. Undo: method undo.');
-});
-
-it('a change whose later tests did not end (the fix stopped) is undone, and the correction is fixed again', async () => {
-  const root = setup();
-  const { folder, file } = await project(root);
-  const judgments = [{ id: JUDGMENT, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: '2026-10-28T10:00:00Z', pending: true, noted_by: 'Ryan' }];
-  const client = fakeClient(judgments);
-  const slow = (async (f: string, flags: any, options: any) => {
-    const report = await runCases(f, flags, options);
-    if (options.newIds?.length) for (const row of report.cases) for (const a of row.candidate.attempts) Object.assign(a, { duration_ms: 240_000, live_model_steps: ['write'] });
-    if (options.firstRun) for (const row of report.cases) if (row.verdict === 'pass') row.more = 2;
-    // The process stops during the later tests.
-    if (options.moreRuns) throw Error('the computer went to sleep');
-    return report;
-  }) as any;
-  stub(codeStep);
-  await backgroundFix(client, file, [JUDGMENT], { runCases: slow });
-  expect(readFileSync(join(folder, 'legal.json'), 'utf8')).toBe('["non-compete"]\n');
-  // The next fix undoes the change that was not fully tested, and fixes the correction again.
-  judgments[0]!.pending = true;
-  const prompts = stub(codeStep);
-  await backgroundFix(client, file, [JUDGMENT], { runCases: runCases as any });
-  expect(prompts).toHaveLength(1);
-  expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 1 } } });
-  expect(client.calls.filter((c: any) => c.verb === 'PUT').map((c: any) => c.body.reason.split(':')[0])).toEqual(['Method fixed it from a correction', 'Undid Method\'s change', 'Method fixed it from a correction']);
 }, 60_000);
 
 it('a fix reads only what its correction needs: the same brief at 1 and at 12 earlier checks, which Method tests itself', async () => {

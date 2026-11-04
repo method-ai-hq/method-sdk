@@ -171,13 +171,22 @@ export async function ownAgentModel(document: any): Promise<{ backend: 'claude' 
 /** Run the cases of a Method with the same preparation as method run. */
 export type CaseRunOptions = { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[]; once?: boolean;
   runs?: number | undefined; minPass?: number | undefined; live?: string[] | undefined; judgeCache?: boolean | undefined; keepDir?: string | undefined;
-  /** The fix's gate: the old version runs only for a failing case, and the test stops at the first break (testSuite gate). */
-  gate?: boolean; firstRun?: boolean; moreRuns?: number };
+  /** The fix's gate: each earlier case runs once unless it passes narrowly, the old version runs only for a failing case,
+   * and the test stops at the first break (testSuite gate). */
+  gate?: boolean };
+/**
+ * Where the passing case runs of a Method keep the outputs of its model steps, so that a test of a change runs again only
+ * the steps that the change touched: one folder per Method (by its ID, else by its folder) in Method's cache.
+ */
+export function savedSteps(file: string) {
+  const id = (() => { try { return (readDocument(file) as any).id; } catch { return undefined; } })();
+  return join(methodCache(), "case-steps", typeof id === "string" && /^wf_[a-f0-9]{32}$/.test(id) ? id : createHash("sha256").update(dirname(resolve(file))).digest("hex").slice(0, 32));
+}
 export async function runCases(file: string, flags: { workspace?: string }, options: CaseRunOptions = {}) {
   const prepared = await preparedConfig(file, flags, { judge: true });
   // Claude Code and Codex both judge when both are signed in; a disagreement fails the criterion as unsure.
   const judges = await judgeProfiles(prepared.config);
-  const report = await testSuite(file, prepared.config, { ...options, ...(judges.length > 1 ? { judges } : {}),
+  const report = await testSuite(file, prepared.config, { ...options, saved: savedSteps(file), ...(judges.length > 1 ? { judges } : {}),
     runOptions: { processPath: prepared.processPath, prepareBundle: prepared.prepareBundle, secrets: await declaredSecrets(file), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } });
   if (!options.ids && !options.casesDir && !options.once && !options.runs && !options.live?.length) recordChecked(file, report);
   return report;

@@ -20,8 +20,11 @@ import { textDiff } from './text-diff.js';
 // that its change breaks comes back with the failure, so the next try can read and test it. Then a
 // gate in this code, which the agent cannot skip, decides: the new check fails on the Method as it was and passes on
 // the new one, every earlier check that passed still passes, the person's own words are unchanged unless they approved
-// the change, and the Method is valid. The gate tests the new check first, and every earlier check only when it
-// passes, all runs at once; the old version runs an earlier check only when the new one fails it. A failed gate goes
+// the change, and the Method is valid. The gate tests the new check first (3 runs in 3 when a model step runs live),
+// and every earlier check only when it passes, all at once: one run each, and 3 runs that must all pass when the first
+// passes only narrowly. A test runs again only the steps that the change touched and the steps after them; the others
+// give the outputs that they gave when the check last passed. The old version runs an earlier check only when the new
+// one fails it. A failed gate goes
 // back to the agent with the exact failure, at most MAX_TRIES times in all. Corrections that wait together go to one
 // session; a failed gate splits them in halves.
 
@@ -45,7 +48,7 @@ export type EarlierCorrection = { id: string; note: string | null; noted_by?: st
 /** What the agent's session did: completed, timed out, or failed with a message. */
 export type SessionResult = { status: 'completed' | 'timeout' | 'failed'; final_text?: string; message?: string; run_dir?: string };
 /** Runs cases as method test does (quality.ts runCases); tests replace it. */
-export type CaseRunner = (file: string, flags: Record<string, never>, options: { casesDir?: string; ids?: string[]; baseline?: string; newIds?: string[]; gate?: boolean; firstRun?: boolean; moreRuns?: number }) => Promise<any>;
+export type CaseRunner = (file: string, flags: Record<string, never>, options: { casesDir?: string; ids?: string[]; baseline?: string; newIds?: string[]; gate?: boolean }) => Promise<any>;
 
 /** The agent session of the learner. Tests replace session with a stub agent that edits the room. */
 export const learnerAgent = {
@@ -414,11 +417,6 @@ function settleCase(path: string, correction: LearnerCorrection) {
   } catch { /* the gate refuses a check that it cannot read */ }
 }
 
-/** A full test of the earlier checks that would take longer than this shows "Fixed" after one run of each. */
-export const LATER_AFTER_MS = 180_000;
-/** The case runs that run at once (the runtime's run places), for the estimate of a test's time. */
-const RUNS_AT_ONCE = 12;
-
 /** The earlier checks that a change broke, as failures for the agent and the people whose checks they are. */
 export function broken(rows: any[], casesDir: string, correction: LearnerCorrection | undefined) {
   const problems: string[] = [], others: { by: string; note: string }[] = [], checks: string[] = [];
@@ -438,17 +436,13 @@ export function broken(rows: any[], casesDir: string, correction: LearnerCorrect
 
 type Final = Omit<CorrectionOutcome, 'id'>;
 /** A failed gate: the failure for the next try, the people whose checks broke, and the IDs of those checks. */
-type Checked = { pass: true; finals: Map<string, Final>; later?: string[] } | { pass: false; failure: string; others?: { by: string; note: string }[]; checks?: string[] };
-/** A change that broke earlier checks after it was applied: the failure for the agent, and the IDs of those checks. */
-export type Undone = { text: string; checks: string[] };
+type Checked = { pass: true; finals: Map<string, Final> } | { pass: false; failure: string; others?: { by: string; note: string }[]; checks?: string[] };
 
 /**
  * The gate: what the agent's work comes to for each correction, or the exact failure for its next try. Method tests
- * the new checks first; only when they pass does it test every earlier check, once per fix. later: when that full
- * test would take longer than LATER_AFTER_MS, each earlier check makes one run now, and Checked.later names the checks
- * whose other runs finishLater makes after the change is applied.
+ * the new checks first; only when they pass does it test every earlier check, once per fix.
  */
-async function gate(ctx: { file: string; base: string; room: string; caseIds: string[]; corrections: LearnerCorrection[]; written: Written; runCases: CaseRunner; later: boolean }): Promise<Checked> {
+async function gate(ctx: { file: string; base: string; room: string; caseIds: string[]; corrections: LearnerCorrection[]; written: Written; runCases: CaseRunner }): Promise<Checked> {
   const { file, base, room, caseIds } = ctx;
   const name = basename(file), baseFile = join(base, name), roomFile = join(room, name);
   const said = readResult(room, caseIds);
@@ -516,38 +510,15 @@ async function gate(ctx: { file: string; base: string; room: string; caseIds: st
   if (problems.length) return { pass: false, failure: problems.join('\n') };
   const { listCases } = await import('@withmethod/runtime/cases.js');
   const earlierIds = (await listCases(roomFile, casesDir)).filter((c: any) => c.status === 'active' && !fixed.includes(c.id)).map((c: any) => c.id as string);
-  // The time of a full test: three runs of each earlier check, RUNS_AT_ONCE at a time, each as long as a run of the new check.
-  const runs = fixed.flatMap(id => mine.get(id)?.candidate?.attempts ?? []);
-  const times = runs.map((a: any) => a.duration_ms).filter((ms: unknown): ms is number => typeof ms === 'number').sort((a, b) => a - b);
-  const live = runs.some((a: any) => a.live_model_steps?.length);
-  const full = Math.ceil(3 * earlierIds.length / RUNS_AT_ONCE) * (times[Math.floor(times.length / 2)] ?? 0);
-  const firstRun = ctx.later && live && full > LATER_AFTER_MS;
-  const rows: any[] = earlierIds.length ? (await ctx.runCases(roomFile, {}, { casesDir, ids: earlierIds, baseline: baseFile, gate: true, ...(firstRun ? { firstRun: true } : {}) })).cases ?? [] : [];
+  const rows: any[] = earlierIds.length ? (await ctx.runCases(roomFile, {}, { casesDir, ids: earlierIds, baseline: baseFile, gate: true })).cases ?? [] : [];
   const { problems: broke, others, checks } = broken(rows, casesDir, ctx.corrections.length === 1 ? ctx.corrections[0] : undefined);
   if (broke.length) return { pass: false, failure: broke.join('\n'), others, checks };
   const earlier = rows.filter(r => ['pass', 'fixed'].includes(r.verdict)).length;
-  const later = rows.filter(r => r.more).map(r => r.id as string);
   for (const id of fixed) {
     const row = mine.get(id), shown = testedOutput(row.candidate);
-    finals.set(id, { outcome: 'fixed', summary: said.get(id)!.summary!, tested: { times: row.candidate?.passes ?? 1, earlier, ...(later.length ? { later: 2 } : {}) }, ...(shown ? { tested_output: shown } : {}) });
+    finals.set(id, { outcome: 'fixed', summary: said.get(id)!.summary!, tested: { times: row.candidate?.passes ?? 1, earlier }, ...(shown ? { tested_output: shown } : {}) });
   }
-  return { pass: true, finals, ...(later.length ? { later } : {}) };
-}
-
-/**
- * The rest of a test that showed "Fixed" after one run of each earlier check: the other runs of each check in later,
- * on the room (the version that was applied) against the base. Undefined when every run passed; else the failure for
- * the agent (with the IDs of the checks that broke) and the earlier corrections it broke, as people read them.
- */
-export async function finishLater(learned: Learned, file: string, runCases: CaseRunner) {
-  if (!learned.later?.length || !learned.room || !learned.base) return undefined;
-  const name = basename(file), casesDir = join(learned.room, 'cases');
-  const report = await runCases(join(learned.room, name), {}, { casesDir, ids: learned.later, baseline: join(learned.base, name), gate: true, moreRuns: 2 });
-  const rows: any[] = report.cases ?? [];
-  const { problems, checks } = broken(rows, casesDir, undefined);
-  if (!problems.length) return undefined;
-  const names = rows.filter(r => r.verdict === 'regression' || r.verdict === 'unverifiable').map(r => correctionName(caseAuthor(join(casesDir, r.id))));
-  return { failure: { text: problems.join('\n'), checks } as Undone, broke: names };
+  return { pass: true, finals };
 }
 
 // ---------- The earlier checks ----------
@@ -572,19 +543,17 @@ export function restoreEarlier(base: string, room: string) {
 
 /**
  * What the learner did with its corrections, one outcome for each, in their order. A fixed or no_change_needed
- * outcome leaves its work in room. later: earlier checks whose other runs finishLater makes. split: several
- * corrections found no change together; each half is fixed again on its own.
+ * outcome leaves its work in room. split: several corrections found no change together; each half is fixed again on its
+ * own.
  */
-export type Learned = { outcomes: CorrectionOutcome[]; room?: string; base?: string; changed: string[]; diff: string; written?: Written; tries: number; log: string; later?: string[]; split?: boolean };
+export type Learned = { outcomes: CorrectionOutcome[]; room?: string; base?: string; changed: string[]; diff: string; written?: Written; tries: number; log: string; split?: boolean };
 
 /**
  * Learn from corrections in a private copy of the Method's folder, in workDir: up to MAX_TRIES sessions of the agent
  * for one correction, each checked by the gate, or one session for several corrections together (a failed gate splits
- * them). Returns the outcomes; for a fixed one, the room holds the change, with its diff. later: the gate may show
- * "Fixed" after one run of each earlier check when the full test is slow. failure: why an earlier change for these
- * corrections was undone, for the agent.
+ * them). Returns the outcomes; for a fixed one, the room holds the change, with its diff.
  */
-export async function learnCorrection(file: string, corrections: LearnerCorrection[], options: { earlier: EarlierCorrection[]; caseIds: string[]; model: LearnerModel; workDir: string; runCases: CaseRunner; later?: boolean; failure?: Undone; limitMs?: number; now?: () => number }): Promise<Learned> {
+export async function learnCorrection(file: string, corrections: LearnerCorrection[], options: { earlier: EarlierCorrection[]; caseIds: string[]; model: LearnerModel; workDir: string; runCases: CaseRunner; limitMs?: number; now?: () => number }): Promise<Learned> {
   const now = options.now ?? Date.now, deadline = now() + (options.limitMs ?? FIX_LIMIT_MS);
   const folder = dirname(resolve(file)), name = basename(file), several = corrections.length > 1, maxTries = several ? 1 : MAX_TRIES;
   const base = join(options.workDir, 'base'), room = join(options.workDir, 'room');
@@ -599,9 +568,9 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
   const written = readWritten(folder);
   await writeBrief(room, base, name, corrections, options.earlier, options.caseIds, written);
   // The session gets the checks of earlier corrections only when one broke: the gate puts them all back.
-  const given = new Set([...options.caseIds, ...(options.failure?.checks ?? [])]);
+  const given = new Set(options.caseIds);
   hideEarlier(room, [...given]);
-  const prompt = learnerPrompt(name, options.caseIds) + (options.failure ? `\n\nAn earlier change for ${several ? 'these corrections' : 'this correction'} passed its first tests and was applied. Then Method tested the earlier checks again, and the change broke one, so Method undid it:\n${options.failure.text}\nFind a change that keeps every earlier check passing.` : '');
+  const prompt = learnerPrompt(name, options.caseIds);
   const noFix = (outcome: string) => ({ outcome: 'no_fix_found' as const, detail: outcome });
   // The tokens of the fix: each session and each test run of the gate.
   let tokens = 0;
@@ -619,7 +588,7 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
     if (session.status === 'timeout') return done(each(noFix(`the time for one correction (${FIX_LIMIT_MS / 3_600_000} hours) ran out`)), tries);
     if (session.status === 'failed') throw Error(session.message ?? 'The learner\'s session stopped.');
     restoreEarlier(base, room);
-    const checked = await gate({ file, base, room, caseIds: options.caseIds, corrections, written, runCases, later: !!options.later });
+    const checked = await gate({ file, base, room, caseIds: options.caseIds, corrections, written, runCases });
     if (checked.pass) {
       const outcomes = corrections.map((c, i) => ({ id: c.id, ...checked.finals.get(options.caseIds[i]!)! }) as CorrectionOutcome);
       const fixed = outcomes.some(o => o.outcome === 'fixed'), kept = outcomes.filter(o => o.outcome === 'no_change_needed').map(o => options.caseIds[outcomes.indexOf(o)]!);
@@ -629,7 +598,7 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
       const diff = fixed ? changeDiff(base, room, changed.filter(p => !p.startsWith('cases/'))) : '';
       for (const o of outcomes) if (o.outcome === 'fixed') o.diff = diff;
       const next = nextWritten(textPlaces(parseDocumentValue(readFileSync(join(base, name), 'utf8')), base), textPlaces(parseDocumentValue(readFileSync(join(room, name), 'utf8')), room), written);
-      return { outcomes: withTokens(outcomes), room, base, changed, diff, written: next, tries, log: options.workDir, ...(checked.later ? { later: checked.later } : {}) };
+      return { outcomes: withTokens(outcomes), room, base, changed, diff, written: next, tries, log: options.workDir };
     }
     failure = checked.failure; others = checked.others;
     writeFileSync(join(tryDir, 'gate.txt'), failure + '\n');
