@@ -194,8 +194,33 @@ export async function testCommand(args: string[]) {
     baseline: values.baseline ? authoringPath(values.baseline) : undefined, newIds: values.new ?? [], once: !!values.once,
     runs: count(values.runs, "--runs"), minPass: count(values["min-pass"], "--min-pass"), live: values.live?.flatMap(step => step.split(",")).map(step => step.trim()).filter(Boolean),
     ...(values["no-judge-cache"] ? { judgeCache: false } : {}), keepDir: values["keep-dir"] ? authoringPath(values["keep-dir"]) : undefined });
-  print(values.baseline ? { ...report, comparison: baselineAnswer(report) } : report);
+  const shown = printedReport(report);
+  print(values.baseline ? { ...shown, comparison: baselineAnswer(report) } : shown);
   process.exitCode = report.passed ? 0 : 1;
+}
+
+/** The longest reason of a passing criterion in the printed report. */
+const PASS_REASON_CHARS = 300;
+/**
+ * The report as method test prints it: a case's first passing run shows its output, its other passing runs leave it
+ * out, and a passing criterion's reason is cut to PASS_REASON_CHARS. A failing run keeps everything. The reader (often
+ * an agent, whose every later turn reads it again) gets what failed, not three copies of a result that passed.
+ */
+export function printedReport(report: any) {
+  const cut = (text: unknown) => typeof text === "string" && text.length > PASS_REASON_CHARS ? `${text.slice(0, PASS_REASON_CHARS)}…` : text;
+  const side = (side: any) => {
+    if (!Array.isArray(side?.attempts)) return side;
+    let shown = false;
+    const attempts = side.attempts.map((a: any) => {
+      if (a?.status !== "pass") return a;
+      const results = Array.isArray(a.results) ? a.results.map((r: any) => r?.status === "pass" ? { ...r, reason: cut(r.reason) } : r) : a.results;
+      if (!shown && a.output !== undefined) { shown = true; return { ...a, results }; }
+      const { output: _output, ...rest } = a;
+      return { ...rest, results };
+    });
+    return { ...side, attempts };
+  };
+  return { ...report, cases: (report.cases ?? []).map((row: any) => ({ ...row, ...(row.candidate ? { candidate: side(row.candidate) } : {}), ...(row.baseline ? { baseline: side(row.baseline) } : {}) })) };
 }
 
 /**
@@ -234,6 +259,14 @@ export async function caseGate(file: string, accept: string[] = [], reason?: str
   return { report, line: failing.length ? `Cases: ${report.cases.length - failing.length} of ${report.cases.length} passed; accepted failing ${failing.map((c: any) => c.id).join(", ")}.` : `Cases: ${report.cases.length} of ${report.cases.length} passed.` };
 }
 
+/** The checks of --expect FILE: a JSON list. A single check, or a list under a key, is refused with the form to use. */
+export function expectList(path: string | undefined): any[] {
+  if (!path) return [];
+  const value = json(path);
+  if (Array.isArray(value)) return value;
+  throw Error(`${path} must hold a JSON list of checks, such as [{"kind": "equals", "ref": "outputs.NAME", "value": …}] or [{"kind": "predicate", "runtime": "node", "entrypoint": "check.mjs"}], not ${value && typeof value === "object" ? `an object with ${Object.keys(value).length ? `the keys ${Object.keys(value).slice(0, 5).join(", ")}` : "no keys"}` : typeof value}. Put the checks themselves in the list.`);
+}
+
 export async function caseCommand(args: string[]) {
   const text = { type: "string" } as const;
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { run: text, "passing-run": text, id: text, note: text, rubric: { type: "string", multiple: true }, ref: text, context: { type: "string", multiple: true }, expect: text,
@@ -252,7 +285,7 @@ export async function caseCommand(args: string[]) {
   const privacy = casesPrivacyWarning(methodFile, casesDir);
   if (privacy) process.stderr.write(privacy + "\n");
   print(await createCase({ methodFile, runDir: values.run ? authoringPath(values.run) : undefined, passingRun: values["passing-run"] ? authoringPath(values["passing-run"]) : undefined,
-    id: values.id, note: values.note, author: values.author ?? await signedInName(), rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: json(values.expect) ?? [],
+    id: values.id, note: values.note, author: values.author ?? await signedInName(), rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: expectList(values.expect),
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
     retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, acceptConflict: values["accept-conflict"], config: prepared.config,
     options: { runOptions: { processPath: prepared.processPath, secrets: await declaredSecrets(methodFile), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } } }));

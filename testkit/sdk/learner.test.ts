@@ -210,7 +210,9 @@ it('changes the person\'s words only after they answered a question that quotes 
 it('a change that breaks an earlier check gets the failure, tries again, and ends held for the other person after 3 tries', async () => {
   const root = setup();
   const { file, badRun } = await project(root);
+  const had: boolean[] = [];
   const everyClauseToLegal = async (dir: string) => {
+    had.push(existsSync(join(dir, 'cases', 'correction-term', 'case.json')));
     await room.check(dir);
     room.write(dir, 'write.mjs', `import{readFileSync}from'node:fs';const{clause}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({reply:\`Thanks. The \${clause} clause goes to Legal.\`}));\n`);
     room.result(dir, { outcome: 'fixed', summary: 'Replies now send clauses to Legal.' });
@@ -219,6 +221,9 @@ it('a change that breaks an earlier check gets the failure, tries again, and end
   const learned = await learn(file, correction(badRun), root);
   expect(prompts).toHaveLength(3);
   expect(prompts[1]).toContain('Your change breaks the check correction-term, from Gráinne\'s correction ("Accept the term clause")');
+  // The first try did not have the earlier check; the next tries have the one that broke, to read and test it.
+  expect(had).toEqual([false, true, true]);
+  expect(prompts[1]).toContain('This check is now in cases/ for your next try: cases/correction-term. Read it, and test it with method test --case ID.');
   expect(learned.outcome).toEqual({ id: JUDGMENT, outcome: 'held', by: 'Gráinne', detail: 'Accept the term clause.' });
   expect(learned.changed).toEqual([]);
   // The exact failures stay in the work folder.
@@ -421,7 +426,7 @@ it('the learner tests only its new check; Method tests the new check first, and 
   // A check that still fails on the change: no earlier check runs.
   const prompts = stub(async dir => { await room.check(dir, 'Thanks. The non-compete clause goes to Legal today.'); await codeStep(dir); }, async dir => { rmSync(join(dir, 'cases', CASE), { recursive: true }); await codeStep(dir); });
   await learnCorrection(file, [correction(badRun)], { earlier: [], caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: spy });
-  expect(prompts[0]).toContain(`method test reply.method --case ${CASE}. You need not test the earlier checks: when you finish, Method tests every earlier check itself`);
+  expect(prompts[0]).toContain(`method test reply.method --case ${CASE}. The checks of earlier corrections are not in this folder: when you finish, Method tests every earlier check itself`);
   expect(prompts[0]).not.toMatch(/method test reply\.method\. Every check/);
   expect(calls[0]).toMatchObject({ ids: [CASE], newIds: [CASE], gate: true });
   // The failed new check went back to the agent before any earlier check ran; its next try passed, and then the earlier one ran once.
@@ -491,8 +496,11 @@ it('a slow Method shows Fixed after one test of each earlier correction; a later
     }
     return report;
   }) as any;
-  const prompts = stub(codeStep);
+  const had: boolean[] = [];
+  const prompts = stub(async dir => { had.push(existsSync(join(dir, 'cases', 'correction-term'))); await codeStep(dir); });
   await backgroundFix(client, file, [JUDGMENT], { runCases: spy });
+  // The fix again has the check that broke; the first one had no earlier check.
+  expect(had).toEqual([false, true]);
   expect(seen.filter(o => o.firstRun)).toHaveLength(1);
   expect(seen.filter(o => o.moreRuns === 2)).toHaveLength(1);
   // The fix was undone and fixed again with the failure, tested in full.
@@ -536,4 +544,55 @@ it('a change whose later tests did not end (the fix stopped) is undone, and the 
   expect(prompts).toHaveLength(1);
   expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 1 } } });
   expect(client.calls.filter((c: any) => c.verb === 'PUT').map((c: any) => c.body.reason.split(':')[0])).toEqual(['Method fixed it from a correction', 'Undid Method\'s change', 'Method fixed it from a correction']);
+}, 60_000);
+
+it('a fix reads only what its correction needs: the same brief at 1 and at 12 earlier checks, which Method tests itself', async () => {
+  const brief = async (earlierChecks: number) => {
+    const root = setup();
+    const { file, termRun, badRun } = await project(root);
+    for (let i = 2; i <= earlierChecks; i++) await createCase({ methodFile: file, passingRun: termRun, id: `correction-term-${i}`, note: `Accept the term clause (${i}).`, author: 'Gráinne', expect: [{ kind: 'equals', ref: 'outputs.reply', value: 'Thanks. We accept the term clause.' }] } as any);
+    let seen: { cases: string[]; bytes: number } | undefined;
+    const prompts = stub(async dir => {
+      const { readdirSync, statSync } = await import('node:fs');
+      // What the session can read: every file of its room except the corrected run's own folder.
+      const size = (path: string): number => statSync(path).isDirectory() ? readdirSync(path).filter(n => !['run', 'node_modules'].includes(n)).reduce((t, n) => t + size(join(path, n)), 0) : statSync(path).size;
+      seen = { cases: existsSync(join(dir, 'cases')) ? readdirSync(join(dir, 'cases')) : [], bytes: size(dir) - size(join(dir, '.fix', 'corrections.md')) };
+      await codeStep(dir);
+    });
+    const earlier = Array.from({ length: earlierChecks }, (_, i) => ({ id: 'jdg_' + String(i).repeat(32).slice(0, 32), note: 'Accept the term clause.', noted_by: 'Gráinne', created_at: '2026-10-27T10:00:00Z', outcome: 'fixed' }));
+    const learned = await learnCorrection(file, [correction(badRun)], { earlier, caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
+    return { seen: seen!, prompt: prompts[0]!, outcome: learned.outcomes[0]!, corrections: readFileSync(join(root, 'work', 'room', '.fix', 'corrections.md'), 'utf8') };
+  };
+  const one = await brief(1), twelve = await brief(12);
+  // The session had only its new check, and the same files, whatever the number of earlier checks.
+  expect(one.seen.cases).toEqual([]);
+  expect(twelve.seen.cases).toEqual([]);
+  expect(twelve.seen.bytes).toBe(one.seen.bytes);
+  expect(twelve.prompt).toBe(one.prompt);
+  expect(one.prompt).not.toContain('cases/ (the checks of earlier corrections)');
+  // Each earlier correction is one short entry; the gate still tested every earlier check.
+  expect(twelve.corrections).toContain('Their checks are not in this folder.');
+  expect(twelve.corrections.length - one.corrections.length).toBeLessThan(11 * 200);
+  expect(one.outcome).toMatchObject({ outcome: 'fixed', tested: { earlier: 1 } });
+  expect(twelve.outcome).toMatchObject({ outcome: 'fixed', tested: { earlier: 12 } });
+}, 120_000);
+
+it('the brief has the guide of a fix, not the whole manual, and a long step output is cut with the whole value in a file', async () => {
+  const root = setup();
+  const { file } = await project(root);
+  const dir = join(root, 'cache', 'runs', 'aaaaaaaa-0000-4000-8000-000000000003');
+  await runCurrentMethod(file, node, { runDir: dir, inputs: { clause: 'x'.repeat(6000) } });
+  stub(async dir => room.result(dir, { outcome: 'no_fix_found', detail: 'Nothing.' }));
+  await learnCorrection(file, [correction(dir)], { earlier: [], caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
+  const fix = join(root, 'work', 'room', '.fix');
+  const guide = readFileSync(join(fix, 'guide.md'), 'utf8');
+  expect(guide).toContain('# A Method that just works');
+  expect(guide).toContain('## case new');
+  expect(guide).not.toContain('# Comparisons');
+  expect(guide).not.toContain('# Command reference');
+  expect(guide.length).toBeLessThan(60_000);
+  const run = readFileSync(join(fix, 'run.md'), 'utf8');
+  expect(run).toContain('The first 4000 of');
+  expect(run).toContain('the whole value is in .fix/run-outputs/reply.json.');
+  expect(readFileSync(join(fix, 'run-outputs', 'reply.json'), 'utf8')).toContain('x'.repeat(6000));
 }, 60_000);

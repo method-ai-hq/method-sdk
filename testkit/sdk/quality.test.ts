@@ -6,7 +6,7 @@ import { createServer } from 'node:net';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parse, stringify } from 'yaml';
-import { effectCommand, observeCommand, caseCommand, testCommand, observerLibrary, casesPrivacyWarning, caseGate, casesNotice } from '../../packages/sdk/src/quality.js';
+import { effectCommand, observeCommand, caseCommand, testCommand, observerLibrary, casesPrivacyWarning, caseGate, casesNotice, printedReport, expectList } from '../../packages/sdk/src/quality.js';
 import { runMethod } from '@withmethod/runtime';
 
 const roots: string[] = [];
@@ -188,4 +188,29 @@ it('judges rubric criteria with the account model when signed in', async () => {
   expect(prepared.hostedModels).toBeTruthy();
   expect(requests).toContain('/api/cli/models/default');
   vi.unstubAllGlobals();
+});
+
+it('method test prints a passing case\'s output once and cuts its passing reasons; a failing run shows everything', () => {
+  const big = 'x'.repeat(5000), pass = { status: 'pass', output: { result: big }, results: [{ kind: 'equals', status: 'pass', reason: `result = ${big}` }] };
+  const fail = { status: 'fail', output: { result: 'no' }, results: [{ kind: 'equals', status: 'fail', reason: `result = ${big}` }] };
+  const report = { passed: false, cases: [{ id: 'a', verdict: 'pass', candidate: { status: 'pass', attempts: [pass, pass, pass] } }, { id: 'b', verdict: 'fail', candidate: { status: 'fail', attempts: [pass, fail] }, baseline: { status: 'fail', attempts: [fail] } }] };
+  const shown = printedReport(report);
+  const [a, b] = shown.cases;
+  expect(a.candidate.attempts.map((x: any) => x.output?.result.length)).toEqual([5000, undefined, undefined]);
+  expect(a.candidate.attempts.every((x: any) => x.results[0].reason.length === 301)).toBe(true);
+  expect(b.candidate.attempts[1]).toEqual(fail);
+  expect(b.baseline.attempts[0]).toEqual(fail);
+  expect(JSON.stringify(shown).length).toBeLessThan(JSON.stringify(report).length / 2);
+  // The report itself is unchanged: the gate reads every output.
+  expect(report.cases[0]!.candidate.attempts[2]).toBe(pass);
+});
+
+it('method case new --expect takes a JSON list of checks, and says the form when the file holds one object', () => {
+  const root = temp();
+  writeFileSync(join(root, 'list.json'), JSON.stringify([{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10 EUR' }]));
+  writeFileSync(join(root, 'one.json'), JSON.stringify({ expect: [{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10 EUR' }] }));
+  expect(expectList(join(root, 'list.json'))).toEqual([{ kind: 'equals', ref: 'outputs.report', value: 'Paid 10 EUR' }]);
+  expect(() => expectList(join(root, 'one.json'))).toThrow('must hold a JSON list of checks, such as [{"kind": "equals", "ref": "outputs.NAME", "value": …}]');
+  expect(() => expectList(join(root, 'one.json'))).toThrow('not an object with the keys expect');
+  expect(expectList(undefined)).toEqual([]);
 });

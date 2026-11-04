@@ -3,7 +3,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { methodIssues } from '@withmethod/runtime/document.js';
 import { loadWorkflow, parseDocumentValue } from '../../workflow-language/src/validate.js';
-import { authoringGuide } from './method-help.js';
+import { authoringGuide, renderCommand } from './method-help.js';
 import { methodContent } from './versions.js';
 import { removeTree, writePrivateJson } from './files.js';
 import type { CorrectionOutcome, CouldNotTestReason, TestedOutput } from './fix-lines.js';
@@ -13,7 +13,11 @@ import { textDiff } from './text-diff.js';
 // Method's learner. A person corrected a run; one agent session (Claude Code, or Codex when that is the Method's agent,
 // on the person's own subscription, on the model and effort of the Method's own agent steps) works in a private copy
 // of the Method's folder, as a person who builds Methods with the Method CLI would: it writes the check of the
-// correction, changes whatever the Method needs, and runs method validate and method test on its new check. Then a
+// correction, changes whatever the Method needs, and runs method validate and method test on its new check. The
+// session reads only what this correction needs, so its cost does not grow with the corrections before it: the
+// correction, its run (each step output cut to OUTPUT_CHARS, the whole value in a file), one line for each earlier
+// correction, and the parts of the guide that a fix uses. The checks of earlier corrections are not in its copy; a check
+// that its change breaks comes back with the failure, so the next try can read and test it. Then a
 // gate in this code, which the agent cannot skip, decides: the new check fails on the Method as it was and passes on
 // the new one, every earlier check that passed still passes, the person's own words are unchanged unless they approved
 // the change, and the Method is valid. The gate tests the new check first, and every earlier check only when it
@@ -236,7 +240,13 @@ const day = (at?: string | null) => at ? at.slice(0, 10) : 'date unknown';
 const runName = (k: number, n: number) => n === 1 ? 'run' : `run-${k}`;
 const correctedName = (k: number, n: number) => n === 1 ? 'corrected.txt' : `corrected-${k}.txt`;
 
-/** What a reader needs from a run: its inputs, outputs, result, transcripts and files, in .fix/NAME.md. */
+/** The characters of one step output in .fix/NAME.md; a longer output is cut there and is whole in .fix/NAME-outputs/. */
+export const OUTPUT_CHARS = 4000;
+
+/**
+ * What a reader needs from a run: its inputs, result, step outputs, transcripts and files, in .fix/NAME.md. A step
+ * output longer than OUTPUT_CHARS is cut, and its whole value is in .fix/NAME-outputs/KEY.json.
+ */
 export async function writeRun(room: string, correction: Pick<LearnerCorrection, 'run_dir'>, name: string) {
   const fix = join(room, '.fix');
   // The run as it is: its folder for method case new, and what a reader needs from it.
@@ -255,15 +265,32 @@ export async function writeRun(room: string, correction: Pick<LearnerCorrection,
     }
   };
   walk(join(fix, name, 'artifacts'));
+  const output = (key: string, value: unknown) => {
+    const text = show(value, Infinity);
+    if (text.length <= OUTPUT_CHARS) return [`### ${key}`, '', '```', text, '```', ''];
+    const whole = `.fix/${name}-outputs/${key.replace(/[^\w.-]+/g, '_')}.json`;
+    mkdirSync(join(room, dirname(whole)), { recursive: true });
+    writeFileSync(join(room, whole), JSON.stringify(value, null, 2) + '\n');
+    return [`### ${key}`, '', `The first ${OUTPUT_CHARS} of ${text.length} characters; the whole value is in ${whole}.`, '', '```', clip(text, OUTPUT_CHARS), '```', ''];
+  };
   writeFileSync(join(fix, `${name}.md`), ['# The run that the person corrected', '', `Its folder is .fix/${name} (give it to method case new as --run .fix/${name}).`, '',
     '## Inputs', '', '```json', show(outcome.inputs), '```', '', '## Result', '', '```', show(outcome.result), '```', '',
-    '## Step outputs', '', ...Object.entries(outcome.outputs ?? {}).flatMap(([key, value]) => [`### ${key}`, '', '```', show(value), '```', '']),
+    '## Step outputs', '', ...Object.entries(outcome.outputs ?? {}).flatMap(([key, value]) => output(key, value)),
     '## What its agent steps did (transcripts)', '', ...(transcripts.length ? transcripts.map(t => `- ${t}`) : ['None.']), '',
     '## Files it wrote', '', ...(written_files.length ? written_files.map(f => `- ${f}`) : ['None.']), ''].join('\n'));
 }
 
-/** Write the brief of the corrections in .fix/ of the room. */
-async function writeBrief(room: string, file: string, corrections: LearnerCorrection[], earlier: EarlierCorrection[], caseIds: string[], written: Written) {
+/**
+ * The parts of the guide that a fix uses: building a Method, its concepts and recipes, and the commands of a fix. Not
+ * the comparisons, the execution setup or the reference of every command.
+ */
+export function learnerGuide() {
+  return [authoringGuide('start'), authoringGuide('concepts'), authoringGuide('recipes'),
+    '# The commands of a fix', '', ...['case new', 'test', 'validate', 'learned'].map(name => renderCommand(name, false))].join('\n\n');
+}
+
+/** Write the brief of the corrections in .fix/ of the room. base: the Method as it was, with every earlier check. */
+async function writeBrief(room: string, base: string, file: string, corrections: LearnerCorrection[], earlier: EarlierCorrection[], caseIds: string[], written: Written) {
   const fix = join(room, '.fix'), n = corrections.length;
   mkdirSync(fix, { recursive: true, mode: 0o700 });
   const words = (correction: LearnerCorrection, k: number) => [`${correction.noted_by ? `${correction.noted_by} wrote` : 'The person wrote'} (${day(correction.created_at)}):`, '', correction.note?.trim() || 'The person marked this result wrong, without words.', '',
@@ -276,15 +303,15 @@ async function writeBrief(room: string, file: string, corrections: LearnerCorrec
     if (correction.corrected !== undefined && correction.corrected !== null) writeFileSync(join(fix, correctedName(i + 1, n)), show(correction.corrected, 1_000_000) + '\n');
     await writeRun(room, correction, runName(i + 1, n));
   }
-  const cases = join(room, 'cases');
-  writeFileSync(join(fix, 'corrections.md'), ['# Earlier corrections of this Method, oldest first', '',
+  const cases = join(base, 'cases');
+  writeFileSync(join(fix, 'corrections.md'), ['# Earlier corrections of this Method, oldest first', '', 'Their checks are not in this folder. When you finish, Method tests each of them on your change, and gives you any that it breaks.', '',
     ...(earlier.length ? earlier.map((c, i) => {
       const check = ['correction-' + c.id.replace(/^jdg_/, '').slice(0, 12)].find(id => existsSync(join(cases, id, 'case.json')));
       return [`${i + 1}. ${day(c.created_at)}${c.noted_by ? `, ${c.noted_by}` : ''}: ${c.note?.trim() || '(no words)'}`,
         ...(c.answer?.trim() ? [`   Their answer to a question: ${c.answer.trim()}`] : []),
-        `   What happened: ${c.outcome ?? 'not decided yet'}${c.detail ? ` (${c.detail})` : ''}.`, `   Its check: ${check ? `cases/${check}` : 'none'}.`].join('\n');
+        `   What happened: ${c.outcome ?? 'not decided yet'}${c.detail ? ` (${c.detail})` : ''}.`, `   Its check: ${check ?? 'none'}.`].join('\n');
     }) : ['None.']), ''].join('\n'));
-  writeFileSync(join(fix, 'guide.md'), `${authoringGuide('all')}\n`);
+  writeFileSync(join(fix, 'guide.md'), `${learnerGuide()}\n`);
   // The paragraphs that Method wrote itself; every other paragraph of the instructions is the person's.
   const document = parseDocumentValue(readFileSync(join(room, basename(file)), 'utf8'));
   const mine = [...textPlaces(document, room)].flatMap(([place, text]) => {
@@ -307,14 +334,15 @@ export function learnerPrompt(file: string, caseIds: string[]) {
 Read these first:
 - .fix/correction.md: ${one ? 'the correction in the person\'s words' : 'each correction in the person\'s words, with its run and the ID of its check'}.
 - ${one ? '.fix/run.md and .fix/run/: the run that the person corrected' : '.fix/run-1.md and .fix/run-1/, .fix/run-2.md and .fix/run-2/, ...: each run that a person corrected'}: its inputs, its step outputs, its result, what its agent steps did, and the files it wrote.
-- .fix/corrections.md: every earlier correction of this Method, with its check and what happened to it.
-- .fix/guide.md: how to build a Method that just works, and the Method CLI.
-- ${file}, the files it names, learned.json (rules learned from earlier corrections) and cases/ (the checks of earlier corrections).
+- .fix/corrections.md: every earlier correction of this Method, with what happened to it.
+- .fix/guide.md: how to build a Method that just works, and the commands of a fix.
+- ${file}, the files it names, and learned.json (rules learned from earlier corrections).
+Read each file once.
 
 Then:
 1. Write the check of ${one ? 'this correction' : 'each correction'}: method case new ${file} --run ${one ? '.fix/run' : 'ITS RUN'} --id ${one ? id : 'ITS CHECK ID'} --note "THE PERSON'S WORDS" --rubric "ONE PLAIN SENTENCE THAT A RIGHT RESULT MEETS" (repeat --rubric; or --expect FILE, for example with a predicate script for an exact rule, a form or an action). It must fail on ${one ? 'this run' : 'its run'} and pass on a right result. Check what the correction asks for, and keep what it left: when the person names some parts of a result as wrong (some answers of several, some lines or fields), they read the rest and left it, so the check also requires each part that they did not correct to stay as it is in this run (a predicate script with --expect does this exactly). Leave a part out only when the correction says that it was not checked.
 2. Find the cause and change the Method. You may change anything: a prompt, a learned rule in learned.json, a new run step with a data file, a check, a split of a step that does too much, examples. Put exact rules, values, dates and lists in code or data; use a model step only for judgement; one task per prompt; add a check on an output that matters.
-3. Run method validate ${file} and ${one ? `method test ${file} --case ${id}` : `method test ${file} --case ID for each new check`}. You need not test the earlier checks: when you finish, Method tests every earlier check itself, and gives you any that your change breaks.
+3. Run method validate ${file} and ${one ? `method test ${file} --case ${id}` : `method test ${file} --case ID for each new check`}. The checks of earlier corrections are not in this folder: when you finish, Method tests every earlier check itself, and gives you any that your change breaks.
 4. Write .fix/result.json, ${one ? `one of:
    ${outcomes}` : `with one outcome for each check ID: {"outcomes": {"CHECK ID": OUTCOME, ...}}, where each OUTCOME is one of:
    ${outcomes}`}
@@ -393,21 +421,26 @@ const RUNS_AT_ONCE = 12;
 
 /** The earlier checks that a change broke, as failures for the agent and the people whose checks they are. */
 export function broken(rows: any[], casesDir: string, correction: LearnerCorrection | undefined) {
-  const problems: string[] = [], others: { by: string; note: string }[] = [];
+  const problems: string[] = [], others: { by: string; note: string }[] = [], checks: string[] = [];
   for (const row of rows) {
     const broke = row.verdict === 'regression' || (row.verdict === 'unverifiable' && row.baseline?.status !== 'unverifiable');
     if (!broke) continue;
+    checks.push(row.id);
     const made = caseAuthor(join(casesDir, row.id));
     problems.push(`${row.verdict === 'regression' ? 'Your change breaks' : 'Your change makes it impossible to run safely'} the check ${row.id}, from ${correctionName({ author: made.author, note: made.note })}${row.verdict === 'regression' ? `: ${failReasons(row.candidate)}` : ''}.`);
     others.push(made.author && correction?.noted_by && made.author !== correction.noted_by ? { by: made.author, note: made.note } : { by: '', note: made.note });
   }
   const notRun = rows.filter(r => r.verdict === 'not_run').length;
   if (problems.length && notRun) problems.push(`Method stopped testing at ${problems.length === 1 ? 'this failure' : 'these failures'}: ${notRun} other earlier check${notRun === 1 ? '' : 's'} did not run yet.`);
-  return { problems, others };
+  if (checks.length) problems.push(`${checks.length === 1 ? 'This check is' : 'These checks are'} now in cases/ for your next try: ${checks.map(id => `cases/${id}`).join(', ')}. Read ${checks.length === 1 ? 'it' : 'them'}, and test ${checks.length === 1 ? 'it' : 'each one'} with method test --case ID.`);
+  return { problems, others, checks };
 }
 
 type Final = Omit<CorrectionOutcome, 'id'>;
-type Checked = { pass: true; finals: Map<string, Final>; later?: string[] } | { pass: false; failure: string; others?: { by: string; note: string }[] };
+/** A failed gate: the failure for the next try, the people whose checks broke, and the IDs of those checks. */
+type Checked = { pass: true; finals: Map<string, Final>; later?: string[] } | { pass: false; failure: string; others?: { by: string; note: string }[]; checks?: string[] };
+/** A change that broke earlier checks after it was applied: the failure for the agent, and the IDs of those checks. */
+export type Undone = { text: string; checks: string[] };
 
 /**
  * The gate: what the agent's work comes to for each correction, or the exact failure for its next try. Method tests
@@ -490,8 +523,8 @@ async function gate(ctx: { file: string; base: string; room: string; caseIds: st
   const full = Math.ceil(3 * earlierIds.length / RUNS_AT_ONCE) * (times[Math.floor(times.length / 2)] ?? 0);
   const firstRun = ctx.later && live && full > LATER_AFTER_MS;
   const rows: any[] = earlierIds.length ? (await ctx.runCases(roomFile, {}, { casesDir, ids: earlierIds, baseline: baseFile, gate: true, ...(firstRun ? { firstRun: true } : {}) })).cases ?? [] : [];
-  const { problems: broke, others } = broken(rows, casesDir, ctx.corrections.length === 1 ? ctx.corrections[0] : undefined);
-  if (broke.length) return { pass: false, failure: broke.join('\n'), others };
+  const { problems: broke, others, checks } = broken(rows, casesDir, ctx.corrections.length === 1 ? ctx.corrections[0] : undefined);
+  if (broke.length) return { pass: false, failure: broke.join('\n'), others, checks };
   const earlier = rows.filter(r => ['pass', 'fixed'].includes(r.verdict)).length;
   const later = rows.filter(r => r.more).map(r => r.id as string);
   for (const id of fixed) {
@@ -504,17 +537,35 @@ async function gate(ctx: { file: string; base: string; room: string; caseIds: st
 /**
  * The rest of a test that showed "Fixed" after one run of each earlier check: the other runs of each check in later,
  * on the room (the version that was applied) against the base. Undefined when every run passed; else the failure for
- * the agent and the earlier corrections it broke, as people read them.
+ * the agent (with the IDs of the checks that broke) and the earlier corrections it broke, as people read them.
  */
 export async function finishLater(learned: Learned, file: string, runCases: CaseRunner) {
   if (!learned.later?.length || !learned.room || !learned.base) return undefined;
   const name = basename(file), casesDir = join(learned.room, 'cases');
   const report = await runCases(join(learned.room, name), {}, { casesDir, ids: learned.later, baseline: join(learned.base, name), gate: true, moreRuns: 2 });
   const rows: any[] = report.cases ?? [];
-  const { problems } = broken(rows, casesDir, undefined);
+  const { problems, checks } = broken(rows, casesDir, undefined);
   if (!problems.length) return undefined;
   const names = rows.filter(r => r.verdict === 'regression' || r.verdict === 'unverifiable').map(r => correctionName(caseAuthor(join(casesDir, r.id))));
-  return { failure: problems.join('\n'), broke: names };
+  return { failure: { text: problems.join('\n'), checks } as Undone, broke: names };
+}
+
+// ---------- The earlier checks ----------
+
+/** The checks in the cases/ folder of a copy, by ID. */
+function checkIds(folder: string) {
+  try { return readdirSync(join(folder, 'cases'), { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name); } catch { return []; }
+}
+/**
+ * Take the checks of earlier corrections out of the room, except keep: the session reads only what this correction
+ * needs, so its cost does not grow with the corrections before it. base keeps every check.
+ */
+export function hideEarlier(room: string, keep: string[]) {
+  for (const id of checkIds(room)) if (!keep.includes(id)) removeTree(join(room, 'cases', id));
+}
+/** Put every earlier check back in the room from base, for the gate. A check that the session wrote stays, so the gate sees a change to it. */
+export function restoreEarlier(base: string, room: string) {
+  for (const id of checkIds(base)) if (!existsSync(join(room, 'cases', id))) cpSync(join(base, 'cases', id), join(room, 'cases', id), { recursive: true, verbatimSymlinks: true });
 }
 
 // ---------- One correction, or several together ----------
@@ -533,7 +584,7 @@ export type Learned = { outcomes: CorrectionOutcome[]; room?: string; base?: str
  * "Fixed" after one run of each earlier check when the full test is slow. failure: why an earlier change for these
  * corrections was undone, for the agent.
  */
-export async function learnCorrection(file: string, corrections: LearnerCorrection[], options: { earlier: EarlierCorrection[]; caseIds: string[]; model: LearnerModel; workDir: string; runCases: CaseRunner; later?: boolean; failure?: string; limitMs?: number; now?: () => number }): Promise<Learned> {
+export async function learnCorrection(file: string, corrections: LearnerCorrection[], options: { earlier: EarlierCorrection[]; caseIds: string[]; model: LearnerModel; workDir: string; runCases: CaseRunner; later?: boolean; failure?: Undone; limitMs?: number; now?: () => number }): Promise<Learned> {
   const now = options.now ?? Date.now, deadline = now() + (options.limitMs ?? FIX_LIMIT_MS);
   const folder = dirname(resolve(file)), name = basename(file), several = corrections.length > 1, maxTries = several ? 1 : MAX_TRIES;
   const base = join(options.workDir, 'base'), room = join(options.workDir, 'room');
@@ -546,8 +597,11 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
   try { copyMethod(folder, base); copyMethod(folder, room); }
   catch (error: any) { if (error.code === 'too_large') return done(each({ outcome: 'could_not_test', reason: 'too_large', detail: error.message }), 0); throw error; }
   const written = readWritten(folder);
-  await writeBrief(room, name, corrections, options.earlier, options.caseIds, written);
-  const prompt = learnerPrompt(name, options.caseIds) + (options.failure ? `\n\nAn earlier change for ${several ? 'these corrections' : 'this correction'} passed its first tests and was applied. Then Method tested the earlier checks again, and the change broke one, so Method undid it:\n${options.failure}\nFind a change that keeps every earlier check passing.` : '');
+  await writeBrief(room, base, name, corrections, options.earlier, options.caseIds, written);
+  // The session gets the checks of earlier corrections only when one broke: the gate puts them all back.
+  const given = new Set([...options.caseIds, ...(options.failure?.checks ?? [])]);
+  hideEarlier(room, [...given]);
+  const prompt = learnerPrompt(name, options.caseIds) + (options.failure ? `\n\nAn earlier change for ${several ? 'these corrections' : 'this correction'} passed its first tests and was applied. Then Method tested the earlier checks again, and the change broke one, so Method undid it:\n${options.failure.text}\nFind a change that keeps every earlier check passing.` : '');
   const noFix = (outcome: string) => ({ outcome: 'no_fix_found' as const, detail: outcome });
   // The tokens of the fix: each session and each test run of the gate.
   let tokens = 0;
@@ -564,6 +618,7 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
     tokens += sessionTokens(session.run_dir);
     if (session.status === 'timeout') return done(each(noFix(`the time for one correction (${FIX_LIMIT_MS / 3_600_000} hours) ran out`)), tries);
     if (session.status === 'failed') throw Error(session.message ?? 'The learner\'s session stopped.');
+    restoreEarlier(base, room);
     const checked = await gate({ file, base, room, caseIds: options.caseIds, corrections, written, runCases, later: !!options.later });
     if (checked.pass) {
       const outcomes = corrections.map((c, i) => ({ id: c.id, ...checked.finals.get(options.caseIds[i]!)! }) as CorrectionOutcome);
@@ -578,6 +633,9 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
     }
     failure = checked.failure; others = checked.others;
     writeFileSync(join(tryDir, 'gate.txt'), failure + '\n');
+    // The next try reads and tests only the earlier checks that a change broke.
+    for (const id of checked.checks ?? []) given.add(id);
+    hideEarlier(room, [...given]);
   }
   // Several corrections that found no change together: each half is fixed again on its own.
   if (several) return done([], maxTries, { split: true });

@@ -14,7 +14,7 @@ import { localJudgments, localMethodFolder, runFolderIndex, type LocalJudgment }
 import type { CorrectionOutcome } from './fix-lines.js';
 import { fixFolder, markWorking, saveError, saveNotice, saveOutcome, storedOutcome } from './fix-outcomes.js';
 import { recordChange, restoreSnapshot, saveVersion, snapshot, undoLast } from './undo.js';
-import { finishLater, learnCorrection, writtenFile, type CaseRunner, type LearnerModel, type Learned } from './learner.js';
+import { finishLater, learnCorrection, writtenFile, type CaseRunner, type LearnerModel, type Learned, type Undone } from './learner.js';
 import { undidLine } from './fix-lines.js';
 
 // The fix loop on this computer. method judge starts it in its own process for a wrong judgment, and method run starts
@@ -130,7 +130,7 @@ export async function fixCorrections(client: MethodClient, file: string, options
     decide(fresh.filter(j => !j.run_dir).map(j => ({ id: j.id, outcome: 'could_not_test', reason: 'missing_file', detail: 'The run is not on this computer.' })));
     const ready = fresh.filter(j => j.run_dir);
     // The corrections that wait go together; failure: why a change for them was undone.
-    const batches: { batch: typeof ready; failure?: string }[] = ready.length ? [{ batch: ready }] : [];
+    const batches: { batch: typeof ready; failure?: Undone }[] = ready.length ? [{ batch: ready }] : [];
     while (batches.length) {
       const { batch, failure } = batches.shift()!;
       const base = methodContent(readDocument(file)), ids = new Set(batch.map(j => j.id)), newest = batch.at(-1)!.created_at;
