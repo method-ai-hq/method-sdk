@@ -1,3 +1,10 @@
+# 0.34.1
+
+Use runtime 0.18.2.
+
+- **A task with a Method runs once.** The Method skill tells the agent to run the Method once and let it work: it does not read the task's documents or do the Method's steps again, does not read the run folder while the run goes on, and does not start a second run. It shows the result with the problems that the run's own checks report; only the person's correction changes the Method. Before, a Codex chat ran one memo Method 7 times and wrote 7 versions of it with fixes for one matter.
+- **A comparison counts the Method runs that a chat starts.** The tokens of each Method run that a chat starts count with the chat's own tokens. A Codex chat's count left out its runs' steps, which were 43% of one correction's tokens.
+
 # 0.34.0
 
 Use runtime 0.18.2.
