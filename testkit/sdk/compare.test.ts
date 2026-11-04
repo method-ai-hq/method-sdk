@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, redesigning, fullChecking, feedbackWriting, fixOutcome, judging, noiseCheck, tooEasyCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
+import { armLabels, armModels, checklistOf, clipWords, modelName, fullRunEstimate, methodRules, compareStage, comparisonRunArgs, compileComparison, decide, decisions, delivery, redesigning, feedbackWriting, fixOutcome, judging, noiseCheck, tooEasyCheck, parseVerdicts, readComparison, shuffled, sourcesRead, usagePerCorrection } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { baselineAnswer } from '../../packages/sdk/src/quality.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
@@ -13,11 +13,10 @@ import { MethodClient } from '../../packages/sdk/src/method-client.js';
 const roots: string[] = [];
 const original = { deliver: delivery.deliver, build: delivery.build, judge: judging.judge };
 const path = process.env.PATH;
-const fullCheck = fullChecking.check;
-beforeEach(() => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token'; fullChecking.check = async () => ({ ok: true, line: '' }); });
+beforeEach(() => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token'; });
 afterEach(() => {
   vi.restoreAllMocks();
-  process.exitCode = 0; fullChecking.check = fullCheck; Object.assign(delivery, { deliver: original.deliver, build: original.build }); judging.judge = original.judge;
+  process.exitCode = 0; Object.assign(delivery, { deliver: original.deliver, build: original.build }); judging.judge = original.judge;
   process.env.PATH = path; delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -497,7 +496,6 @@ it('a teaching input with its own folder gives its training runs that folder in 
   writeFileSync(join(root, 'bin', 'method'), `#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
 const argv = process.argv.slice(2), file = argv[1], runDir = argv[argv.indexOf('--run-dir') + 1];
-if (argv[0] !== 'run') process.exit(0);
 fs.appendFileSync(${JSON.stringify(join(root, 'method-calls.jsonl'))}, JSON.stringify({ files: fs.readdirSync(path.dirname(file), { recursive: true }).sort() }) + '\\n');
 fs.mkdirSync(runDir, { recursive: true }); fs.writeFileSync(path.join(runDir, 'summary.json'), JSON.stringify({ status: 'completed' }));
 `, { mode: 0o700 });
@@ -568,18 +566,6 @@ it('a redesign point gives every learner one redesign session there, once, befor
     await compareStage('treat', { comparison, go: true });
     expect(log.filter(l => l.startsWith('redesign'))).toEqual([]);
   } finally { redesigning.session = session; }
-}, 600_000);
-
-it('before each checkpoint after the start, every earlier check of a Method arm runs; a full check that stops stops the arm there', async () => {
-  const { file } = fixture({ teaching: ['inputs/three.json'], runs: 1, rule: { margin: 0.1, min_runs: 1, at: 2 },
-    treatment: { events: [{ correction: 'One.', input: 'inputs/three.json' }, { correction: 'Two.', input: 'inputs/three.json' }], checkpoints: [0, 1, 2] } });
-  const log: string[] = [];
-  delivery.deliver = async (event: any) => { log.push(`event ${event.index}`); return { received: true, outcome: 'fixed' }; };
-  fullChecking.check = async (arm: any, _learner: any, workDir: string) => { log.push(`check ${arm.name} ${workDir.split('/').at(-1)}`); return arm.name === 'b' && workDir.endsWith('2') ? { ok: false, line: 'The check stopped.' } : { ok: true, line: '' }; };
-  const comparison = await stagePlan(file);
-  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
-  expect(log.filter(l => l.startsWith('check')).sort()).toEqual(['check a 1', 'check a 2', 'check b 1', 'check b 2']);
-  expect(treated.find((t: any) => t.arm === 'b').learners[0].missing).toEqual([{ index: 2, reason: 'The check stopped.' }]);
 }, 600_000);
 
 it('says what happened to each correction for each learner; could not test and a stopped fix are not received, and the trial stops', async () => {

@@ -1,10 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCase } from '@withmethod/runtime/cases.js';
 import { learnerAgent } from '../../packages/sdk/src/learner.js';
-import { keepRedesign, redesignLine, redesignMethod, redesignPrompt } from '../../packages/sdk/src/redesign.js';
+import { redesignLine, redesignMethod, redesignPrompt } from '../../packages/sdk/src/redesign.js';
 import { runCases } from '../../packages/sdk/src/quality.js';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
 
@@ -17,11 +17,8 @@ afterEach(() => { learnerAgent.session = session; vi.restoreAllMocks(); vi.unstu
 const node = { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } } };
 const PROMPT = 'Write the reply to the request about the {{clause}} clause.\n\nNever accept a perpetual term.';
 
-/**
- * A Method with one step whose script writes the reply, a prompt-like text in guide.md, and saved checks: the term
- * clause (check 1, which a redesign sees) and, unless one, the perpetual clause (check 2, held back).
- */
-async function project(checks = 2) {
+/** A Method with one step whose script writes the reply, a prompt-like text in guide.md, and a saved check of the term clause. */
+async function project() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'method-redesign-'))); roots.push(root);
   vi.stubEnv('METHOD_CACHE_DIR', join(root, 'cache')); vi.stubEnv('METHOD_CONFIG_DIR', join(root, 'config'));
   vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -35,12 +32,6 @@ async function project(checks = 2) {
   const run = join(root, 'cache', 'runs', 'r1');
   await runCurrentMethod(file, node, { runDir: run, inputs: { clause: 'term' } });
   await createCase({ methodFile: file, passingRun: run, id: 'correction-term', note: 'Accept the term clause.', expect: [{ kind: 'equals', ref: 'outputs.reply', value: 'We accept the term clause.' }] } as any);
-  if (checks > 1) {
-    await new Promise(wait => setTimeout(wait, 5));
-    const second = join(root, 'cache', 'runs', 'r2');
-    await runCurrentMethod(file, node, { runDir: second, inputs: { clause: 'perpetual' } });
-    await createCase({ methodFile: file, passingRun: second, id: 'correction-perpetual000', note: 'Name the perpetual clause.', expect: [{ kind: 'equals', ref: 'outputs.reply', value: 'We accept the perpetual clause.' }] } as any);
-  }
   return { root, folder, file, run, method };
 }
 const stub = (...tries: Array<(dir: string) => void>) => {
@@ -65,18 +56,9 @@ it('a redesign may split steps and move the person\'s words, unchanged, when eve
     writeFileSync(join(dir, '.fix', 'design.md'), 'One clause in, one reply out.\n');
     save(dir, { outcome: 'redesigned', summary: 'The kind of clause is found first.' });
   });
-  let seen: string[] = [];
-  const session = learnerAgent.session;
-  learnerAgent.session = async input => { seen = readdirSync(join(input.room, 'cases')); return session(input); };
-  const corrections = [{ id: 'jdg_' + 'a'.repeat(32), note: 'Accept the term clause.', run_dir: run, created_at: '2026-11-03T10:00:00Z', outcome: 'fixed' },
-    { id: 'jdg_perpetual0000000000000000000', note: 'Name the perpetual clause.', run_dir: run, created_at: '2026-11-03T11:00:00Z', outcome: 'fixed' }];
-  const result = await redesignMethod(file, { corrections, model: { agent: 'codex' }, workDir: join(root, 'work'), runCases: runCases as any });
+  const result = await redesignMethod(file, { corrections: [{ id: 'jdg_' + 'a'.repeat(32), note: 'Accept the term clause.', run_dir: run, created_at: '2026-11-03T10:00:00Z', outcome: 'fixed' }], model: { agent: 'codex' }, workDir: join(root, 'work'), runCases: runCases as any });
   expect(result.outcome).toBe('redesigned');
   expect(result.checks).toBe(1);
-  // Check 1 was seen; check 2 and its correction were held back, and A and B ran once on its input: both pass it.
-  expect(seen).toEqual(['correction-term']);
-  expect(readFileSync(join(result.room!, '.fix', 'corrections.md'), 'utf8')).not.toContain('perpetual');
-  expect(result.held_back).toMatchObject({ checks: 1, a: { passed: 1, tokens: 0 }, b: { passed: 1, tokens: 0 } });
   // Its tokens: the stub session and the script Method's test runs report none.
   expect(result.tokens).toBe(0);
   expect(result.changed).toEqual(expect.arrayContaining(['guide.md', 'kind.mjs', 'reply.method', 'rules.md']));
@@ -85,7 +67,7 @@ it('a redesign may split steps and move the person\'s words, unchanged, when eve
   expect(prompts[0]).toContain('You may move one of their paragraphs, unchanged');
   expect(readFileSync(join(result.room!, '.fix', 'guide.md'), 'utf8')).toContain('# Design from the problem');
   expect(readFileSync(join(result.room!, '.fix', 'corrections.md'), 'utf8')).toContain('Accept the term clause.');
-  expect(redesignLine('reply.method', result)).toMatch(/^Rewrote reply\.method from the problem: The kind of clause is found first\. Every correction that it saw still holds \(1 checked\)\. On 1 held-back check that the rewrite did not see, the new version passed 1 with 0 tokens in \d+ s, and the version before passed 1 with 0 tokens in \d+ s\.$/);
+  expect(redesignLine('reply.method', result)).toBe('Rewrote reply.method from the problem: The kind of clause is found first. Every earlier correction still holds (1 checked).');
 });
 
 it('a redesign that rewords the person\'s words or breaks a saved check goes back to the agent, and is not applied after 3 tries', async () => {
@@ -100,34 +82,4 @@ it('a redesign that rewords the person\'s words or breaks a saved check goes bac
   expect(prompts).toHaveLength(3);
   expect(prompts[1]).toContain('You changed the person\'s own words in the file guide.md: "Write the reply to the request about the {{clause}} clause."');
   expect(readFileSync(join(root, 'project', 'write.mjs'), 'utf8')).toContain('We accept');
-});
-
-it('a redesign that passes fewer held-back checks than the Method as it is is discarded, with both counts', async () => {
-  const { root, file } = await project();
-  stub(dir => {
-    // It keeps the check it sees (the term clause) and changes the reply to the clause it does not see.
-    writeFileSync(join(dir, 'write.mjs'), `import{readFileSync}from'node:fs';const{clause}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({reply:clause==='term'?'We accept the term clause.':'We refuse the '+clause+' clause.'}));\n`);
-    save(dir, { outcome: 'redesigned', summary: 'Unknown clauses are refused.' });
-  });
-  const result = await redesignMethod(file, { corrections: [], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
-  expect(result.outcome).toBe('discarded');
-  expect(result.held_back).toMatchObject({ checks: 1, a: { passed: 1 }, b: { passed: 0 } });
-  expect(redesignLine('reply.method', result)).toMatch(/^Redesign tried and discarded: reply\.method is unchanged\. On 1 held-back check that the rewrite did not see, the new version passed 0 with 0 tokens in \d+ s, and the version before passed 1 with 0 tokens/);
-});
-
-it('a redesign needs at least 2 saved checks: with 1 there is nothing to hold back, and no session runs', async () => {
-  const { root, file } = await project(1);
-  const prompts = stub(() => { throw Error('no session'); });
-  const result = await redesignMethod(file, { corrections: [], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
-  expect(result).toMatchObject({ outcome: 'not_tried', tries: 0 });
-  expect(prompts).toEqual([]);
-  expect(redesignLine('reply.method', result)).toBe('Redesign not tried: a redesign is tested on the checks that it does not see, and reply.method has only 1 saved check; it needs at least 2.');
-});
-
-it('B is kept when it passes more held-back checks, or as many with no more than 1.2 times the tokens', () => {
-  const run = (passed: number, tokens: number) => ({ passed, tokens, seconds: 1 });
-  expect(keepRedesign({ checks: 4, a: run(2, 100), b: run(3, 500) })).toBe(true);
-  expect(keepRedesign({ checks: 4, a: run(3, 100), b: run(3, 120) })).toBe(true);
-  expect(keepRedesign({ checks: 4, a: run(3, 100), b: run(3, 121) })).toBe(false);
-  expect(keepRedesign({ checks: 4, a: run(3, 100), b: run(2, 10) })).toBe(false);
 });

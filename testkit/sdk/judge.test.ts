@@ -129,8 +129,7 @@ it('method improve and method apply are gone', async () => {
 const ESCALATED = 'Thanks. I escalated the non-compete to Legal.';
 const escalating = `console.log(JSON.stringify({reply: ${JSON.stringify(ESCALATED)}}));\n`;
 /** The person's words as the brief gives them to the learner. */
-/** The person's words in the learner's prompt. */
-const noteOf = (prompt: string) => /^Improve this Method based on this correction: "([\s\S]*?)"\nThe run that got it/m.exec(prompt)?.[1] ?? '';
+const noteOf = (room: string) => readFileSync(join(room, '.fix', 'correction.md'), 'utf8').split('\n\n')[2]!.trim();
 /**
  * A stub learner in place of the agent session: it writes the check of the correction (the reply escalates), and then
  * changes the reply step (change), says no fix (none), asks a question until the person answered (question), or stops.
@@ -138,18 +137,18 @@ const noteOf = (prompt: string) => /^Improve this Method based on this correctio
  */
 function fakeLearner(root: string, kind: 'change' | 'none' | 'question' | 'stops') {
   const briefs: string[] = [], models: any[] = [];
-  learnerAgent.session = vi.fn(async ({ room, model, prompt }) => {
-    briefs.push(prompt); models.push(model);
+  learnerAgent.session = vi.fn(async ({ room, model }) => {
+    briefs.push(readFileSync(join(room, '.fix', 'correction.md'), 'utf8')); models.push(model);
     if (kind === 'stops') throw Error('Claude Code is not installed or not signed in on this computer. Sign in with claude, then run again.');
     const result = (value: unknown) => writeFileSync(join(room, '.fix', 'result.json'), JSON.stringify(value));
     if (kind === 'question' && !briefs.at(-1)!.includes('the person answered')) { result({ outcome: 'question', question: 'Should every counterparty NDA come back redlined, or only some?' }); return { status: 'completed' as const }; }
     if (kind === 'none') { result({ outcome: 'no_fix_found', detail: 'the reply needs the playbook, which the agent does not get' }); return { status: 'completed' as const }; }
     // One correction, or several together (each with its own run and check).
-    const ids = [...prompt.matchAll(/--id (correction-[a-z0-9]+)/g)].map(m => m[1]!);
+    const ids = [...readFileSync(join(room, '.fix', 'correction.md'), 'utf8').matchAll(/has the ID (correction-[a-z0-9]+)/g)].map(m => m[1]!);
     const say = (outcome: unknown) => result(ids.length === 1 ? outcome : { outcomes: Object.fromEntries(ids.map(i => [i, outcome])) });
     // Escalating already, unless this learner made it so in an earlier try (its notes say so).
     const done = readFileSync(join(room, 'write.mjs'), 'utf8') === escalating && !existsSync(join(room, '.fix', 'notes.md'));
-    for (const [k, i] of ids.entries()) if (!existsSync(join(room, 'cases', i))) await createCase({ methodFile: join(room, 'reply.method'), runDir: join(room, '.fix', ids.length === 1 ? 'run' : `run-${k + 1}`), id: i, note: ids.length === 1 ? noteOf(prompt) : `Correction ${k + 1}.`, expect: [{ kind: 'equals', ref: 'outputs.reply', value: ESCALATED }] } as any);
+    for (const [k, i] of ids.entries()) if (!existsSync(join(room, 'cases', i))) await createCase({ methodFile: join(room, 'reply.method'), runDir: join(room, '.fix', ids.length === 1 ? 'run' : `run-${k + 1}`), id: i, note: ids.length === 1 ? noteOf(room) : `Correction ${k + 1}.`, expect: [{ kind: 'equals', ref: 'outputs.reply', value: ESCALATED }] } as any);
     if (done) { say({ outcome: 'no_change_needed', detail: 'the reply already escalates the non-compete' }); return { status: 'completed' as const }; }
     writeFileSync(join(room, 'write.mjs'), escalating);
     writeFileSync(join(room, '.fix', 'notes.md'), 'The reply step now escalates.\n');
@@ -258,33 +257,9 @@ it('a correction goes to the newest run of the Method: an earlier run is refused
   const client = fakeClient();
   await expect(methodMain(['judge', '037a667b-e45d-4461-a319-edc2dc0f64c2', 'wrong', '--note', 'Wrong.'], () => client)).rejects.toThrow('037a667b-e45d-4461-a319-edc2dc0f64c2 is not the newest run of reply.method: newer-run ran after it.');
   expect(client.calls.filter((c: any) => c.verb === 'POST')).toEqual([]);
-  // The plugin's hook records a correction against the newest run, word for word; the classifier's reading decides whether.
-  const { correctionHook, correctionClassifier } = await import('../../packages/sdk/src/correction-hook.js');
-  const recorded: string[][] = [];
-  const record = async (args: string[]) => { recorded.push(args); return { ok: true, text: 'Testing a fix.' }; };
-  vi.spyOn(correctionClassifier, 'decide').mockResolvedValueOnce({ choice: 'correction', probability: 0.93 });
-  const words = 'Question 6 should be "no": the NDA needs written approval before sharing.';
-  const said = JSON.parse((await correctionHook({ prompt: `  ${words}\n` }, dirname(file), record))!);
-  expect(recorded).toEqual([['newer-run', 'wrong', '--note', words]]);
-  expect(said.hookSpecificOutput.additionalContext).toMatch(/^Method recorded this message, word for word, as a correction of run newer-run of reply\.method \(its classifier's reading, 93% sure\)/);
-  expect(said.hookSpecificOutput.additionalContext).toContain('Do not run method judge for this message');
-  // A message about something else records nothing and says nothing; an approval is recorded right.
-  vi.spyOn(correctionClassifier, 'decide').mockResolvedValueOnce({ choice: 'other', probability: 0.8 });
-  expect(await correctionHook({ prompt: 'Now write the email to Ann.' }, dirname(file), record)).toBeUndefined();
-  vi.spyOn(correctionClassifier, 'decide').mockResolvedValueOnce({ choice: 'approval', probability: 0.9 });
-  await correctionHook({ prompt: 'Perfect, thanks.' }, dirname(file), record);
-  expect(recorded.at(-1)).toEqual(['newer-run', 'right']);
-  // Without the classifier (signed out), the agent is told the run and the command.
-  vi.spyOn(correctionClassifier, 'decide').mockResolvedValueOnce(undefined);
-  expect(JSON.parse((await correctionHook({ prompt: 'Wrong.' }, dirname(file), record))!).hookSpecificOutput.additionalContext).toContain('method judge newer-run wrong --note "THEIR WORDS"');
-  // Only a run that started in this chat (after its transcript was made) is the one that a message is about.
-  const transcript = join(s.root, 'transcript.jsonl'); writeFileSync(transcript, '');
-  vi.spyOn(correctionClassifier, 'decide').mockResolvedValue({ choice: 'correction', probability: 0.9 });
-  expect(await correctionHook({ prompt: 'Wrong.', transcript_path: transcript }, dirname(file), record)).toBeDefined();
-  events[0] = JSON.stringify({ ...JSON.parse(events[0]!), at: new Date(Date.now() - 3_600_000).toISOString() });
-  writeFileSync(join(newer, 'events.jsonl'), events.join('\n'));
-  expect(await correctionHook({ prompt: 'Wrong.', transcript_path: transcript }, dirname(file), record)).toBeUndefined();
-  expect(recorded).toHaveLength(3);
+  // The plugin's hook names the newest run.
+  await methodMain(['__newest-run', dirname(file)], () => client);
+  expect(JSON.parse(s.printed().trim().split('\n').at(-1)!)).toMatchObject({ run_id: 'newer-run', file });
   await methodMain(['judge', '037a667b-e45d-4461-a319-edc2dc0f64c2', 'wrong', '--note', 'Wrong.', '--earlier'], () => client);
   expect(client.calls.filter((c: any) => c.verb === 'POST')).toHaveLength(1);
   expect(run).toBeTruthy();
@@ -371,7 +346,7 @@ it('a question goes to the person word for word; method answer sends their words
   expect(start).toHaveBeenCalledWith(file, METHOD_ID, [id], 'https://example.test');
   // The learner reads the answer with the correction, and fixes it.
   await backgroundFix(client, file, [id]);
-  expect(learner.briefs[1]).toContain('Asked "Should every counterparty NDA come back redlined, or only some?", the person answered: "Every counterparty NDA."');
+  expect(learner.briefs[1]).toContain('Asked "Should every counterparty NDA come back redlined, or only some?", the person answered:\n\nEvery counterparty NDA.');
   expect(storedOutcome(METHOD_ID, id)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed' } });
 }, 60_000);
 

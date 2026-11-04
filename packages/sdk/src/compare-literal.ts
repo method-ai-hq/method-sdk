@@ -801,7 +801,7 @@ function savedCheck(ctx: Context, arm: any, event: any): { id: string; text: str
 async function learnerPromptText(arm: any) {
   const { learnerPrompt } = await import('./learner.js');
   const file = arm.project ? (filesUnder(arm.project.start).map(f => relative(arm.project.start, f)).find(f => f.endsWith('.method')) ?? 'NAME.method') : arm.file ?? 'NAME.method';
-  return learnerPrompt(file, [{ id: 'CORRECTION', run_dir: '', note: 'THE PERSON\'S WORDS' }], ['CHECK-ID'], [{ id: 'EARLIER', note: 'THE WORDS OF AN EARLIER CORRECTION', outcome: 'fixed' }]);
+  return learnerPrompt(file, ['CHECK-ID']);
 }
 /** One measured input at the deciding checkpoint as a table: each item that some arm got wrong, with each arm's answer, and the score. */
 function scoredExample(ctx: Context, perItem: PerItem | null): Artifact | null {

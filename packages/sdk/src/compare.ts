@@ -33,7 +33,6 @@ import { textDiff } from './text-diff.js';
 import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, openDesk, projectDesk, placeInput, projectDiff, projectFiles, projectPlugins, tokensOfRun, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
 import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
-import type { HeldBack } from './redesign.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
@@ -150,7 +149,7 @@ export const comparisonSchema = z.strictObject({
     checkpoints: z.array(z.number().int().min(0)).min(1).describe('The number of events after which the arms are measured.'),
     seed: z.number().int().optional().describe('Shuffle the events once with this seed: one order, the same for every arm. Without it the events come in the order given.'),
     probe: text.optional().describe('With project arms: a question asked in a new chat in a copy of each project at each checkpoint after the start, such as "Which rules do you follow for these reviews?". The answer is kept, and a code measure gets it as probe.'),
-    redesign: z.array(z.number().int().min(0)).min(1).optional().describe('The numbers of events after which each arm gets one redesign session, the same points for every arm (0: before the first event). A .method arm, and a project arm with the Method plugin, run method redesign on their Methods: one agent session rewrites each Method from the problem, seeing every odd saved check (oldest first) with its correction; the even ones are held back. Method runs the old and the new version once on the held-back inputs and keeps the new one only when it passes more held-back checks, or as many with no more than 1.2 times the tokens; otherwise the redesign is recorded as tried and discarded, with both counts. A Method with fewer than 2 saved checks has nothing to hold back, so its redesign is not tried. A Method also tries a redesign by itself after every 8 new saved checks. A project arm without the plugin gets one chat with the notes message: "Read every correction so far and your notes, and rewrite your notes so that they work on the next task." A checkpoint at the same point measures after the session.'),
+    redesign: z.array(z.number().int().min(0)).min(1).optional().describe('The numbers of events after which each arm gets one redesign session, the same points for every arm (0: before the first event). A .method arm, and a project arm with the Method plugin, run method redesign on their Methods: one agent session rewrites each Method from the problem and keeps every earlier correction. A project arm without the plugin gets one chat with the notes message: "Read every correction so far and your notes, and rewrite your notes so that they work on the next task." A checkpoint at the same point measures after the session.'),
   }).optional().describe('A list of events that each arm gets in order, with checkpoints.'),
   about_inputs: z.strictObject({
     noun: text.optional().describe('What one input is, in one word, such as "task" or "ticket".'),
@@ -694,8 +693,7 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   } else add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
   if (doc.treatment?.redesign) {
     const points = [...new Set(doc.treatment.redesign)].sort((x, y) => x - y).map(n => n === 0 ? 'before the first event' : `after event ${n}`);
-    add('treatment', `Each arm gets one redesign session at the same points: ${points.join(', ')}. An agent with Method runs method redesign on its Methods: one agent session rewrites each Method from the problem, with the guide's design rules and every second saved check (the 1st, 3rd, 5th, ...) with its correction; the others are held back from it. Method runs the old and the new version once on the inputs of the held-back checks, and keeps the new one only when it passes more of them, or as many with no more than 1.2 times the tokens; otherwise the page says "Redesign tried and discarded" with both counts. An agent without Method gets one chat that says: "${NOTES_MESSAGE}" A checkpoint at the same point measures after the session.`);
-    add('treatment', 'Before each checkpoint, an agent with Method tests every earlier correction of its Methods; one that a later fix broke goes back to its learner as a correction, so a break is found by the next checkpoint at the latest.');
+    add('treatment', `Each arm gets one redesign session at the same points: ${points.join(', ')}. An agent with Method runs method redesign on its Methods: one agent session rewrites each Method from the problem, with the guide's design rules, every correction so far and its saved checks, and the change is kept only when every earlier correction still holds. An agent without Method gets one chat that says: "${NOTES_MESSAGE}" A checkpoint at the same point measures after the session.`);
   }
   if (doc.user_files?.length) add('arms', `Only ${doc.user_files.join(', ')} ${doc.user_files.length === 1 ? 'is' : 'are'} the user's own words in the starting folders; every other text of a starting Method was written for the comparison, so a fix may change it.`);
   add('same_for_both', web ? 'The tools are the tested difference, so the agents may use the web.' : 'No agent can use the web.');
@@ -1346,7 +1344,7 @@ type EventRecord = { key: string; index: number; kind: string; input: string; le
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
 type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot>; redesigns?: RedesignRecord[] };
 /** One redesign session of a learner: after which event, whether it ended, and its line for the page. */
-type RedesignRecord = { at_event: number; received: boolean; line: string; did?: Did; tokens?: number | null; held_back?: HeldBack[] };
+type RedesignRecord = { at_event: number; received: boolean; line: string; did?: Did; tokens?: number | null };
 /** Treatment of one arm: each learner's. */
 type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[] };
 
@@ -1424,8 +1422,6 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
   const runDir = join(workDir, 'run');
   removeTree(workDir);
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
-  // The training run uses the Method that the earlier fixes left: a full check or a redesign that a fix started ends first.
-  await command(['__idle', file], env);
   writePrivateJson(join(workDir, 'inputs.json'), event.input.value);
   // A training run reuses nothing: its output is this learner's work now, as a plain arm's training run is.
   const run = await command(['run', join(learner.dir, learner.file), '--inputs', join(workDir, 'inputs.json'), '--run-dir', runDir, '--fresh'], env);
@@ -1811,7 +1807,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       records.set(key, record);
     }
     const record = records.get(key);
-    redesigns.push({ at_event: at, received: record.received, line: record.line, ...(record.did ? { did: record.did } : {}), tokens: record.tokens ?? null, ...(record.held_back ? { held_back: record.held_back } : {}), ...(record.duration_ms ? { duration_ms: record.duration_ms } : {}) } as RedesignRecord);
+    redesigns.push({ at_event: at, received: record.received, line: record.line, ...(record.did ? { did: record.did } : {}), tokens: record.tokens ?? null, ...(record.duration_ms ? { duration_ms: record.duration_ms } : {}) } as RedesignRecord);
     return record.received;
   };
   const done: EventRecord[] = [], missing: LearnerTreatment['missing'] = [];
@@ -1850,13 +1846,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
     if (!record.received) { missing.push({ index: event.index, reason: record.reason ?? 'not received', ...(record.detail ? { detail: record.detail } : {}) }); stopped = true; continue; }
     if (arm.plain && typeof record.instructions === 'string') instructions = record.instructions;
     if (!await redesignAt(event.index)) { missing.push({ index: event.index, reason: redesigns.at(-1)!.line }); stopped = true; continue; }
-    if (plan.checkpoints?.includes(event.index)) {
-      // Before a checkpoint, every earlier check of a Method arm runs: a check that a fix broke since the last full
-      // check goes back to the learner, so the Method that is measured keeps every earlier correction it can.
-      const checked = await fullChecking.check(arm, { method, project }, join(base, 'full-check', String(event.index)));
-      if (!checked.ok) { missing.push({ index: event.index, reason: checked.line }); stopped = true; continue; }
-      await freeze(event.index);
-    }
+    if (plan.checkpoints?.includes(event.index)) await freeze(event.index);
   }
   return { learner, events: done, missing, snapshots, ...(redesigns.length ? { redesigns } : {}) };
 }
@@ -1956,7 +1946,7 @@ function writerOwnsStart(dir: string, userFiles: string[]) {
  * its Methods, in the arm's clean room and its own Method cache. A project arm without the plugin: one chat with the
  * notes message. Received when every session ended.
  */
-async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: string; file: string; cache: string } | null; project: { project: string; cache: string; memory: string } | null }, workDir: string): Promise<{ received: boolean; line: string; did?: Did; tokens?: number | null; held_back?: HeldBack[] }> {
+async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: string; file: string; cache: string } | null; project: { project: string; cache: string; memory: string } | null }, workDir: string): Promise<{ received: boolean; line: string; did?: Did; tokens?: number | null }> {
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
   if (learner.method || arm.project?.plugins?.includes('method')) {
     // A project's Methods are redesigned in its desk, where its chats run them: the Method's home stays the desk's
@@ -1965,23 +1955,20 @@ async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: s
     try {
       const files = desk ? methodFiles(desk.desk) : [join(learner.method!.dir, learner.method!.file)];
       if (!files.length) return { received: true, line: 'there is no Method in the project to redesign.' };
-      const lines: string[] = [], held_back: HeldBack[] = [];
+      const lines: string[] = [];
       let tokens: number | null = 0;
       for (const file of files) {
         const room = await armRoom(file, desk?.cache ?? learner.method!.cache, true);
         try {
-          // A fix of this Method that still runs (and any redesign it started) ends first.
-          await command(['__idle', file], room.env);
           const done = await command(['redesign', file, '--json'], room.env);
           writeFileSync(join(workDir, `${basename(file)}.log`), `${done.stdout}\n${done.stderr}`, { mode: 0o600 });
           let out: any;
           try { out = JSON.parse(done.stdout); } catch { return { received: false, line: `method redesign ${basename(file)} failed: ${done.stderr.trim().split('\n').at(-1) ?? ''}` }; }
           lines.push(out.line);
-          if (out.held_back) held_back.push(out.held_back);
           tokens = typeof out.tokens === 'number' && tokens !== null ? tokens + out.tokens : null;
         } finally { await room.remove(); }
       }
-      return { received: true, line: lines.join(' '), tokens, ...(held_back.length ? { held_back } : {}) };
+      return { received: true, line: lines.join(' '), tokens };
     } finally { if (desk) { desk.keep(); desk.remove(); } }
   }
   const project = learner.project!;
@@ -1995,32 +1982,6 @@ async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: s
 
 /** The redesign session of a learner; tests replace it. */
 export const redesigning = { session: redesignSession };
-
-/**
- * The full check of a learner before a checkpoint: method __check-all on each Method of a .method arm, or of a project
- * arm with the Method plugin, in the arm's clean room. An arm without Method has no checks. ok: every check ran.
- */
-async function fullCheckSession(arm: any, learner: { method: { dir: string; file: string; cache: string } | null; project: { project: string; cache: string; memory: string } | null }, workDir: string): Promise<{ ok: boolean; line: string }> {
-  if (!learner.method && !arm.project?.plugins?.includes('method')) return { ok: true, line: '' };
-  mkdirSync(workDir, { recursive: true, mode: 0o700 });
-  const desk = learner.method ? null : openDesk(learner.project!.project, learner.project!.cache);
-  try {
-    const lines: string[] = [];
-    for (const file of desk ? methodFiles(desk.desk) : [join(learner.method!.dir, learner.method!.file)]) {
-      const room = await armRoom(file, desk?.cache ?? learner.method!.cache, true);
-      try {
-        const done = await command(['__check-all', file, '--json'], room.env);
-        writeFileSync(join(workDir, `${basename(file)}.log`), `${done.stdout}\n${done.stderr}`, { mode: 0o600 });
-        let out: any;
-        try { out = JSON.parse(done.stdout); } catch { return { ok: false, line: `The check of every earlier correction of ${basename(file)} stopped: ${done.stderr.trim().split('\n').at(-1) ?? ''}` }; }
-        lines.push(out.line);
-      } finally { await room.remove(); }
-    }
-    return { ok: true, line: lines.join(' ') };
-  } finally { if (desk) { desk.keep(); desk.remove(); } }
-}
-/** The full check before a checkpoint; tests replace it. */
-export const fullChecking = { check: fullCheckSession };
 
 /** The treatment that a run at a checkpoint received, in words, for its page. Null without a treatment over time. */
 function treatmentNote(plan: Plan, arm: any, checkpoint: number | null, learner?: LearnerTreatment) {

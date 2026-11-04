@@ -12,7 +12,7 @@ import { localProposals, saveLocalProposal, writeMethodFile } from './proposals.
 import { changedSteps } from './merge.js';
 import { localJudgments, localMethodFolder, runFolderIndex, type LocalJudgment } from './local-judgments.js';
 import type { CorrectionOutcome } from './fix-lines.js';
-import { fixFolder, markWorking, saveError, saveNotice, saveOutcome, storedOutcome } from './fix-outcomes.js';
+import { fixFolder, markWorking, saveError, saveOutcome, storedOutcome } from './fix-outcomes.js';
 import { recordChange, restoreSnapshot, saveVersion, snapshot } from './undo.js';
 import { learnCorrection, writtenFile, type CaseRunner, type LearnerModel, type Learned } from './learner.js';
 
@@ -139,7 +139,7 @@ export async function fixCorrections(client: MethodClient, file: string, options
       if (learned.outcomes.some(o => o.outcome === 'fixed' || o.outcome === 'no_change_needed')) {
         // The file must be the one the learner started from; a change made meanwhile is not overwritten.
         if (!isDeepStrictEqual(methodContent(readDocument(file)), base)) { decide(batch.map(j => ({ id: j.id, outcome: 'retry' }))); cleanRoom(learned); continue; }
-        if (await applyLearned(client, file, methodId, batch, learned)) { applied++; countFix(file); }
+        if (await applyLearned(client, file, methodId, batch, learned)) applied++;
       }
       decide(learned.outcomes);
       cleanRoom(learned);
@@ -286,7 +286,6 @@ export async function fixWaiting(client: MethodClient, file: string, options: { 
       if (!fix) break;
       fixes.push(fix);
     }
-    if (fixes.some(f => f.applied)) await afterFixes(client, file, methodId, options);
     return fixes;
   } finally { rmSync(lock, { force: true }); }
 }
@@ -363,92 +362,4 @@ async function changedSinceRun(client: MethodClient, methodId: string, judgments
     changed.push({ id: j.id, outcome: 'already_changed', ...(by ? { by } : {}) });
   }
   return changed;
-}
-
-// ---------- The full check and the redesign at set points ----------
-//
-// Each fix tests its new check, the earlier checks most related to its change and a few more at random (learner.ts
-// chooseEarlier). Every FULL_EVERY applied fixes, and before a comparison's checkpoint, the full check tests every
-// earlier check. A check that passed at the last full check (or was saved since) and fails now goes back to the learner
-// as a correction, in the words of its own correction, and its repair is tested on every earlier check. So every
-// earlier correction holds at each full check, unless the learner found no repair (then Method says which one), and a
-// break is found within FULL_EVERY fixes. When REDESIGN_EVERY more checks were saved since the last redesign, the fix
-// loop tries a redesign that is kept only when it passes the held-back checks (redesign.ts).
-
-/** Applied fixes between two full checks of every earlier check. */
-export const FULL_EVERY = 5;
-/** Saved checks between two redesigns that the fix loop tries. */
-export const REDESIGN_EVERY = 8;
-
-/** The fix loop's count, in .method/checks.json: applied fixes since the last full check, the checks that it found broken and could not repair, and the number of checks at the last redesign. */
-type CheckState = { format: 'method-checks/1'; fixes: number; broken: string[]; redesigned_at: number };
-const checksFile = (file: string) => join(dirname(resolve(file)), '.method', 'checks.json');
-export function readChecks(file: string): CheckState {
-  try { const v = JSON.parse(readFileSync(checksFile(file), 'utf8')); if (v?.format === 'method-checks/1') return { format: v.format, fixes: Number(v.fixes) || 0, broken: Array.isArray(v.broken) ? v.broken : [], redesigned_at: Number(v.redesigned_at) || 0 }; } catch { /* none yet */ }
-  return { format: 'method-checks/1', fixes: 0, broken: [], redesigned_at: 0 };
-}
-const writeChecks = (file: string, state: CheckState) => { localMethodFolder(file); writePrivateJson(checksFile(file), state); };
-function countFix(file: string) { const state = readChecks(file); writeChecks(file, { ...state, fixes: state.fixes + 1 }); }
-
-/** The active checks of a Method, oldest first. */
-export async function activeChecks(file: string) {
-  const { listCases } = await import('@withmethod/runtime/cases.js');
-  return (await listCases(file)).filter((c: any) => c.status === 'active').sort((a: any, b: any) => String(a.created ?? '').localeCompare(String(b.created ?? '')) || a.id.localeCompare(b.id)) as any[];
-}
-
-/** The fix loop tries its next redesign when REDESIGN_EVERY more checks are saved than now. */
-export async function markRedesigned(file: string) { writeChecks(file, { ...readChecks(file), redesigned_at: (await activeChecks(file)).length }); }
-
-/** What a full check found: how many checks it tested, which broke since the last one, and which of those the learner repaired. */
-export type FullCheck = { checked: number; broke: string[]; repaired: string[]; still: string[]; line: string };
-
-/**
- * Test every earlier check of a Method, and give each one that broke since the last full check to the learner as a
- * correction. Holds no lock itself: the caller holds the Method's fix lock.
- */
-export async function fullCheck(client: MethodClient, file: string, methodId: string, options: { runCases?: CaseRunner } = {}): Promise<FullCheck> {
-  const runCases = options.runCases ?? ((await import('./quality.js')).runCases as unknown as CaseRunner);
-  const state = readChecks(file), checks = await activeChecks(file), ids = checks.map(c => c.id as string);
-  const result: FullCheck = { checked: ids.length, broke: [], repaired: [], still: [], line: '' };
-  if (ids.length) {
-    const keepDir = join(fixFolder(methodId), 'full-check');
-    removeTree(keepDir);
-    // The Method is its own baseline: a check serves the outputs that it kept when it last passed, so only the steps
-    // that changed since then run again.
-    const report = await runCases(file, {}, { ids, baseline: file, gate: true, keepDir } as any);
-    const failing = ((report.cases ?? []) as any[]).filter(r => r.verdict === 'fail');
-    result.broke = failing.map(r => r.id).filter(id => !state.broken.includes(id));
-    result.still = failing.map(r => r.id).filter(id => state.broken.includes(id));
-    for (const id of result.broke) {
-      const made = checks.find(c => c.id === id), row = failing.find(r => r.id === id);
-      const runDir = row?.candidate?.attempts?.find((a: any) => a.status === 'fail' && a.run_dir)?.run_dir;
-      if (!runDir || !existsSync(runDir)) { result.still.push(id); continue; }
-      const earlier = checks.filter(c => c.id !== id).map(c => ({ id: c.id, note: c.note ?? null, noted_by: c.author ?? null, created_at: c.created, outcome: 'fixed' }));
-      const learned = await learnCorrection(file, [{ id: `check-${id}`, run_dir: runDir, note: made?.note ?? null, noted_by: made?.author ?? null, created_at: made?.created, check: id }],
-        { earlier, caseIds: [id], model: await learnerModel(readDocument(file)), workDir: join(fixFolder(methodId), 'learn', `check-${id}`), runCases, allEarlier: true });
-      const outcome = learned.outcomes[0];
-      if (outcome?.outcome === 'fixed' && await applyLearned(client, file, methodId, [{ id: `check-${id}`, note: made?.note ?? null } as AccountJudgment], learned)) result.repaired.push(id);
-      else result.still.push(id);
-      cleanRoom(learned);
-    }
-  }
-  const note = (id: string) => { const made = checks.find(c => c.id === id); return made?.note ? `"${String(made.note).slice(0, 200)}"` : id; };
-  result.line = !result.broke.length && !result.still.length ? `Checked every earlier correction (${ids.length}): each one still holds.`
-    : [`Checked every earlier correction (${ids.length}).`, ...result.repaired.map(id => `A later change had broken ${note(id)}; Method fixed it again.`),
-      ...result.still.map(id => `${note(id)} does not hold now, and Method found no change that fixes it without breaking another one.`)].join(' ');
-  writeChecks(file, { ...readChecks(file), fixes: 0, broken: result.still });
-  return result;
-}
-
-/** After a pass of the fix loop: the full check when FULL_EVERY fixes were applied since the last one, and a tested redesign when REDESIGN_EVERY more checks were saved since the last one. */
-async function afterFixes(client: MethodClient, file: string, methodId: string, options: { runCases?: CaseRunner }) {
-  if (readChecks(file).fixes >= FULL_EVERY) {
-    const checked = await fullCheck(client, file, methodId, options);
-    saveNotice(methodId, file, 'full_check', checked.line);
-  }
-  const count = (await activeChecks(file)).length;
-  if (count - readChecks(file).redesigned_at < REDESIGN_EVERY) return;
-  const { redesignHere, redesignLine } = await import('./redesign.js');
-  const result = await redesignHere(client, file, options);
-  saveNotice(methodId, file, 'redesign', redesignLine(basename(file), result));
 }
