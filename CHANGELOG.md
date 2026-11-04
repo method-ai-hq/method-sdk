@@ -1,3 +1,12 @@
+# 0.27.0
+
+Use runtime 0.18.0.
+
+- **A fix takes minutes, not a quarter of an hour.** The learner tests only its new check, and Method tests every earlier correction once per fix. It tests the new check first and runs no earlier one when it fails; it runs the old version of an earlier check only when the new version fails it; it runs the 3 runs of a check, and about 12 runs in all, at the same time; and it stops at the first break. On the ContractNLI Method with 14 earlier corrections, one fix took 186 s (it took 1,249 s before), and its test of the earlier corrections took 100 s in place of 357-395 s. The guarantee is the same: the new check fails on the old version and passes 3 of 3 on the new one, and each earlier check that passed passes 3 of 3.
+- **A slow Method shows Fixed sooner.** When the test of the earlier corrections would take more than 3 minutes, Method applies the fix after one run of each and says so in the Fixed line; it runs the other 2 runs next, and undoes the fix and fixes the correction again when one fails.
+- **Corrections that wait are fixed together**, in one session; when that session finds no change for all of them, each half is fixed again.
+- **`method wait` waits until the fix has an outcome**, with one line a minute. `--timeout` still stops it.
+
 # 0.26.4
 
 Use runtime 0.17.1.
