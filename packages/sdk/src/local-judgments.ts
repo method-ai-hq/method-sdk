@@ -75,6 +75,24 @@ export function runFolderIndex() {
   return index;
 }
 
+/** When a run started: its first event, else its folder's time. */
+export function startedAt(dir: string) {
+  try { const first = JSON.parse(firstLine(join(dir, 'events.jsonl'))); if (typeof first?.at === 'string') return Date.parse(first.at); } catch { /* no events */ }
+  try { return statSync(dir).mtimeMs; } catch { return 0; }
+}
+/** The newest run on this computer of a Method file, with its ID, or undefined. */
+export function newestRunOf(file: string): { dir: string; id: string; at: number } | undefined {
+  const target = resolve(file);
+  let best: { dir: string; id: string; at: number } | undefined;
+  for (const dir of runFolders()) {
+    const recorded = readJson(join(dir, methodFileRecord))?.path;
+    if (typeof recorded !== 'string' || resolve(recorded) !== target) continue;
+    const at = startedAt(dir);
+    if (!best || at > best.at) best = { dir, id: readJson(join(dir, 'run-id.json'))?.id ?? basename(dir), at };
+  }
+  return best;
+}
+
 /** Whether a run folder's Method keeps run content on this computer. */
 export function deviceRun(dir: string) {
   return readJson(join(dir, 'method-sync.json'))?.device === true || readJson(join(dir, 'method.json'))?.run_data === 'device';

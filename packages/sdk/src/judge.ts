@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULT_SERVER, type MethodClient } from './method-client.js';
-import { deviceRun, findRunFolder, methodFileOfRun, saveLocalJudgment } from './local-judgments.js';
+import { deviceRun, findRunFolder, methodFileOfRun, newestRunOf, saveLocalJudgment, startedAt } from './local-judgments.js';
 import { catchUp, readHome } from './home.js';
 import { readDocument } from './authoring.js';
 import { localJudgments } from './local-judgments.js';
@@ -33,7 +33,7 @@ export function correctedValue(path: string): unknown {
 export async function judgeCommand(args: string[], clientFactory: (server: string) => MethodClient) {
   const usage = 'Use method judge RUN_ID right|wrong [--step STEP_ID] [--note TEXT] [--corrected FILE], or method judge RUN_ID keep JUDGMENT_ID.';
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    step: { type: 'string' }, note: { type: 'string' }, corrected: { type: 'string' }, json: { type: 'boolean' }, server: { type: 'string' } } });
+    step: { type: 'string' }, note: { type: 'string' }, corrected: { type: 'string' }, json: { type: 'boolean' }, earlier: { type: 'boolean' }, server: { type: 'string' } } });
   const [runId, verdict] = positionals;
   if (runId && verdict === 'keep' && positionals.length === 3) return keepCommand(runId, positionals[2]!, values, clientFactory);
   if (!runId || !verdict || positionals.length !== 2) throw Error(usage);
@@ -47,6 +47,13 @@ export async function judgeCommand(args: string[], clientFactory: (server: strin
   // The run on this computer, and the Method file that ran it.
   const runDir = findRunFolder(runId), device = !!runDir && deviceRun(runDir);
   const runFile = runDir ? methodFileOfRun(runDir) : undefined;
+  // A correction is about the result the person just saw: an earlier run of the same Method file is refused, unless
+  // --earlier says the correction is about that run.
+  if (verdict === 'wrong' && runDir && runFile && !values.earlier) {
+    const newest = newestRunOf(runFile);
+    if (newest && resolve(newest.dir) !== resolve(runDir) && newest.at > startedAt(runDir))
+      throw Error(`${runId} is not the newest run of ${basename(runFile)}: ${newest.id} ran after it. A correction is about the result the person just saw, so judge that run: method judge ${newest.id} wrong --note "THEIR WORDS". If the correction is about the earlier run, add --earlier.`);
+  }
   if (device && !runFile && (note || corrected !== undefined))
     throw Error(`This run's content stays on this computer, so its note stays next to the Method file. Run method judge in the folder of the Method file.`);
   const content = device ? {} : { ...(note ? { note } : {}), ...(corrected !== undefined ? { corrected } : {}) };

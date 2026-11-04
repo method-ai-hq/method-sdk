@@ -300,7 +300,7 @@ export function learnerPrompt(file: string, caseIds: string[]) {
   const one = caseIds.length === 1, id = caseIds[0]!;
   const outcomes = `{"outcome": "fixed", "summary": "ONE PLAIN SENTENCE FOR THE PERSON: what the agent does differently now"}
    {"outcome": "no_change_needed", "detail": "WHY, IN PLAIN WORDS FOR THE PERSON"}: the run, or the Method as it is now, already does what the correction asks. Write the check anyway (with --passing-run ${one ? '.fix/run' : 'ITS RUN'} in place of --run when this run already meets it): it must pass on the Method as it is.
-   {"outcome": "question", "question": "ONE SHORT QUESTION IN THE PERSON'S TERMS"}: the correction is not clear, or the fix needs a change to the person's own words.
+   {"outcome": "question", "question": "ONE SHORT QUESTION IN THE PERSON'S TERMS"}: only when the only fix is to change or remove a paragraph of the person's own words; quote it. When the correction is short or you are unsure how far it goes, do not ask: make the change that the correction's own words support, and keep what it left.
    {"outcome": "no_fix_found", "detail": "WHY, IN PLAIN WORDS FOR THE PERSON"}: the cause is outside the Method (the input, the data, a tool), or no change works.`;
   return `You are the learner of a Method: a workflow in this folder, in the file ${file}. ${one ? 'A person corrected one of its runs' : `People corrected ${caseIds.length} of its runs`}. Change the Method so that it does what ${one ? 'the person asks' : 'each correction asks'} on every later run, as a careful person who builds Methods with the Method CLI would.
 

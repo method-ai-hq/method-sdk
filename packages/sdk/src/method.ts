@@ -205,6 +205,18 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (args[0] === 'learned') return (await import('./learned.js')).learnedCommand(args.slice(1), clientFactory);
   if (args[0] === 'undo') return (await import('./undo.js')).undoCommand(args.slice(1), clientFactory);
   if (args[0] === 'redesign') return (await import('./redesign.js')).redesignCommand(args.slice(1), clientFactory);
+  // The newest run of the Methods in a folder, for the plugin's hook that reminds the agent to judge it.
+  if (args[0] === '__newest-run') {
+    const { newestRunOf } = await import('./local-judgments.js');
+    const dir = resolve(args[1] ?? '.'), files: string[] = [];
+    const walk = (sub: string, depth: number) => { let entries: import('node:fs').Dirent[] = []; try { entries = readdirSync(sub, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) { if (['.method', '.method-runs', 'node_modules', 'cases', '.git'].includes(e.name)) continue; const path = join(sub, e.name);
+        if (e.isDirectory() && depth < 3) walk(path, depth + 1); else if (e.isFile() && e.name.endsWith('.method')) files.push(path); } };
+    walk(dir, 0);
+    const runs = files.map(file => ({ file, run: newestRunOf(file) })).filter(r => r.run).sort((a, b) => b.run!.at - a.run!.at);
+    if (runs[0]) process.stdout.write(JSON.stringify({ run_id: runs[0].run!.id, file: runs[0].file, at: new Date(runs[0].run!.at).toISOString() }) + '\n');
+    return;
+  }
   if (args[0] === '__fix' || args[0] === '__watch') {
     const p = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, judgment: { type: 'string', multiple: true } } });
     const client = clientFactory(p.values.server ?? DEFAULT_SERVER), file = authoringPath(p.positionals[0]!);

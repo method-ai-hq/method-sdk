@@ -217,6 +217,29 @@ it('a wrong judgment returns at once; the fix in the background writes the outco
   expect(JSON.parse(s.printed()).outcomes[0]).toMatchObject({ judgment: id, status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 0 } } });
 }, 60_000);
 
+it('a correction goes to the newest run of the Method: an earlier run is refused with the newest named, unless --earlier', async () => {
+  const s = setup(); noStart();
+  const { file, run } = await project(s.root);
+  // A second, newer run of the same Method file.
+  const newer = join(s.root, 'cache', 'runs', 'bbbbbbbb-0000-4000-8000-000000000002');
+  await runCurrentMethod(file, { allow_local_processes: true, runtimes: { node: { command: process.execPath, version: process.version } } }, { runDir: newer, inputs: {} });
+  writeFileSync(join(newer, 'run-id.json'), JSON.stringify({ id: 'newer-run' }));
+  writeFileSync(join(newer, 'method-file.json'), JSON.stringify({ path: file }));
+  const later = new Date(Date.now() + 60_000).toISOString();
+  const events = readFileSync(join(newer, 'events.jsonl'), 'utf8').split('\n');
+  events[0] = JSON.stringify({ ...JSON.parse(events[0]!), at: later });
+  writeFileSync(join(newer, 'events.jsonl'), events.join('\n'));
+  const client = fakeClient();
+  await expect(methodMain(['judge', '037a667b-e45d-4461-a319-edc2dc0f64c2', 'wrong', '--note', 'Wrong.'], () => client)).rejects.toThrow('037a667b-e45d-4461-a319-edc2dc0f64c2 is not the newest run of reply.method: newer-run ran after it.');
+  expect(client.calls.filter((c: any) => c.verb === 'POST')).toEqual([]);
+  // The plugin's hook names the newest run.
+  await methodMain(['__newest-run', dirname(file)], () => client);
+  expect(JSON.parse(s.printed().trim().split('\n').at(-1)!)).toMatchObject({ run_id: 'newer-run', file });
+  await methodMain(['judge', '037a667b-e45d-4461-a319-edc2dc0f64c2', 'wrong', '--note', 'Wrong.', '--earlier'], () => client);
+  expect(client.calls.filter((c: any) => c.verb === 'POST')).toHaveLength(1);
+  expect(run).toBeTruthy();
+});
+
 it('method wait stops after its time limit while the fix goes on, and a stopped fix says so', async () => {
   const s = setup(); noStart();
   fakeLearner(s.root, 'none');
