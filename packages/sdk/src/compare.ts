@@ -29,7 +29,7 @@ import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS } from './learner.js';
 import { textDiff } from './text-diff.js';
-import { RIGHT_MESSAGE, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
+import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
 import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
 
@@ -60,7 +60,7 @@ const armSchema = z.union([
     effort: text.optional().describe('Only with tested: model: the reasoning effort of this arm.'),
   }),
   z.strictObject({
-    project: z.enum(['claude']).describe('A Claude Code project, used as a person uses the desktop app: each piece of work is a new chat in the project folder, and only the folder carries over.'),
+    project: z.enum(projectAgents).describe('A Claude Code or Codex project, used as a person uses the desktop app: each piece of work is a new chat in the project folder, and only the folder and the agent\'s memory carry over.'),
     plugins: z.array(z.enum(projectPlugins)).optional().describe('The plugins the project has. method: the Method plugin (its skill and hooks, and the method CLI on PATH, signed in to your Method account). Without plugins the project has none, and no method command.'),
     files: text.optional().describe('A folder whose files the project starts with. Without it the project starts empty.'),
     model: text.optional().describe('The model of every chat. Every project arm names the same model, unless the comparison tests the model.'),
@@ -76,7 +76,7 @@ const eventSchema = z.strictObject({
 });
 const feedbackWriterSchema = z.strictObject({
   code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, values, output, expected} as JSON on stdin (output: the text of the file that the arm handed in, or null) and prints {"correction": TEXT or null, "checked": "all" or the part it checked}. correction is null when nothing that it checked is wrong. A null correction with checked "all" tells the arm its output was right; with a part, the arm gets no feedback.'),
-  judge: text.optional().describe('A written instruction for one Claude judge, which reads the task, the output and the hidden expected answer and writes the correction, or none when nothing is wrong, and says what it checked.'),
+  judge: text.optional().describe('A written instruction for one judge (the comparison judge: Codex when every arm runs on Codex, else Claude Code), which reads the task, the output and the hidden expected answer and writes the correction, or none when nothing is wrong, and says what it checked.'),
 }).describe('What writes the correction from an arm\'s own output. Give exactly one of code or judge.');
 const assumptionSchema = z.union([text, z.strictObject({
   text: text.describe('What must be true for the answer to mean something.'),
@@ -242,10 +242,12 @@ export function readComparison(file: string): Comparison {
   if (arms.length < 2) problems.push('A comparison needs two or more arms.');
   const ids = new Map<string, string>(), connections = new Set<string>(), armConnections = new Map<string, string[]>();
   const projects = arms.filter(([, arm]) => armIsProject(arm)) as Array<[string, ProjectArm]>;
-  if (projects.length && projects.length < arms.length) problems.push(`The arm ${projects[0]![0]} is a Claude Code project, and ${arms.find(([, arm]) => !armIsProject(arm))![0]} is not. A project arm is compared with other project arms.`);
+  if (projects.length && projects.length < arms.length) problems.push(`The arm ${projects[0]![0]} is a ${projectAgentName(projects[0]![1].project)} project, and ${arms.find(([, arm]) => !armIsProject(arm))![0]} is not. A project arm is compared with other project arms.`);
   for (const [armName, arm] of projects) {
     if (arm.files !== undefined && !(existsSync(resolve(root, arm.files)) && statSync(resolve(root, arm.files)).isDirectory())) problems.push(`The files of the project arm ${armName} (${arm.files}) are not a folder.`);
-    if (doc.tested !== 'model' && (arm.model !== projects[0]![1].model || arm.effort !== projects[0]![1].effort)) problems.push(`The project arms ${projects[0]![0]} and ${armName} name different models or efforts. Every arm uses the same model and effort unless the comparison tests the model (tested: model).`);
+    // Claude Code and Codex run on different models: one comparison mixes them only when it tests the model.
+    if (doc.tested !== 'model' && arm.project !== projects[0]![1].project) problems.push(`The project arms ${projects[0]![0]} and ${armName} are ${projectAgentName(projects[0]![1].project)} and ${projectAgentName(arm.project)}, which run on different models. Make every project arm the same agent, or add tested: model.`);
+    else if (doc.tested !== 'model' && (arm.model !== projects[0]![1].model || arm.effort !== projects[0]![1].effort)) problems.push(`The project arms ${projects[0]![0]} and ${armName} name different models or efforts. Every arm uses the same model and effort unless the comparison tests the model (tested: model).`);
   }
   if (projects.length) {
     if (!doc.message) problems.push('A project arm starts each piece of work with a chat message. Add message: a file with its words, where {{NAME}} takes the input\'s value NAME.');
@@ -457,7 +459,7 @@ export async function armModels(doc: Comparison, root: string): Promise<{ arms: 
   // Project arms are compared only with project arms, and name their own model: the same for every arm unless tested.
   const projects = Object.entries(doc.arms).filter(([, arm]) => armIsProject(arm)) as Array<[string, ProjectArm]>;
   if (projects.length) {
-    for (const [armName, arm] of projects) arms[armName] = [{ agent: 'claude', model: arm.model ?? null, effort: arm.effort ?? null }];
+    for (const [armName, arm] of projects) arms[armName] = [{ agent: arm.project, model: arm.model ?? null, effort: arm.effort ?? null }];
     return { arms, shared: doc.tested === 'model' ? null : arms[projects[0]![0]]![0]! };
   }
   for (const [armName, arm] of Object.entries(doc.arms)) if (armIsMethod(arm)) arms[armName] = await methodModels(readDocument(resolve(root, arm)), defaultAgent);
@@ -518,10 +520,10 @@ export function armLabels(doc: Comparison, root: string) {
   const shared = (label: string) => Object.values(base).filter(other => other === label).length > 1;
   return Object.fromEntries(Object.entries(base).map(([key, label]) => [key, shared(label) ? `${label} (${key})` : label]));
 }
-/** A project arm as people say it: "Claude Code project", "Claude Code project with the Method plugin". */
-const projectWords = (arm: ProjectArm) => `Claude Code project${arm.plugins?.length ? ` with the ${arm.plugins.map(p => p === 'method' ? 'Method' : p).join(' and ')} plugin${arm.plugins.length === 1 ? '' : 's'}` : ''}`;
+/** A project arm as people say it: "Claude Code project", "Codex project with the Method plugin". */
+const projectWords = (arm: ProjectArm) => `${projectAgentName(arm.project)} project${arm.plugins?.length ? ` with the ${arm.plugins.map(p => p === 'method' ? 'Method' : p).join(' and ')} plugin${arm.plugins.length === 1 ? '' : 's'}` : ''}`;
 /** What a project arm starts with, in words, for the page (its starting instructions). */
-export const projectStart = (arm: ProjectArm) => `A Claude Code project folder that starts ${arm.files ? `with the files of ${arm.files}` : 'empty'}. ${arm.plugins?.includes('method') ? 'It has the Method plugin: its skill and hooks, and the method command, signed in to your Method account.' : 'It has no plugin and no method command.'} Each piece of work is a new chat in the folder; only the folder and Claude Code\'s memory carry over.`;
+export const projectStart = (arm: ProjectArm) => `A ${projectAgentName(arm.project)} project folder that starts ${arm.files ? `with the files of ${arm.files}` : 'empty'}. ${arm.plugins?.includes('method') ? 'It has the Method plugin: its skill and hooks, and the method command, signed in to your Method account.' : 'It has no plugin and no method command.'} Each piece of work is a new chat in the folder; only the folder and ${projectAgentName(arm.project)}\'s memory carry over.`;
 /** The file that each arm hands in, by its name: "the file reply.md", or "the file that the task names" when the path takes a value of the input. */
 export function deliverableWords(doc: Comparison) {
   if (!doc.deliverable) return null;
@@ -611,14 +613,26 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
     if (corrections && !projects.length) add('same_for_both', 'The session that changes an agent after a correction runs on the same model.');
   }
   if (projects.length) {
-    add('same_for_both', 'Every chat runs in a clean room: a fresh home folder with only the Claude Code sign-in, so no agent has your instructions, memory or settings. Claude Code\'s memory is on, as in the desktop app: each copy keeps its project folder and its Claude Code memory from one chat to the next, and nothing else.');
-    add('same_for_both', `Every chat has the same Claude Code tools (files, commands and subagents)${web ? ', and the web' : ', without the web'}.`);
+    // The words of the page for the projects' agent: Claude Code, Codex, or "the agent" when the model is tested across both.
+    const agents = new Set(projects.map(([, arm]) => arm.project));
+    const who = agents.size === 1 ? projectAgentName([...agents][0]!) : null;
+    if (who === 'Codex') {
+      add('same_for_both', 'Every chat runs in a clean room: a fresh home folder with only the Codex sign-in, so no agent has your instructions, memory, settings, plugins or connectors. Codex keeps what a person\'s Codex keeps: each copy keeps its project folder (with its AGENTS.md) and the AGENTS.md and memories of its Codex home from one chat to the next, and nothing else.');
+      add('same_for_both', `Every chat has the same Codex tools (files and commands), and runs commands without asking${web ? ', with web search' : ', without web search'}.`);
+      if (projects.some(([, arm]) => arm.plugins?.includes('method'))) add('same_for_both', 'A Method fix that a chat starts runs on Codex, on the same model.');
+    } else if (who) {
+      add('same_for_both', 'Every chat runs in a clean room: a fresh home folder with only the Claude Code sign-in, so no agent has your instructions, memory or settings. Claude Code\'s memory is on, as in the desktop app: each copy keeps its project folder and its Claude Code memory from one chat to the next, and nothing else.');
+      add('same_for_both', `Every chat has the same Claude Code tools (files, commands and subagents)${web ? ', and the web' : ', without the web'}.`);
+    } else {
+      add('same_for_both', 'Every chat runs in a clean room: a fresh home folder with only its agent\'s sign-in, so no agent has your instructions, memory or settings. Each copy keeps its project folder and its agent\'s memory from one chat to the next, and nothing else.');
+      add('same_for_both', `Every chat has its agent\'s own tools for files and commands${web ? ', and the web' : ', without the web'}.`);
+    }
     for (const [armName, arm] of projects) add('arms', `${capital(settings.labels[armName] ?? armName)}: ${arm.plugins?.includes('method') ? 'the Method plugin is loaded in every chat (its skill and hooks), and the method command is on its path, signed in to your Method account. Whether it uses Method is up to the agent.' : 'no plugin, and no method command.'}`);
     add('treatment', 'Each event is one new chat in the project folder. The first message is the task: the input\'s files are put in the folder, and the message asks for the file to hand in. After the agent works, a correction is the second message of the same chat; when the feedback writer finds nothing wrong, the second message is "That\'s right, thanks." Then the chat ends.');
     if (doc.first_message) add('treatment', 'The first chat of each project starts with the same first material for every agent, before the message.');
     add('treatment', 'A correction counts as received when its chat ended, and every Method fix that the chat started had ended. A chat that stops (a usage limit too) is not received, and the comparison stops there.');
     add('treatment', 'For each correction the page says what the agent did in the project: the files it wrote or changed, the Methods it built, and the method commands it ran.');
-    add('main_measure', 'A checkpoint is measured on copies of each project and its Claude Code memory: each checking input is a new chat in a fresh copy, so measuring never changes them.');
+    add('main_measure', `A checkpoint is measured on copies of each project and its ${who ?? 'agent\'s'} memory: each checking input is a new chat in a fresh copy, so measuring never changes them.`);
   } else add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
   add('same_for_both', web ? 'The tools are the tested difference, so the agents may use the web.' : 'No agent can use the web.');
   if (doc.deliverable) add('same_for_both', 'Only the handed-in file is measured.');
@@ -638,7 +652,8 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   }
   add('runs_per_point', `Runs count separate copies of each agent: each copy${doc.treatment ? ' gets the full treatment and' : ''} is measured once per input at each point.`);
   if ([doc.measure, ...(doc.other_measures ?? [])].some(m => m.rubric || m.checklist)) {
-    add('main_measure', `One Claude judge (${settings.judge.model ? modelName(settings.judge.model) : 'the model that Claude Code uses by default'}) marks each item met, partly or not met. Partly counts as half.`);
+    add('main_measure', settings.judge.agent === 'codex' ? `One Codex judge (${settings.judge.model ? modelName(settings.judge.model) : 'the model that Codex uses by default'}) marks each item met, partly or not met. Partly counts as half.`
+      : `One Claude judge (${settings.judge.model ? modelName(settings.judge.model) : 'the model that Claude Code uses by default'}) marks each item met, partly or not met. Partly counts as half.`);
     add('main_measure', 'The judge reads the handed-in file, every source the agent read in full, and the checklist.');
   }
   add('main_measure', 'Every item and every run counts the same.');
@@ -809,7 +824,7 @@ function assumptionsOf(doc: Comparison) {
  * upload: puts a text in the account and returns its reference (null when signed out).
  */
 async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain; project?: Project }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string }; source?: string }>,
-  checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>, exhibits: Exhibits | null = null) {
+  checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude' | 'codex'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>, exhibits: Exhibits | null = null) {
   const measure = async (m: Measure) => ({ name: m.name, how: m.code ? 'code' : m.rubric || m.checklist ? 'model' : 'person', ...(m.description ? { description: m.description } : {}),
     ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}),
     ...(m.checklist ? { checklists: Object.fromEntries(doc.inputs.map(id => [id, (checklists[id] ?? []).map(item => short(item.text, 2000))])) } : {}) });
@@ -827,7 +842,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
   for (const [part, list] of Object.entries(doc.notes ?? {})) { const page = notePart(part); if (page && list?.length) notes[page] = [...(notes[page] ?? []), ...list]; }
   return {
     question: doc.question,
-    arms: arms.map(arm => ({ id: arm.name, name: arm.label, ...(arm.plain ? { agent: arm.plain.agent, instructions: arm.plain.instructions } : arm.project ? { agent: 'claude', instructions: arm.project.start_words } : { method_id: arm.id }) })),
+    arms: arms.map(arm => ({ id: arm.name, name: arm.label, ...(arm.plain ? { agent: arm.plain.agent, instructions: arm.plain.instructions } : arm.project ? { agent: arm.project.agent, instructions: arm.project.start_words } : { method_id: arm.id }) })),
     difference: doc.difference, ...(doc.other_differences?.length ? { other_differences: doc.other_differences } : {}),
     inputs: { checking: doc.inputs, ...(doc.teaching?.length ? { teaching: doc.teaching } : {}), ...(about?.description ? { description: about.description } : {}),
       ...(about?.teaching_description ? { teaching_description: about.teaching_description } : {}), ...(about?.noun ? { noun: about.noun } : {}), details },
@@ -839,7 +854,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
       order: doc.treatment.seed !== undefined ? 'shuffled' : 'given', ...(doc.treatment.seed !== undefined ? { seed: doc.treatment.seed } : {}),
       list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name) : `New input: ${e.input.id}`), 4000), ...(e.source ? { source: short(e.source, 2000) } : {}) })) } } : {}),
     ...(doc.expected ? { expected_answers: true } : {}),
-    judge: { agent: settings.judge.agent, model: settings.judge.model ?? 'Claude Code\'s default model' },
+    judge: { agent: settings.judge.agent, model: settings.judge.model ?? `${settings.judge.agent === 'codex' ? 'Codex' : 'Claude Code'}'s default model` },
     assumptions: assumptionsOf(doc),
     ...(doc.questions ? { questions: doc.questions.map(question => ({
       // A file shows its text, never its name.
@@ -1005,7 +1020,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
       const start = join(folder, 'arms', armName, 'start');
       copyTree(arm.files ? resolve(root, arm.files) : join(folder, 'arms', armName, 'no-files'), start);
       const plugins = [...new Set(arm.plugins ?? [])] as ProjectPlugin[];
-      const project: Project = { agent: 'claude', plugins, model: model.model, effort: model.effort, web, deliverable: doc.deliverable!,
+      const project: Project = { agent: arm.project, plugins, model: model.model, effort: model.effort, web, deliverable: doc.deliverable!,
         message: readFileSync(resolve(root, doc.message!), 'utf8'), first_message: doc.first_message ? readFileSync(resolve(root, doc.first_message), 'utf8') : null,
         probe: doc.treatment?.probe ?? null, start_words: projectStart(arm), start };
       const hash = sha({ ...project, start: folderHash(start), plugin: plugins.includes('method') ? folderHash(comparisonPlugin(folder)) : null, version: 'project/1' });
@@ -1041,8 +1056,9 @@ export async function compileComparison(file: string, options: { strict?: boolea
   }
   // A project arm's runs are runs of a Method of one step, which holds one chat: so each measured chat is a run in the account.
   for (const arm of arms.filter(a => a.project)) {
-    arm.method = generated(arm.name, 'project.method', { format: 'method/3.4', name: arm.label, goal: 'One chat in a Claude Code project folder, as a person has it in the desktop app.',
-      inputs: { request: { type: 'text', description: 'The chat: the project folder, the message and how Claude Code runs.' } },
+    const who = projectAgentName(arm.project.agent);
+    arm.method = generated(arm.name, 'project.method', { format: 'method/3.4', name: arm.label, goal: `One chat in a ${who} project folder, as a person has it in the desktop app.`,
+      inputs: { request: { type: 'text', description: `The chat: the project folder, the message and how ${who} runs.` } },
       limits: { timeout_ms: 6 * 3_600_000, step: { timeout_ms: 6 * 3_600_000 } },
       steps: { chat: { in: { request: 'inputs.request' }, do: { kind: 'run', runtime: 'node', entrypoint: 'stage.mjs', args: ['project_chat'] }, out: { reply: { type: 'text', description: 'The agent\'s last words, the handed-in file, and what it did.' } } } },
       result: 'reply' });
@@ -1050,9 +1066,14 @@ export async function compileComparison(file: string, options: { strict?: boolea
     arm.id = readDocument(arm.method).id;
   }
   const device = arms.some(a => a.run_data === 'device');
-  const judge = { agent: 'claude' as const, model: models.shared?.agent === 'claude' ? models.shared.model : null };
+  // The judge (and a feedback writer's judge) runs on the agent and model that every arm shares: Codex when every arm is
+  // on Codex, else Claude Code.
+  const judgeAgent = models.shared?.agent === 'codex' ? 'codex' as const : 'claude' as const;
+  const judge = { agent: judgeAgent, model: models.shared?.agent === judgeAgent ? models.shared.model : null };
+  const judgeModel: ArmModel = { agent: judge.agent, model: judge.model, effort: models.shared?.agent === judge.agent ? models.shared.effort : null };
+  const judgeTools = judge.agent === 'codex' ? ['shell', 'read', 'search'] : ['read', 'search'];
   const judgeMethod = join(folder, 'judge.method');
-  writeFileSync(judgeMethod, JSON.stringify(sessionMethod('Comparison judge', 'Mark each checklist item of a handed-in document.', 'claude', { agent: 'claude', model: judge.model, effort: models.shared?.agent === 'claude' ? models.shared.effort : null }, ['read', 'search'], judgePrompt, [], 1_800_000), null, 2) + '\n', { mode: 0o600 });
+  writeFileSync(judgeMethod, JSON.stringify(sessionMethod('Comparison judge', 'Mark each checklist item of a handed-in document.', judge.agent, judgeModel, judgeTools, judgePrompt, [], 1_800_000), null, 2) + '\n', { mode: 0o600 });
   const resolveInput = (inputId: string) => {
     const value = inputValue(root, inputId), room = inputRoom(root, inputId);
     return { id: inputId, value, room, deliverable: doc.deliverable ? deliverableOf(doc.deliverable, value) : null, hash: room ? sha({ value, room: folderHash(room) }) : sha(value) };
@@ -1069,11 +1090,11 @@ export async function compileComparison(file: string, options: { strict?: boolea
   // A feedback writer: a script, or one Claude judge with the writer's instruction (feedback.method, on the judge's model).
   const writers = doc.treatment?.feedback_writers ?? {};
   const feedbackMethod = join(folder, 'feedback.method');
-  if (Object.values(writers).some(w => w.judge !== undefined)) writeFileSync(feedbackMethod, JSON.stringify(sessionMethod('Feedback writer', 'Write an expert\'s feedback on one piece of work from the hidden expected answer.', 'claude', { agent: 'claude', model: judge.model, effort: models.shared?.agent === 'claude' ? models.shared.effort : null }, ['read', 'search'], feedbackPrompt, [], 1_800_000), null, 2) + '\n', { mode: 0o600 });
+  if (Object.values(writers).some(w => w.judge !== undefined)) writeFileSync(feedbackMethod, JSON.stringify(sessionMethod('Feedback writer', 'Write an expert\'s feedback on one piece of work from the hidden expected answer.', judge.agent, judgeModel, judgeTools, feedbackPrompt, [], 1_800_000), null, 2) + '\n', { mode: 0o600 });
   const writerOf = (writerName: string): Writer => {
     const w = writers[writerName]!;
     return w.code ? { name: writerName, code: resolve(root, w.code), hash: sha({ code: sha(readFileSync(resolve(root, w.code))) }) }
-      : { name: writerName, judge: w.judge!, method: feedbackMethod, hash: sha({ judge: w.judge, model: judge.model, version: FEEDBACK_VERSION }) };
+      : { name: writerName, judge: w.judge!, method: feedbackMethod, hash: sha({ judge: w.judge, model: judge.model, ...(judge.agent === 'codex' ? { agent: 'codex' } : {}), version: FEEDBACK_VERSION }) };
   };
   // A feedback event carries its writer and the input's hidden answer, which only the writer reads. Its hash is both.
   const events = order.map(({ event, file_index }, i) => {
@@ -1174,11 +1195,11 @@ type Plan = ReturnType<typeof JSON.parse>;
 /** A plain arm: Claude Code or Codex with its instructions (after a treatment, as its builder left them), model and effort. */
 type Plain = { agent: 'claude' | 'codex'; instructions: string; model: string | null; effort: string | null };
 /**
- * A Claude Code project arm: its plugins, model, effort and web, the file it hands in, the message that starts each
+ * A Claude Code or Codex project arm: its agent, plugins, model, effort and web, the file it hands in, the message that starts each
  * chat (with {{NAME}}), what the first chat of a project gets before it, the probe question, what it starts with in
  * words (start_words) and the folder it starts from (start).
  */
-type Project = { agent: 'claude'; plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean; deliverable: string; message: string; first_message: string | null;
+type Project = { agent: 'claude' | 'codex'; plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean; deliverable: string; message: string; first_message: string | null;
   probe: string | null; start_words: string; start: string };
 /** An arm at one point: a Method folder and file, a plain agent, or a copy of a project folder and its Method cache (with its answer to the probe). */
 type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } | { plain: Plain; hash: string } | { copy: { dir: string; cache: string | null; memory: string | null }; probe: string | null; hash: string };
@@ -1504,7 +1525,7 @@ async function buildIn(event: any, arm: any, instructions: string, workDir: stri
 
 /** How a project arm's chats run, with this learner's Method cache: the method CLI that runs the comparison, signed in to its account. */
 function chatSettings(project: Project, cache: string, folder: string): ChatSettings {
-  return { plugins: project.plugins, model: project.model, effort: project.effort, web: project.web,
+  return { ...(project.agent === 'codex' ? { agent: 'codex' as const } : {}), plugins: project.plugins, model: project.model, effort: project.effort, web: project.web,
     ...(project.plugins.includes('method') ? { method: { cli: cliBin(), config: configRoot(), cache, plugin: join(folder, 'method-plugin'), account: readAccount(folder)?.account ?? process.env.METHOD_ACCOUNT ?? null, server: process.env.METHOD_SERVER ?? null } } : {}) };
 }
 /** The first message of a chat on an input: the message filled with the input's values, after the first material when this is the project's first chat. */
@@ -1547,13 +1568,13 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
     }
   } finally { await chat.close(); }
   const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable, { before: memoryBefore, after: projectFiles(learner.memory) });
-  const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory });
+  const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory }, project.agent);
   removeTree(start);
   // A Method fix's tokens are not reported: a chat that started one reports none, so usage falls back to minutes.
   const tokens = did.judged.includes('wrong') ? null : sumTokens(turns.map(t => t.tokens));
   if (event.kind !== 'correction') return { received: true, outcome: 'given', did, tokens };
   const outcome: CorrectionOutcome = none !== null ? 'no_feedback' : keptSomething(did) ? 'edited' : right ? 'was_right' : 'not_edited';
-  return { received: true, outcome, text: none ?? text ?? '', output: keptOutput(output), did, tokens, change: { summary: didSummary(did), diff } };
+  return { received: true, outcome, text: none ?? text ?? '', output: keptOutput(output), did, tokens, change: { summary: didSummary(did, project.agent), diff } };
 }
 
 /**
@@ -1684,7 +1705,7 @@ function treatmentNote(plan: Plan, arm: any, checkpoint: number | null, learner?
   if (!given.length) return 'Nothing was given to the agent before this run.';
   const how = arm.project ? 'Each event was one new chat in the project folder; a correction was the second message of its chat. The events, in this order' : arm.plain ? `After each correction a ${arm.plain.agent === 'codex' ? 'Codex' : 'Claude Code'} session edited the agent's instructions. The corrections, one at a time, in this order` : 'Method learned from each correction, one at a time, in this order';
   const record = (e: any) => learner?.events.find(x => x.index === e.index);
-  const outcome = (e: any) => { const r = record(e); return r && e.kind === 'correction' ? ` (${outcomeWords[r.outcome]}${r.did ? `; ${didSummary(r.did).replace(/\.$/, '')}` : ''})` : ''; };
+  const outcome = (e: any) => { const r = record(e); return r && e.kind === 'correction' ? ` (${outcomeWords[r.outcome]}${r.did ? `; ${didSummary(r.did, arm.project?.agent).replace(/\.$/, '')}` : ''})` : ''; };
   const name = (id: string) => plan.names?.[id] ?? id.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, '');
   // A feedback writer's words are this copy's own.
   const words = (e: any) => record(e)?.text ?? e.text ?? (e.feedback ? `(from the feedback writer ${e.feedback.name})` : '');
@@ -1827,7 +1848,7 @@ const runKey = (c: { arm: string; hash: string; input: { hash: string; deliverab
 /** The version of the judge: a new judge grades every run again. */
 const JUDGE_VERSION = 'session-judge/1';
 /** The grader: every measure, as the comparison defines it, and the judge. A changed measure is a new grader, and every run is graded again. */
-const graderVersion = (plan: Plan) => sha({ judge: JUDGE_VERSION, model: plan.judge?.model ?? null, measures: plan.measures.map((m: any) => ({ name: m.name, code: m.code?.hash ?? null, rubric: m.rubric ?? null, checklist: m.checklist ?? null, covered: m.covered ?? null, person: m.person ?? null })) }).slice(0, 16);
+const graderVersion = (plan: Plan) => sha({ judge: JUDGE_VERSION, model: plan.judge?.model ?? null, ...(plan.judge?.agent === 'codex' ? { agent: 'codex' } : {}), measures: plan.measures.map((m: any) => ({ name: m.name, code: m.code?.hash ?? null, rubric: m.rubric ?? null, checklist: m.checklist ?? null, covered: m.covered ?? null, person: m.person ?? null })) }).slice(0, 16);
 /**
  * The keys of the grade cells of these runs, by run key. A measure may read other runs of the same arm (a regression
  * measure reads the earlier checkpoints), so a grade key holds the hash of each run of that arm and learner up to and
@@ -2026,7 +2047,7 @@ async function saveFinishedRun(cell: Cell, record: any) {
  * file, which the cell reads; without a deliverable a Method arm's output is its result. Both write the same run
  * records, with a transcript of each agent attempt; the run is saved in the account and linked to its cell.
  */
-/** The model that a project chat ran on, as Claude Code named it. */
+/** The model that a project chat ran on, as its agent named it (Claude Code in its start event, Codex in its saved chat). */
 const chatModels = (result: any): string[] => { try { const model = JSON.parse(result.result).model; return typeof model === 'string' ? [model] : []; } catch { return []; } };
 async function runCell(cell: Cell) {
   process.env.METHOD_CACHE_DIR = cell.cache_dir;
@@ -2510,7 +2531,7 @@ async function grade(item: any) {
     }
   }
   const seen = read === null ? null : [
-    `The judge (${context.judge?.model ?? 'Claude Code\'s default model'}) read in full: ${read.length ? read.join(', ') : 'no source files (the agent read none)'}.`,
+    `The judge (${context.judge?.model ?? `${context.judge?.agent === 'codex' ? 'Codex' : 'Claude Code'}'s default model`}) read in full: ${read.length ? read.join(', ') : 'no source files (the agent read none)'}.`,
     `The document that the judge marked${run.deliverable ? ` (${run.deliverable})` : ''}:\n${run.result === null || run.result === undefined ? '(not handed in)' : outputText(run.result)}`].join('\n\n');
   const record = { key: item.key, target: run.key, grader_version: item.grader_version, arm: run.arm, input: run.input, repeat: run.repeat, checkpoint: run.checkpoint,
     run_dir: run.run_dir, scores, usage: item.usage ?? null, ...(Object.keys(noise).length ? { noise_scores: noise } : {}), verdicts, ...(Object.keys(printed).length ? { printed } : {}), seen,

@@ -284,3 +284,135 @@ it('a comparison keeps its copy of the Method plugin when an update changes only
     expect(JSON.parse(readFileSync(manifest, 'utf8')).version).toBe(installed.version);
   } finally { rmSync(folder, { recursive: true, force: true }); }
 });
+
+/**
+ * A stand-in for Codex on PATH, as a Codex project chat runs it. `codex plugin ...` is logged. `codex exec` starts a
+ * chat (a new thread) and `codex exec resume THREAD` goes on with it; it saves the chat in HOME/.codex/sessions with
+ * the model of HOME/.codex/config.toml, as Codex does. A task message: it reads NOTES.md (with method on PATH) or its
+ * Codex home's AGENTS.md and answers n plus the number of "add one" lines. A correction: without method it saves the
+ * words in its home's AGENTS.md; with method in NOTES.md, builds a Method and runs method judge in its shell's call.
+ */
+function codexStub(root: string) {
+  const bin = join(root, 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, 'codex'), `#!/usr/bin/env node
+const fs = require('fs'), path = require('path'), crypto = require('crypto');
+const argv = process.argv.slice(2);
+const log = entry => fs.appendFileSync(${JSON.stringify(join(root, 'codex-calls.jsonl'))}, JSON.stringify(entry) + '\\n');
+const home = path.join(process.env.HOME, '.codex');
+if (argv[0] !== 'exec') { log({ args: argv, home: process.env.HOME }); process.exit(0); }
+let prompt = '';
+const out = event => console.log(JSON.stringify(event));
+process.stdin.on('data', d => prompt += d).on('end', () => {
+  const cwd = process.cwd();
+  const resume = argv[1] === 'resume', thread = resume ? argv[2] : crypto.randomUUID();
+  const hasMethod = (process.env.PATH || '').split(':').some(dir => fs.existsSync(path.join(dir, 'method')));
+  const config = fs.readFileSync(path.join(home, 'config.toml'), 'utf8');
+  log({ args: argv, prompt, cwd, files: fs.readdirSync(cwd, { recursive: true }).sort(), home: process.env.HOME, hasMethod, config, cache: process.env.METHOD_CACHE_DIR || null });
+  out({ type: 'thread.started', thread_id: thread });
+  const agents = path.join(home, 'AGENTS.md');
+  const notes = hasMethod ? path.join(cwd, 'NOTES.md') : agents, known = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : '';
+  let result = 'Done.';
+  const task = /task (\\d+)\\. Save your answer as (\\S+)\\./.exec(prompt);
+  if (task) fs.writeFileSync(path.join(cwd, task[2]), String(Number(task[1]) + known.split('\\n').filter(l => l.includes('add one')).length));
+  else if (prompt.startsWith('Which rules')) result = known || 'None yet.';
+  else if (resume) {
+    if (!prompt.startsWith("That's right")) fs.appendFileSync(notes, prompt + '\\n');
+    if (hasMethod) {
+      if (!fs.existsSync(path.join(cwd, 'review.method'))) fs.writeFileSync(path.join(cwd, 'review.method'), JSON.stringify({ format: 'method/3.4', id: 'wf_' + 'c'.repeat(32), name: 'Review' }) + '\\n');
+      const command = "/bin/zsh -lc 'method judge run_1 wrong --note \\"" + prompt.slice(0, 20) + "\\"'";
+      out({ type: 'item.completed', item: { id: 'c1', type: 'command_execution', command, aggregated_output: 'ok', exit_code: 0, status: 'completed' } });
+    }
+  }
+  out({ type: 'item.completed', item: { id: 'm1', type: 'agent_message', text: result } });
+  fs.writeFileSync(argv[argv.indexOf('--output-last-message') + 1], result);
+  const model = /^model = "(.*)"$/m.exec(config)?.[1] ?? 'gpt-default';
+  const day = path.join(home, 'sessions', '2026', '11', '03');
+  fs.mkdirSync(day, { recursive: true });
+  fs.appendFileSync(path.join(day, 'rollout-2026-11-03T00-00-00-' + thread + '.jsonl'), JSON.stringify({ type: 'turn_context', payload: { model, cwd } }) + '\\n');
+  out({ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 50, output_tokens: 20 } });
+});
+`, { mode: 0o700 });
+  mkdirSync(join(process.env.HOME!, '.codex'), { recursive: true });
+  writeFileSync(join(process.env.HOME!, '.codex', 'auth.json'), '{}');
+  process.env.PATH = `${bin}:${path}`;
+  return () => lines(join(root, 'codex-calls.jsonl'));
+}
+/** The fixture with Codex project arms on one Codex model. */
+function codexFixture() {
+  const made = fixture();
+  const doc = JSON.parse(readFileSync(made.file, 'utf8'));
+  writeFileSync(made.file, JSON.stringify({ ...doc, question: 'Does Codex keep corrections better with the Method plugin?',
+    arms: { plain: { project: 'codex', model: 'gpt-6.1-sol' }, method: { project: 'codex', plugins: ['method'], model: 'gpt-6.1-sol' } } }));
+  return made;
+}
+
+it('Claude Code and Codex project arms are compared together only when the comparison tests the model', () => {
+  const { file } = codexFixture();
+  const good = JSON.parse(readFileSync(file, 'utf8'));
+  const check = (value: unknown) => { writeFileSync(file, JSON.stringify(value)); return () => readComparison(file); };
+  expect(check(good)()).toBeTruthy();
+  const mixed = { ...good, arms: { ...good.arms, plain: { project: 'claude', model: 'gpt-6.1-sol' } } };
+  expect(check(mixed)).toThrow(/The project arms plain and method are Claude Code and Codex, which run on different models\. Make every project arm the same agent, or add tested: model\./);
+  expect(check({ ...mixed, arms: { ...mixed.arms, plain: { project: 'claude', model: 'claude-sonnet-5-5' } }, tested: 'model' })()).toBeTruthy();
+});
+
+it('a Codex project chat is codex exec in the project folder, resumed by its thread for the correction, with the model in Codex\'s config, the Method plugin added from a marketplace, and Codex\'s home memory carried over', async () => {
+  const { root, file } = codexFixture();
+  const calls = codexStub(root);
+  const compiled = await compileComparison(file);
+  expect(compiled.spec.arms.map((a: any) => [a.id, a.name, a.agent])).toEqual([['plain', 'Codex project', 'codex'], ['method', 'Codex project with the Method plugin', 'codex']]);
+  expect(compiled.spec.judge).toEqual({ agent: 'codex', model: 'gpt-6.1-sol' });
+  const rules = compiled.spec.method_rules.map((r: any) => r.text).join(' ');
+  expect(rules).toContain('only the Codex sign-in');
+  expect(rules).toContain('A Method fix that a chat starts runs on Codex, on the same model.');
+  expect(rules).not.toContain('Claude');
+  const comparison = JSON.parse(readFileSync(compiled.inputs, 'utf8')).comparison as string;
+  const plan = JSON.parse(comparison);
+  expect(JSON.parse(readFileSync(plan.judge_method, 'utf8')).steps.work.do).toMatchObject({ kind: 'session', agent: 'codex', model: 'gpt-6.1-sol' });
+  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  const all = calls(), chats = all.filter(c => c.args[0] === 'exec');
+  // The Method plugin is added in the Method arm's rooms only, as the Method installer adds it to Codex.
+  const plugin = all.filter(c => c.args[0] === 'plugin');
+  expect(plugin.map(c => c.args.slice(0, 3).join(' '))).toEqual(Array(3).fill(['plugin marketplace add', 'plugin add method@method']).flat());
+  for (const arm of ['plain', 'method']) {
+    const own = chats.filter(c => c.hasMethod === (arm === 'method'));
+    expect(own).toHaveLength(2 * 2 + 1);
+    const [first, second, third, fourth] = own;
+    expect(first.prompt).toBe('Our guide: answer with the number.\n\nHere is task 5. Save your answer as answer.txt.');
+    expect(first.args.slice(0, 2)).toEqual(['exec', '--json']);
+    expect(first.args[first.args.indexOf('-C') + 1]).toBe(first.cwd);
+    // The correction goes on in the same chat: codex exec resume with the thread that the first message started.
+    expect(second.args.slice(0, 2)).toEqual(['exec', 'resume']);
+    expect(second.prompt).toBe('It needs to be 6 because we add one.');
+    expect(third.args[1]).not.toBe('resume');
+    expect(fourth.prompt).toBe('That\'s right, thanks.');
+    expect(first.files).toContain('docs/brief.md');
+    expect(first.home).not.toBe(process.env.HOME);
+    expect([root, realpathSync(root)].some(r => first.cwd.startsWith(r))).toBe(false);
+    // Codex's config in the room: the arm's model, no web search, no account connectors or remote plugins.
+    expect(first.config).toContain('model = "gpt-6.1-sol"');
+    expect(first.config).toContain('web_search = "disabled"');
+    expect(first.config).toContain('apps = false');
+    expect(first.args).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(first.args.includes('--dangerously-bypass-hook-trust')).toBe(arm === 'method');
+    expect(first.cache === null).toBe(arm === 'plain');
+  }
+  const first = chats.find(c => c.hasMethod === false)!, resumed = chats.filter(c => c.hasMethod === false)[1]!;
+  expect(resumed.args[2]).toMatch(/^[0-9a-f-]{36}$/);
+  expect(first.args).not.toContain(resumed.args[2]);
+  const events = (arm: string) => treated.find((t: any) => t.arm === arm).learners[0].events;
+  expect(events('plain').map((e: any) => [e.outcome, e.change.summary])).toEqual([['edited', 'Saved to Codex memory (AGENTS.md).'], ['was_right', 'Changed nothing in the project.']]);
+  expect(events('plain')[0].change.diff).toContain('+++ Codex memory/AGENTS.md');
+  expect(events('plain')[0].tokens).toBeGreaterThan(0);
+  expect(events('method').map((e: any) => [e.outcome, e.change.summary])).toEqual([
+    ['edited', 'Wrote NOTES.md. Built a Method (review.method). Ran method judge (wrong).'], ['was_right', 'Ran method judge (wrong).']]);
+  const learner = treated.find((t: any) => t.arm === 'plain').learners[0];
+  expect(learner.snapshots['2'].probe).toBe('It needs to be 6 because we add one.\n');
+  // A checkpoint's chat starts from Codex's memory at that point, and reports the model that Codex's saved chat names.
+  const cells = ((await compareStage('plan', { comparison, go: true, treated: JSON.stringify(treated) })).cells as string[]).map(c => JSON.parse(c)).filter((c: any) => c.arm === 'plain');
+  const runs = [];
+  for (const cell of cells) runs.push(JSON.parse((await compareStage('cell', { cell: JSON.stringify(cell) })).full_run as string));
+  expect(runs.map(r => [r.checkpoint, r.result])).toEqual([[0, '1'], [0, '2'], [2, '2'], [2, '3']]);
+  expect(runs[0].models).toEqual(['gpt-6.1-sol']);
+}, 600_000);

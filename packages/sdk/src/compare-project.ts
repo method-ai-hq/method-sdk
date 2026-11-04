@@ -1,29 +1,40 @@
 /**
- * A Claude Code project arm of a comparison: Claude Code used the way a person uses the desktop app. The arm's state is
- * one project folder. Each piece of work is a new chat in that folder: the first message is the task, the agent works,
- * and a second message in the same chat may correct it. When the chat ends, only the project folder carries over.
+ * A project arm of a comparison: Claude Code or Codex used the way a person uses it. The arm's state is one project
+ * folder and the agent's own memory. Each piece of work is a new chat in that folder: the first message is the task, the
+ * agent works, and a second message in the same chat (resumed) may correct it. When the chat ends, only the project
+ * folder and the agent's memory carry over: Claude Code's auto-memory for the folder, or what Codex keeps in its home
+ * (its AGENTS.md and its memories folder); the project's own AGENTS.md or CLAUDE.md is in the folder.
  *
- * Every chat runs in a clean room: a fresh HOME with only the Claude Code sign-in and the learner's Claude Code memory, the same model, effort and tools for
+ * Every chat runs in a clean room: a fresh HOME with only the agent's sign-in and the learner's memory, the same model, effort and tools for
  * every arm, and no web unless the comparison tests the tools. The chat works in a copy of the project in a folder of
- * its own outside every repository and the comparison's folder, as a person's own project is: Claude Code reads no
- * instructions of the folders around the comparison (CLAUDE.md, AGENTS.md), keys its memory by that folder, and the
- * agent finds no hidden answers beside it. The Method cache of a project with the Method plugin is copied beside it.
+ * its own outside every repository and the comparison's folder, as a person's own project is: the agent reads no
+ * instructions of the folders around the comparison (CLAUDE.md, AGENTS.md), and finds no hidden answers beside it. The
+ * Method cache of a project with the Method plugin is copied beside it.
  * Other chats cannot be found from it: the folder that holds every project's folder, and each room, cannot be listed.
- * The account's cloud plugins and skills are not synced into the room. A project with the Method plugin also gets the plugin
- * (loaded with --plugin-dir, as Claude Code loads a plugin for one session) and the method CLI on PATH, signed in to the
- * comparison's Method account. A project without it has no plugin and no method command on PATH.
+ * The account's cloud plugins, skills and connectors are not synced into the room. A project with the Method plugin also
+ * gets the plugin (Claude Code loads it with --plugin-dir; Codex installs it from a local marketplace, as the Method
+ * installer adds it, and runs its hooks as a person who trusted them) and the method CLI on PATH, signed in to the
+ * comparison's Method account. A Method fix that a Codex chat starts runs on Codex, the agent that started it. A project
+ * without the plugin has no plugin and no method command on PATH.
  */
 import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { removeTree } from './files.js';
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { textDiff } from './text-diff.js';
 import { readDocument } from './authoring.js';
 import { methodIdPattern, newMethodId, writeMethodId } from './versions.js';
 
+/** The agents that a project arm can be: Claude Code (as in the desktop app) or Codex (as in the Codex app). */
+export const projectAgents = ['claude', 'codex'] as const;
+export type ProjectAgent = (typeof projectAgents)[number];
+/** An agent's name as people say it. */
+export const agentName = (agent: ProjectAgent) => agent === 'claude' ? 'Claude Code' : 'Codex';
+/** Where an agent's memory is, in the words of the page: "Claude memory", "Codex memory". */
+export const memoryName = (agent: ProjectAgent) => agent === 'claude' ? 'Claude memory' : 'Codex memory';
 /** The plugins that a project arm can have. method: Method's own plugin (its skill and hooks, and the method CLI). */
 export const projectPlugins = ['method'] as const;
 export type ProjectPlugin = (typeof projectPlugins)[number];
@@ -111,11 +122,11 @@ function findProgram(name: string, path: string) {
 }
 
 /**
- * How a project chat runs. plugins: the project's plugins. method: for the Method plugin, the folder that holds the
+ * How a project chat runs. agent: Codex, or Claude Code when it is not named. plugins: the project's plugins. method: for the Method plugin, the folder that holds the
  * method CLI, the Method config folder (its sign-in), the learner's Method cache, and the account and server the
  * comparison uses.
  */
-export type ChatSettings = { plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean;
+export type ChatSettings = { agent?: ProjectAgent; plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean;
   method?: { cli: string; config: string; cache: string; plugin: string; account?: string | null; server?: string | null } };
 /** One message of a chat and what came back: the agent's last words, its transcript entries, and the tokens it reported. */
 export type Turn = { message: string; reply: string; model: string | null; entries: any[]; tokens: number | null; attempt: string };
@@ -137,11 +148,14 @@ export function projectDesk(project: string) {
  * Open one chat in a project folder. Each send is one message of the same chat (the first starts it, the next resume
  * it). close() waits for every Method fix that the chat started to end, puts Claude Code's memory back, and removes the
  * room. artifacts: where each message keeps its prompt, events and transcript (session/attempt-N), as a Method session
- * step keeps them. memory: the folder that keeps the learner's Claude Code memory between chats (auto-memory is on, as
- * in the desktop app). Claude Code finds it at HOME/.claude/projects/SLUG/memory for the chat's project folder, so it
- * is put there before the chat and taken back from there after it.
+ * step keeps them. memory: the folder that keeps the learner's agent memory between chats. Claude Code (auto-memory is
+ * on, as in the desktop app) finds it at HOME/.claude/projects/SLUG/memory for the chat's project folder; Codex finds
+ * it in its home (HOME/.codex: AGENTS.md and memories/). It is put there before the chat and taken back after it.
  */
 export async function openChat(project: string, settings: ChatSettings, artifacts: string, memory: string | null = null) {
+  return settings.agent === 'codex' ? openCodexChat(project, settings, artifacts, memory) : openClaudeChat(project, settings, artifacts, memory);
+}
+async function openClaudeChat(project: string, settings: ChatSettings, artifacts: string, memory: string | null) {
   const { cleanRoomEnv } = await import('@withmethod/runtime/clean-room.js');
   const { claudeTranscript } = await import('@withmethod/runtime/transcript.js');
   const room = await cleanRoomEnv('claude', process.env);
@@ -238,6 +252,131 @@ export async function openChat(project: string, settings: ChatSettings, artifact
   return { send, close };
 }
 
+/** What Codex keeps in its home between chats, as a person's Codex does: its own AGENTS.md and its memories folder. */
+const codexMemory = ['AGENTS.md', 'memories'];
+/** A TOML string. */
+const toml = (value: string) => JSON.stringify(value);
+/**
+ * One Codex chat in a project folder, as a person has it in the Codex app: `codex exec` in the project's desk, and
+ * `codex exec resume THREAD` for the next message of the same chat. The room's Codex home holds the sign-in, the
+ * learner's Codex memory, and a config with the chat's model and effort (as a person sets them in Codex, so the
+ * Method steps and fixes that the chat starts on Codex use them too), web search off unless tested, and no account
+ * connectors or remote plugins. Commands run without asking, as Claude Code's project chats do.
+ */
+async function openCodexChat(project: string, settings: ChatSettings, artifacts: string, memory: string | null) {
+  const { cleanRoomEnv } = await import('@withmethod/runtime/clean-room.js');
+  const { codexTranscript } = await import('@withmethod/runtime/transcript.js');
+  const room = await cleanRoomEnv('codex', process.env);
+  chmodSync(room.root, 0o300);
+  try {
+    // Codex finds its helpers (codex-code-mode-host) beside its real program, which a link on PATH may hide.
+    const codex = findProgram('codex', process.env.PATH ?? '');
+    const env: NodeJS.ProcessEnv = { ...room.env, PATH: [dirname(realpathSync(codex)), pathWithoutMethod(process.env.PATH ?? '', room.root)].join(delimiter) };
+    const home = join(env.HOME!, '.codex');
+    writeFileSync(join(home, 'config.toml'), [
+      ...(settings.model ? [`model = ${toml(settings.model)}`] : []), ...(settings.effort ? [`model_reasoning_effort = ${toml(settings.effort)}`] : []),
+      ...(settings.web ? [] : ['web_search = "disabled"']),
+      '', '[features]', 'apps = false', 'remote_plugin = false', 'plugin_discovery_prefetch = false', ''].join('\n'), { mode: 0o600 });
+    if (memory && existsSync(memory)) for (const name of codexMemory) if (existsSync(join(memory, name))) cpSync(join(memory, name), join(home, name), { recursive: true });
+    const desk = projectDesk(project);
+    copyTree(project, desk);
+    const deskCache = settings.method ? join(dirname(desk), 'cache') : null;
+    if (settings.method && deskCache) copyTree(settings.method.cache, deskCache);
+    const keep = () => { copyTree(desk, project); if (settings.method && deskCache) copyTree(deskCache, settings.method.cache); };
+    const hooks: string[] = [];
+    if (settings.plugins.includes('method')) {
+      const m = settings.method;
+      if (!m) throw Error('A project with the Method plugin needs the method CLI.');
+      const bin = join(env.HOME!, '.local', 'bin');
+      mkdirSync(bin, { recursive: true, mode: 0o700 });
+      symlinkSync(join(m.cli, 'method'), join(bin, 'method'));
+      Object.assign(env, { PATH: `${bin}${delimiter}${env.PATH}`, METHOD_CONFIG_DIR: m.config, METHOD_CACHE_DIR: deskCache!, METHOD_INSTALL_URL: 'file:///dev/null',
+        ...(settings.web ? {} : { METHOD_WEB: 'off' }), ...(m.account ? { METHOD_ACCOUNT: m.account } : {}), ...(m.server ? { METHOD_SERVER: m.server } : {}) });
+      // The plugin is added as the Method installer adds it to Codex: from a marketplace, here a local one that holds the comparison's copy.
+      const market = join(room.root, 'marketplace');
+      cpSync(m.plugin, join(market, 'plugins', 'method'), { recursive: true });
+      mkdirSync(join(market, '.claude-plugin'), { recursive: true, mode: 0o700 });
+      writeFileSync(join(market, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: 'method', owner: { name: 'Method' }, plugins: [{ name: 'method', source: './plugins/method' }] }));
+      for (const args of [['plugin', 'marketplace', 'add', market], ['plugin', 'add', 'method@method']]) {
+        const done = spawnSync(codex, args, { cwd: room.root, env, encoding: 'utf8', timeout: 120_000 });
+        if (done.status !== 0) throw Error(`Codex did not add the Method plugin (codex ${args.join(' ')}): ${String(done.stderr || done.stdout || done.error?.message || '').trim().split('\n').at(-1)}`);
+      }
+      // A person trusts the plugin's hooks once in Codex; here every chat runs them.
+      hooks.push('--dangerously-bypass-hook-trust');
+    }
+    let thread: string | null = null, n = 0;
+    const send = async (message: string): Promise<Turn> => {
+      const attempt = join(artifacts, 'session', `attempt-${++n}`);
+      mkdirSync(attempt, { recursive: true, mode: 0o700 });
+      writeFileSync(join(attempt, 'prompt.md'), message, { mode: 0o600 });
+      const output = join(attempt, 'last-message.txt');
+      const flags = ['--json', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...hooks, '--output-last-message', output];
+      const args = thread ? ['exec', 'resume', thread, ...flags, '-'] : ['exec', ...flags, '-C', desk, '-'];
+      const started = new Date().toISOString(), times: string[] = [];
+      const result = await new Promise<{ code: number; stdout: string; stderr: string }>(done => {
+        const child = spawn(codex, args, { cwd: desk, env, stdio: ['pipe', 'pipe', 'pipe'] });
+        let stdout = '', stderr = '';
+        const timer = setTimeout(() => child.kill('SIGTERM'), MESSAGE_LIMIT_MS);
+        // When each line came: Codex gives its events no time.
+        child.stdout.on('data', c => { const at = new Date().toISOString(); for (const ch of String(c)) if (ch === '\n') times.push(at); stdout += c; });
+        child.stderr.on('data', c => { stderr += c; });
+        child.on('error', error => { clearTimeout(timer); done({ code: 1, stdout, stderr: error.message }); });
+        child.on('close', code => { clearTimeout(timer); done({ code: code ?? 1, stdout, stderr }); });
+        child.stdin.end(message);
+      });
+      writeFileSync(join(attempt, 'events.jsonl'), result.stdout, { mode: 0o600 });
+      writeFileSync(join(attempt, 'stderr.log'), result.stderr, { mode: 0o600 });
+      let reply = '';
+      try { reply = readFileSync(output, 'utf8'); } catch { /* no last message */ }
+      const entries = codexTranscript(message, result.stdout, reply || undefined, 'last-message.txt', { started, times });
+      writeFileSync(join(attempt, 'transcript.jsonl'), entries.map((e: any) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
+      keep();
+      const events = result.stdout.split('\n').flatMap(line => { try { return line ? [JSON.parse(line)] : []; } catch { return []; } });
+      thread ??= events.find(e => e?.type === 'thread.started')?.thread_id ?? null;
+      const failed = events.find(e => e?.type === 'turn.failed') ?? events.filter(e => e?.type === 'error').at(-1);
+      const turns = events.filter(e => e?.type === 'turn.completed');
+      if (failed || !turns.length || result.code !== 0) {
+        const why = String(failed?.error?.message ?? failed?.message ?? (result.stderr.trim().split('\n').at(-1) || `it exited with ${result.code}`));
+        throw Error(`${/\b(hit|reached) your usage limit\b/i.test(why) ? 'Codex hit a usage limit' : 'Codex did not finish the message'}: ${why.slice(0, 500)}`);
+      }
+      if (!thread) throw Error('Codex did not name its chat, so the chat cannot go on.');
+      const tokens = turns.reduce((sum, e) => sum + (Number(e.usage?.input_tokens) || 0) + (Number(e.usage?.output_tokens) || 0), 0);
+      return { message, reply, model: codexModel(home, thread), entries, tokens, attempt };
+    };
+    const close = async () => {
+      try {
+        if (deskCache) await waitForFixes(deskCache);
+        keep();
+        if (memory) for (const name of codexMemory) {
+          removeTree(join(memory, name));
+          if (existsSync(join(home, name))) cpSync(join(home, name), join(memory, name), { recursive: true });
+        }
+      } finally { chmodSync(room.root, 0o700); await room.remove(); removeTree(dirname(desk)); }
+    };
+    return { send, close };
+  } catch (error) { chmodSync(room.root, 0o700); await room.remove(); throw error; }
+}
+/** The model that a Codex chat ran on: the last one that its saved chat (HOME/.codex/sessions/.../rollout-*-THREAD.jsonl) names. */
+function codexModel(home: string, thread: string): string | null {
+  const find = (dir: string): string | null => {
+    let entries: import('node:fs').Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) { const found = find(path); if (found) return found; }
+      else if (entry.name.endsWith(`${thread}.jsonl`)) return path;
+    }
+    return null;
+  };
+  const file = find(join(home, 'sessions'));
+  if (!file) return null;
+  let model: string | null = null;
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    try { const e = JSON.parse(line); if (e?.type === 'turn_context' && typeof e.payload?.model === 'string') model = e.payload.model; } catch { /* not a line of JSON */ }
+  }
+  return model;
+}
+
 /**
  * Give every Method in a copy of a project a new Method ID of its own. A measuring or probe copy then runs each Method
  * as it was at its checkpoint: it does not catch up to newer versions that the learner saved later under the same ID,
@@ -285,8 +424,11 @@ export function methodCommands(entries: any[]) {
   const commands: string[] = [], judged: string[] = [];
   for (const e of entries) {
     if (e.kind !== 'command' || typeof e.text !== 'string') continue;
+    // A Codex command comes in its shell's call (/bin/zsh -lc '...'): the commands are inside it.
+    const wrapped = /^\S*\/(?:ba|z)?sh\s+-l?c\s+(['"])([\s\S]*)\1\s*$/.exec(e.text.trim());
+    const text = wrapped ? wrapped[2]!.replace(/'\\''/g, "'").replace(/\\"/g, '"') : e.text;
     // method as the program of a command: at the start, or after ; & | ( or a shell's then/do, with or without its folder.
-    for (const m of e.text.matchAll(/(?:^\s*|[;&|(]\s*|\b(?:then|do)\s+)(?:[^\s;&|(]*\/)?method\s+([a-z][\w-]*)([^\n;&|]*)/g)) {
+    for (const m of text.matchAll(/(?:^\s*|[;&|(]\s*|\b(?:then|do)\s+)(?:[^\s;&|(]*\/)?method\s+([a-z][\w-]*)([^\n;&|]*)/g)) {
       commands.push(`method ${m[1]}`);
       if (m[1] === 'judge') judged.push(/\bwrong\b/.test(m[2]!) ? 'wrong' : /\bright\b/.test(m[2]!) ? 'right' : 'other');
     }
@@ -300,16 +442,18 @@ export function whatItDid(before: Record<string, string>, after: Record<string, 
   const changed = Object.keys(after).filter(p => keep(p) && p in before && before[p] !== after[p]).sort();
   const removed = Object.keys(before).filter(p => keep(p) && !(p in after)).sort();
   const { commands, judged } = methodCommands(entries);
-  const skills = entries.filter(e => e.tool === 'Skill' && e.role === 'assistant').map(e => { try { return String(JSON.parse(e.text).skill ?? JSON.parse(e.text).command ?? ''); } catch { return ''; } }).filter(Boolean);
+  // A skill: Claude Code's Skill tool, or a SKILL.md that a Codex command read (Codex loads a skill by reading it).
+  const skills = [...entries.filter(e => e.tool === 'Skill' && e.role === 'assistant').map(e => { try { return String(JSON.parse(e.text).skill ?? JSON.parse(e.text).command ?? ''); } catch { return ''; } }),
+    ...entries.filter(e => e.kind === 'file_read' && e.tool === 'shell' && typeof e.path === 'string').map(e => /(?:^|\/)([^/]+)\/SKILL\.md$/.exec(e.path)?.[1] ?? '')].filter(Boolean);
   return { added, changed, removed, methods_built: added.filter(p => p.endsWith('.method')), methods_changed: changed.filter(p => p.endsWith('.method')),
     commands: [...new Set(commands)], judged, skills: [...new Set(skills)], memory: memoryChanged };
 }
 const list = (paths: string[]) => paths.length <= 3 ? paths.join(', ') : `${paths.slice(0, 3).join(', ')} and ${paths.length - 3} more`;
 /** What a chat did, in short sentences for the page: "Saved notes to CLAUDE.md. Built a Method (nda.method). Ran method judge (wrong)." */
-export function didSummary(did: Did) {
+export function didSummary(did: Did, agent: ProjectAgent = 'claude') {
   const notes = (paths: string[]) => paths.filter(p => !p.endsWith('.method'));
   const out: string[] = [];
-  const claudeMd = [...did.added, ...did.changed].filter(p => /(^|\/)CLAUDE\.md$/.test(p));
+  const claudeMd = [...did.added, ...did.changed].filter(p => (agent === 'claude' ? /(^|\/)CLAUDE\.md$/ : /(^|\/)AGENTS\.md$/).test(p));
   if (claudeMd.length) out.push(`Saved notes to ${list(claudeMd)}`);
   const added = notes(did.added).filter(p => !claudeMd.includes(p)), changed = notes(did.changed).filter(p => !claudeMd.includes(p));
   if (added.length) out.push(`Wrote ${list(added)}`);
@@ -320,17 +464,17 @@ export function didSummary(did: Did) {
   if (did.judged.length) out.push(`Ran method judge (${did.judged.join(', ')})`);
   const others = did.commands.filter(c => c !== 'method judge');
   if (others.length) out.push(`Ran ${others.join(', ')}`);
-  if (did.memory.length) out.push(`Saved to Claude memory (${list(did.memory)})`);
+  if (did.memory.length) out.push(`Saved to ${memoryName(agent)} (${list(did.memory)})`);
   if (did.skills.length) out.push(`Used the ${did.skills.join(', ')} skill`);
   return out.length ? `${out.join('. ')}.` : 'Changed nothing in the project.';
 }
 /** Whether a chat changed what the project keeps: a file other than the handed-in one. */
 export const keptSomething = (did: Did) => did.added.length + did.changed.length + did.removed.length + (did.memory?.length ?? 0) > 0;
 /** The diff of the text files that a chat added, changed or removed (not the handed-in file), from a copy of the project before it. */
-export function projectDiff(beforeDir: string, afterDir: string, did: Did, memory?: { before: string; after: string }) {
+export function projectDiff(beforeDir: string, afterDir: string, did: Did, memory?: { before: string; after: string }, agent: ProjectAgent = 'claude') {
   const read = (dir: string, p: string) => { try { const b = readFileSync(join(dir, p)); return b.includes(0) ? '(a binary file)' : b.toString('utf8'); } catch { return ''; } };
   return [...[...did.added, ...did.changed, ...did.removed].sort().map(p => textDiff(read(beforeDir, p), read(afterDir, p), p, p)),
-    ...(memory ? did.memory.map(p => textDiff(read(memory.before, p), read(memory.after, p), `Claude memory/${p}`, `Claude memory/${p}`)) : [])].filter(Boolean).join('\n');
+    ...(memory ? did.memory.map(p => textDiff(read(memory.before, p), read(memory.after, p), `${memoryName(agent)}/${p}`, `${memoryName(agent)}/${p}`)) : [])].filter(Boolean).join('\n');
 }
 
 /**
