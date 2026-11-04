@@ -1,3 +1,11 @@
+# 0.34.0
+
+Use runtime 0.18.2.
+
+- **`method wait` gives the path of each tested file.** After a fix it shows each part of the tested output once and at most 4,000 characters of it: a file that holds the result is named, not shown again, and each file and a long result give the path of their whole text. An agent copies the fixed file from that path; it searched for it before, with many commands, on each correction.
+- **The Method skill reads the guide only to build or change a Method.** To do a task with a Method that is already in the project, the agent runs it with `method run`.
+- **A comparison counts a Codex chat's tokens once.** Codex reports the tokens of the whole chat so far, so a correction in a resumed chat also counted the chat's first message again.
+
 # 0.33.2
 
 Use runtime 0.18.2.
