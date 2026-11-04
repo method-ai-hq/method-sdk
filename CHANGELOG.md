@@ -1,3 +1,10 @@
+# 0.30.0
+
+Use runtime 0.18.1.
+
+- **A comparison's treatment can give every arm a redesign session** at the same points (`treatment.redesign: [N, ...]`, the numbers of events given so far; 0 is before the first). A .method arm, and a project arm with the Method plugin, run `method redesign` on their Methods. A project arm without the plugin gets one chat: "Read every correction so far and your notes, and rewrite your notes so that they work on the next task." A checkpoint at the same point measures after the session, and the page lists each session with its line.
+- **The writer's starting words are not the user's.** Every text of an arm's starting Method is recorded as written for the comparison, so a fix or a redesign may change it, except the files in `user_files` (the user's own words, word for word).
+
 # 0.29.0
 
 Use runtime 0.18.1.
