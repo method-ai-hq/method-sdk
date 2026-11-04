@@ -1,3 +1,13 @@
+# 0.29.0
+
+Use runtime 0.18.1.
+
+- **`method redesign FILE`** rewrites a Method from the problem: one agent session (the Method's own agent and model) reads the guide, the Method, every correction with its run and the saved checks, writes the design first, and may replace, split, add or remove any step, prompt, script or data file. It is applied only when every saved check that passed still passes, the user's words stay word for word, and the Method is valid; `method undo` restores it.
+- **A fix may move the user's words.** A paragraph of the user's that moves, unchanged, to another step's prompt or another .md or .txt file counts as kept, and stays theirs there, so a fix can split a step.
+- **A correction's check keeps what the correction left.** When a person names some parts of a result as wrong, the check also requires the parts they did not correct to stay as they were, so a rule that is too general fails the gate.
+- **The guide has "Design from the problem"**: start from the decision; the deciding step sees the source; code gathers evidence and the model weighs it; a check needs an outside signal; a gate routes; labelled examples for a fuzzy convention; measure on inputs set aside first.
+- A Codex session that may write and use the shell runs its commands outside Codex's sandbox, as a Claude Code session does, so a Codex fix or redesign can run `method run` and `method test`.
+
 # 0.28.0
 
 Use runtime 0.18.0.
