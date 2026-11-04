@@ -1,3 +1,13 @@
+# 0.37.0
+
+Use runtime 0.20.0.
+
+A comparison page says first what the comparison does, literally, and where it could be wrong.
+
+- **A literal record of each comparison version.** `method publish` (and the trial and the decision) send eight numbered parts in a fixed order: the question; what both arms get and what only each gets, with the starting files' lines; one event step by step; the corrections in counts; what is measured and when; each measure with its code; the decision rule; cost and copies. Each part shows the real things beside it: the message, each arm's first correction word for word, the learner's prompt as it ran, the saved check and the diff. A part that does not apply says why.
+- **Where this could be wrong.** The same rules for every comparison find claims that the files contradict, who made the expected answers, code-written corrections, different corrections per arm, measured inputs that are teaching inputs again, learned text copied from teaching inputs, steps fixed to item numbers, no change after more corrections, an item that got worse, starting files that name teaching inputs, too few copies, restarts and usage in mixed units.
+- **The format asks for what the page cannot find.** A comparison with expected answers needs `about_inputs.labels_by`, and each written correction needs its `source`; `method validate` and `method publish` refuse a file without them.
+
 # 0.36.0
 
 Use runtime 0.20.0.
