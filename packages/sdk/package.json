@@ -1,6 +1,6 @@
 {
   "name": "@method-ai-hq/sdk",
-  "version": "0.34.3",
+  "version": "0.35.0",
   "description": "Build and run reusable .method files with checked steps and saved results.",
   "license": "MIT",
   "type": "module",

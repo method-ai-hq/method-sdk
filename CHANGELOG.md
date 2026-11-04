@@ -1,3 +1,12 @@
+# 0.35.0
+
+Use runtime 0.19.0.
+
+- **A fix's gate runs each earlier check once.** The exact guarantee: the new check fails on the Method as it was and passes 3 runs in 3 on the new one; each earlier check that passed before passes its one run on the new version, and passes 3 runs in 3 when that run passes only narrowly (a classifier within 0.05 of its threshold); a failed run blocks the change when the old version passed that check. On a copy of the Codex NDA Method with 16 earlier checks, the gate took 59 s and 0.53M input tokens, against 137 s and 1.36M before. The "Fixed after one test, 2 more tests later" path and its undo are gone.
+- **A test runs again only the steps that a change touched.** Passing case runs keep the outputs of their model steps on this computer; in a fix's gate, a model step that is the same in both versions and gets the same inputs gives that output, and only the changed steps and the steps after them run.
+- **A model step gets only the evidence it needs.** Design from the problem tells the agent to let code find the passages that each step cites, checks or changes, and to give the complete documents to one model step at most. `method redesign` follows it. `method validate` warns (`shared_large_input`) when two or more model steps received the same input of 100,000 characters or more in the newest run.
+- **A chat does not wait for a fix.** `method judge` returns at once and the fix runs in the background; the next run uses the fixed Method when it is ready and prints what the fix did. A comparison's chat ends only when that fix has ended, so its measured runs use the fixed Method.
+
 # 0.34.3
 
 Use runtime 0.18.2.
