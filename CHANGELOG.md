@@ -1,3 +1,9 @@
+# 0.33.2
+
+Use runtime 0.18.2.
+
+- **A comparison checks only the fixes that a chat ended.** It found them by the time of their records, and the copy of a chat's Method cache back to the learner's cache gives every record a new time. So every earlier fix looked new: the check of 0.33.1 stopped an event whose own correction found no fix as a product error, and a project arm's usage per correction counted the tokens of earlier fixes again. It now finds them by their content.
+
 # 0.33.1
 
 Use runtime 0.18.2.
