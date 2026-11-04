@@ -29,7 +29,7 @@ import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS, paragraphs, textPlaces, writtenFile } from './learner.js';
 import { textDiff } from './text-diff.js';
-import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, openDesk, projectDesk, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
+import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, openDesk, projectDesk, placeInput, projectDiff, projectFiles, projectPlugins, tokensOfRun, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
 import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
 
@@ -857,7 +857,7 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
       ...(about?.teaching_description ? { teaching_description: about.teaching_description } : {}), ...(about?.noun ? { noun: about.noun } : {}), details },
     main_measure: await measure(doc.measure),
     other_measures: [...await Promise.all((doc.other_measures ?? []).map(measure)),
-      ...(corrections ? [{ name: 'Usage per correction', how: 'usage', higher_is_better: false, description: 'What each arm used to take one correction (its training run and its fix or edit): tokens when every agent reports them, else minutes.' }] : [])],
+      ...(corrections ? [{ name: 'Usage per correction', how: 'usage', higher_is_better: false, description: 'What each arm used to take one correction (its training run or chat, the Method runs that the chat started, and its fix or edit): tokens when every agent reports them, else minutes.' }] : [])],
     rule: doc.rule, runs_per_point: doc.runs, learners: doc.runs,
     ...(doc.treatment ? { treatment: { kind, items: kinds.length, checkpoints: [...doc.treatment.checkpoints].sort((a, b) => a - b),
       order: doc.treatment.seed !== undefined ? 'shuffled' : 'given', ...(doc.treatment.seed !== undefined ? { seed: doc.treatment.seed } : {}),
@@ -1455,22 +1455,6 @@ function command(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number
   });
 }
 
-/** The tokens that the agents of a run reported (Claude Code and Codex sessions and steps), or null when none did. */
-export function tokensOfRun(runDir: string): number | null {
-  let total = 0, found = false;
-  let lines: string[] = [];
-  try { lines = readFileSync(join(runDir, 'events.jsonl'), 'utf8').split('\n'); } catch { return null; }
-  for (const line of lines) {
-    let e: any; try { e = line ? JSON.parse(line) : null; } catch { continue; }
-    if (e?.event === 'agent.completed' && e.usage && typeof e.usage === 'object') {
-      found = true;
-      for (const key of ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens']) total += Number(e.usage[key]) || 0;
-    }
-    if (e?.event === 'codex.completed' && Array.isArray(e.usage)) for (const u of e.usage) { found = true; total += (Number(u?.input_tokens) || 0) + (Number(u?.output_tokens) || 0); }
-  }
-  return found ? total : null;
-}
-
 /** Run a plain session Method (an arm's run or its builder) in its own run folder, with a copy of each folder in its room. */
 async function runSession(methodFile: string, runDir: string, folders: Record<string, string> | string, values: Record<string, string>, hooks: any = {}) {
   // A ready folder is the room as it is (the session works on its own copy); folders are copied into a room by name.
@@ -1587,7 +1571,7 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
     detail: `The fix of ${lost.join(', ')} said Fixed, but its change is not in the project that the comparison keeps. Nothing after this event is given.` };
   const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory }, project.agent);
   removeTree(start);
-  // A chat's tokens and the tokens of each Method fix that it started (its sessions and test runs).
+  // A chat's tokens (with the Method runs it started) and the tokens of each Method fix that it started (its sessions and test runs).
   const chatTokens = sumTokens(turns.map(t => t.tokens));
   const fixed = did.judged.includes('wrong') ? fixTokens(learner.cache, fixesBefore) : 0;
   const tokens = chatTokens === null || fixed === null ? null : chatTokens + fixed;

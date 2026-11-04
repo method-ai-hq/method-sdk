@@ -128,7 +128,41 @@ function findProgram(name: string, path: string) {
  */
 export type ChatSettings = { agent?: ProjectAgent; plugins: ProjectPlugin[]; model: string | null; effort: string | null; web: boolean;
   method?: { cli: string; config: string; cache: string; plugin: string; account?: string | null; server?: string | null } };
-/** One message of a chat and what came back: the agent's last words, its transcript entries, and the tokens it reported. */
+/**
+ * The tokens that the model work of a run reported: its Claude Code and Codex sessions and steps, and the requests of
+ * its hosted model steps. Null when nothing in it reported a count.
+ */
+export function tokensOfRun(runDir: string): number | null {
+  let total = 0, found = false;
+  let lines: string[] = [];
+  try { lines = readFileSync(join(runDir, 'events.jsonl'), 'utf8').split('\n'); } catch { return null; }
+  for (const line of lines) {
+    let e: any; try { e = line ? JSON.parse(line) : null; } catch { continue; }
+    if (e?.event === 'agent.completed' && e.usage && typeof e.usage === 'object') {
+      found = true;
+      for (const key of ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens']) total += Number(e.usage[key]) || 0;
+    }
+    if (e?.event === 'codex.completed' && Array.isArray(e.usage)) for (const u of e.usage) { found = true; total += (Number(u?.input_tokens) || 0) + (Number(u?.output_tokens) || 0); }
+    if (e?.event === 'run.completed' && typeof e.usage?.input_tokens === 'number') { found = true; total += e.usage.input_tokens + (Number(e.usage.output_tokens) || 0); }
+  }
+  return found ? total : null;
+}
+/** The run folders in a Method cache (CACHE/runs), where each method run that a chat starts keeps its record. */
+function cachedRuns(cache: string | null): Set<string> {
+  try { return new Set(cache ? readdirSync(join(cache, 'runs')) : []); } catch { return new Set(); }
+}
+/**
+ * The tokens of the Method runs that one message of a chat started: each run folder in the chat's Method cache that
+ * was not there before the message. A chat that does its work with method run spends most of its tokens in those runs'
+ * steps, which its own count leaves out; a Method fix counts its own sessions and test runs.
+ */
+function startedRunTokens(cache: string | null, before: Set<string>) {
+  let total = 0;
+  for (const name of cachedRuns(cache)) if (!before.has(name)) total += tokensOfRun(join(cache!, 'runs', name)) ?? 0;
+  return total;
+}
+
+/** One message of a chat and what came back: the agent's last words, its transcript entries, and its tokens with those of the Method runs it started. */
 export type Turn = { message: string; reply: string; model: string | null; entries: any[]; tokens: number | null; attempt: string };
 
 /** Claude Code's folder for a project in HOME/.claude/projects: the project's path with every other character than a letter or digit as -. */
@@ -209,6 +243,7 @@ async function openClaudeChat(project: string, settings: ChatSettings, artifacts
     const attempt = join(artifacts, 'session', `attempt-${++n}`);
     mkdirSync(attempt, { recursive: true, mode: 0o700 });
     writeFileSync(join(attempt, 'prompt.md'), message, { mode: 0o600 });
+    const runsBefore = cachedRuns(deskCache);
     const args = ['--print', '--output-format', 'stream-json', '--verbose', ...(n === 1 ? ['--session-id', session] : ['--resume', session]),
       '--permission-mode', 'dontAsk', '--allowedTools', projectTools.join(','), ...(settings.web ? [] : ['--disallowedTools', webTools.join(',')]),
       ...(settings.model ? ['--model', settings.model] : []), ...(settings.effort ? ['--effort', settings.effort] : []), ...pluginArgs];
@@ -236,7 +271,8 @@ async function openClaudeChat(project: string, settings: ChatSettings, artifacts
       throw Error(`${limit ? 'Claude Code hit a usage limit' : 'Claude Code did not finish the message'}: ${String(last?.errors?.join('\n') || last?.result || result.stderr.trim().split('\n').at(-1) || `it exited with ${result.code}`).slice(0, 500)}`);
     }
     const usage = last.usage;
-    const tokens = usage && typeof usage === 'object' ? ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].reduce((s, k) => s + (Number(usage[k]) || 0), 0) : null;
+    const chat = usage && typeof usage === 'object' ? ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].reduce((s, k) => s + (Number(usage[k]) || 0), 0) : null;
+    const tokens = chat === null ? null : chat + startedRunTokens(deskCache, runsBefore);
     const model = events.find(e => e?.type === 'system' && e.subtype === 'init')?.model ?? null;
     return { message, reply: typeof last.result === 'string' ? last.result : '', model, entries, tokens, attempt };
   };
@@ -316,6 +352,7 @@ async function openCodexChat(project: string, settings: ChatSettings, artifacts:
       const attempt = join(artifacts, 'session', `attempt-${++n}`);
       mkdirSync(attempt, { recursive: true, mode: 0o700 });
       writeFileSync(join(attempt, 'prompt.md'), message, { mode: 0o600 });
+      const runsBefore = cachedRuns(deskCache);
       const output = join(attempt, 'last-message.txt');
       const flags = ['--json', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox', ...hooks, '--output-last-message', output];
       const args = thread ? ['exec', 'resume', thread, ...flags, '-'] : ['exec', ...flags, '-C', desk, '-'];
@@ -348,7 +385,7 @@ async function openCodexChat(project: string, settings: ChatSettings, artifacts:
       }
       if (!thread) throw Error('Codex did not name its chat, so the chat cannot go on.');
       const total = turns.reduce((sum, e) => sum + (Number(e.usage?.input_tokens) || 0) + (Number(e.usage?.output_tokens) || 0), 0);
-      const tokens = Math.max(0, total - chatTokens);
+      const tokens = Math.max(0, total - chatTokens) + startedRunTokens(deskCache, runsBefore);
       chatTokens = Math.max(chatTokens, total);
       return { message, reply, model: codexModel(home, thread), entries, tokens, attempt };
     };

@@ -332,6 +332,12 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   const notes = hasMethod ? path.join(cwd, 'NOTES.md') : agents, known = fs.existsSync(notes) ? fs.readFileSync(notes, 'utf8') : '';
   let result = 'Done.';
   const task = /task (\\d+)\\. Save your answer as (\\S+)\\./.exec(prompt);
+  // With the Method plugin, the task is a method run: its record in the Method cache holds its Codex step's tokens.
+  if (task && hasMethod) {
+    const run = path.join(process.env.METHOD_CACHE_DIR, 'runs', crypto.randomUUID());
+    fs.mkdirSync(run, { recursive: true });
+    fs.writeFileSync(path.join(run, 'events.jsonl'), JSON.stringify({ event: 'codex.completed', step: 'draft', usage: [{ input_tokens: 1000, cached_input_tokens: 900, output_tokens: 50 }] }) + '\\n');
+  }
   if (task) fs.writeFileSync(path.join(cwd, task[2]), String(Number(task[1]) + known.split('\\n').filter(l => l.includes('add one')).length));
   else if (prompt.startsWith('Which rules')) result = known || 'None yet.';
   else if (resume) {
@@ -427,6 +433,8 @@ it('a Codex project chat is codex exec in the project folder, resumed by its thr
   expect(events('plain')[0].change.diff).toContain('+++ Codex memory/AGENTS.md');
   // The task and its correction: 120 tokens each, counted once though the resumed chat reports 240.
   expect(events('plain')[0].tokens).toBe(240);
+  // The Method arm's task chat started a method run: its step's 1,050 tokens count with the chat's 240.
+  expect(events('method')[0].tokens).toBe(240 + 1050);
   expect(events('method').map((e: any) => [e.outcome, e.change.summary])).toEqual([
     ['edited', 'Wrote NOTES.md. Built a Method (review.method). Ran method judge (wrong).'], ['was_right', 'Ran method judge (wrong).']]);
   const learner = treated.find((t: any) => t.arm === 'plain').learners[0];

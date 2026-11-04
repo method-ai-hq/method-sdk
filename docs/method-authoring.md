@@ -474,7 +474,7 @@ Do not write these into the file; Method applies them to every comparison and sh
 - One judge marks each item met, partly or not met: Codex on the arms' model when every arm runs on Codex, else Claude Code. Partly counts as half. It reads every source the agent read in full.
 - The trial runs every checking input at the start with 2 copies of each arm, and shows how much the copies differ there. That noise does not stop anything: with corrections, the noise that decides is how differently copies learn, so the decision checks the spread between copies of the same arm at the point that decides. An arm is better only when its lead is at least the margin and larger than that spread. With one copy of each arm there is no spread to compare, so the answer is "can't tell yet": give each arm at least 2 copies (`runs`, 4 or more is better).
 - When the main measure is a share from 0 to 1 (a rubric, a checklist, or a code measure whose start values are all from 0 to 1) and every arm already scores more than 1 minus the margin at the start, no arm can lead by the margin, and the comparison stops before approval: the test is too easy. Use harder inputs or a stricter measure.
-- Usage per correction is shown for each arm and does not decide.
+- Usage per correction is shown for each arm and does not decide. It counts the agent's chat, the Method runs that the chat starts, and each fix.
 
 ## The file
 
