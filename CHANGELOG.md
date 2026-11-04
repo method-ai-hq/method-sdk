@@ -1,3 +1,14 @@
+# 0.38.0
+
+Use runtime 0.20.0.
+
+A comparison page checks sources and labels exactly, and one model review finds claims that the facts contradict.
+
+- **No word rules.** The page no longer reads meaning from words: the role-word rule on the main measure's name, the "new"/"never seen" rule on the input description, the "code" rule on a correction's source, and the capital-letter guess are gone.
+- **A source is structure.** Each correction's `source` is `{kind: person, who, expert}`, `{kind: code, file}` or `{kind: model, prompt}` (each with `about`). The page checks a feedback event's source against its feedback writer and states a mismatch. The page asks the expert about words that are not the expert's own.
+- **What the main measure compares with.** `measure.compares_with` is `labels` or `nothing`; `method validate` and `method publish` ask for it when the file has expected answers. The page states it beside `labels_by`.
+- **One model review.** Each record that `method publish` or a run stage sends gets one review on the account's hosted model: the claims of the file that the page's facts contradict, each with the claim and the fact quoted word for word. It is cached for the same file and facts, and the page shows it apart, as found by a model review.
+
 # 0.37.0
 
 Use runtime 0.20.0.
