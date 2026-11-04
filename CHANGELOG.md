@@ -1,3 +1,13 @@
+# 0.38.1
+
+Use runtime 0.20.2.
+
+A fix is no longer refused, and no longer runs again, for reasons that are not in the correction. On the Codex NDA comparison, the first fix took 3 tries (1109 s and 3.04M tokens of 3.58M for the event): one try failed on the judge's own quote, and one was refused because of the chat's handed-in answers.
+
+- **The one-input test reads only the Method's files**: the .method file, learned.json and each file or folder that the Method lists in files. A result that a chat saved in the folder (answers.json, a memo) is not a rule, so its copied text no longer refuses a fix.
+- **A judge may quote the fields of a record, one per line** (runtime 0.20.2). A rule for every input that was judged on the answers of an NDA failed with "The quote is not in the text" when the judge quoted "question": 6 and "answer": "no" on separate lines. A line break now separates passages, as an ellipsis does; each passage must still be in the value, in order.
+- **A later try reads its notes, not the brief again.** The first try writes in .fix/notes.md the cause, the change and the test; a later try reads those notes, the correction, the Method and the failure, and not the whole guide. No try runs method authoring: .fix/guide.md has what a fix needs.
+
 # 0.38.0
 
 Use runtime 0.20.1.
