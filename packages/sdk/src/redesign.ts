@@ -15,7 +15,7 @@ import { localMethodFolder } from './local-judgments.js';
 import { fixFolder } from './fix-outcomes.js';
 import { recordChange, saveVersion, snapshot } from './undo.js';
 import { authoringGuide } from './method-help.js';
-import { FIX_LIMIT_MS, MAX_TRIES, broken, changeDiff, changedFiles, changedUserText, copyMethod, learnerAgent, nextWritten, paragraphs, placeName, readWritten, textPlaces, writeRun, writtenFile,
+import { FIX_LIMIT_MS, MAX_TRIES, broken, reportTokens, sessionTokens, changeDiff, changedFiles, changedUserText, copyMethod, learnerAgent, nextWritten, paragraphs, placeName, readWritten, textPlaces, writeRun, writtenFile,
   type CaseRunner, type LearnerModel, type Written } from './learner.js';
 
 // Method's redesign. One agent session (the learner's agent, on the model of the Method's own agent steps) rewrites a
@@ -28,7 +28,7 @@ import { FIX_LIMIT_MS, MAX_TRIES, broken, changeDiff, changedFiles, changedUserT
 
 /** A correction that the redesign reads: the person's words, what happened to it, and its run when it is here. */
 export type RedesignCorrection = { id: string; note: string | null; noted_by?: string | null; created_at?: string; outcome?: string | null; detail?: string | null; answer?: string | null; run_dir?: string | undefined };
-export type Redesigned = { outcome: 'redesigned' | 'no_change_needed' | 'no_redesign_found'; summary?: string; detail?: string; room?: string; base?: string; changed: string[]; diff: string; written?: Written; tries: number; log: string; checks: number };
+export type Redesigned = { outcome: 'redesigned' | 'no_change_needed' | 'no_redesign_found'; summary?: string; detail?: string; room?: string; base?: string; changed: string[]; diff: string; written?: Written; tries: number; log: string; checks: number; tokens: number };
 
 const hashOf = (text: string) => createHash('sha256').update(text).digest('hex');
 const day = (at?: string | null) => at ? at.slice(0, 10) : 'date unknown';
@@ -112,7 +112,10 @@ export async function redesignMethod(file: string, options: { corrections: Redes
   const base = join(options.workDir, 'base'), room = join(options.workDir, 'room');
   removeTree(options.workDir);
   mkdirSync(options.workDir, { recursive: true, mode: 0o700 });
-  const done = (outcome: Redesigned['outcome'], tries: number, extra: Partial<Redesigned> = {}): Redesigned => ({ outcome, changed: [], diff: '', tries, log: options.workDir, checks: 0, ...extra });
+  // The tokens of the redesign: each session and each test run of the gate.
+  let tokens = 0;
+  const runCases: CaseRunner = async (...args) => { const report = await options.runCases(...args); tokens += reportTokens(report); return report; };
+  const done = (outcome: Redesigned['outcome'], tries: number, extra: Partial<Redesigned> = {}): Redesigned => ({ outcome, changed: [], diff: '', tries, log: options.workDir, checks: 0, ...extra, tokens });
   copyMethod(folder, base); copyMethod(folder, room);
   const written = readWritten(folder);
   await writeBrief(room, name, options.corrections, written);
@@ -126,9 +129,10 @@ export async function redesignMethod(file: string, options: { corrections: Redes
     mkdirSync(tryDir, { recursive: true, mode: 0o700 });
     const text = tries === 1 ? prompt : `${prompt}\n\nThis is try ${tries} of ${MAX_TRIES}. Your earlier work is still in this folder. Method checked it, and it did not pass:\n${failure}\nFix this, run method test again, and write .fix/result.json again.`;
     const session = await learnerAgent.session({ room, prompt: text, model: options.model, timeoutMs: left, workDir: tryDir });
+    tokens += sessionTokens(session.run_dir);
     if (session.status === 'timeout') return done('no_redesign_found', tries, { detail: 'the time for a redesign ran out' });
     if (session.status === 'failed') throw Error(session.message ?? 'The redesign session stopped.');
-    const checked = await gate(file, base, room, written, options.runCases);
+    const checked = await gate(file, base, room, written, runCases);
     if ('said' in checked) {
       if (checked.said.outcome === 'no_change_needed') return done('no_change_needed', tries, checked.said.detail ? { detail: checked.said.detail } : {});
       const changed = changedFiles(base, room).filter(p => !p.startsWith('cases/'));
@@ -201,5 +205,5 @@ export async function redesignCommand(args: string[], clientFactory: (server: st
   process.stderr.write(`Rewriting ${basename(file)} from the problem. This takes a while: the new design is tested against every earlier correction.\n`);
   const result = await redesignFile(clientFactory(values.server ?? DEFAULT_SERVER), file);
   const line = redesignLine(basename(file), result);
-  process.stdout.write(values.json ? JSON.stringify({ outcome: result.outcome, line, changed: result.changed }, null, 2) + '\n' : line + '\n');
+  process.stdout.write(values.json ? JSON.stringify({ outcome: result.outcome, line, changed: result.changed, tokens: result.tokens }, null, 2) + '\n' : line + '\n');
 }

@@ -1443,7 +1443,7 @@ Arguments and defaults:
 One agent session on your own Claude Code or Codex (the model of the Method's own agent steps) reads the guide, the Method, every correction with its run, and the Method's saved checks, writes the design first, and may replace, split, add or remove any step, prompt, script or data file. The change is applied only when every saved check that passed still passes, the user's own words stay word for word (a paragraph may move, unchanged, to another step or file), and the Method is valid. It waits while a fix of the Method runs on this computer. method undo restores the Method as it was.
 
 Result and changes:
-One line: what the agent does differently now, or that the Method is unchanged and why. --json prints {outcome, line, changed}.
+One line: what the agent does differently now, or that the Method is unchanged and why. --json prints {outcome, line, changed, tokens}: tokens are those that its sessions and test runs reported.
 
 Errors:
 A Method file that cannot be read; the agent's usage limit.

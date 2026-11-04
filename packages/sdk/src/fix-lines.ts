@@ -12,6 +12,8 @@ export type CorrectionOutcome = {
   summary?: string;
   /** fixed: the change, as a unified diff of the Method's files. For --json and the comparison only; never in a line. */
   diff?: string;
+  /** The tokens that the fix used: its agent sessions and its test runs, as the agents reported them. For --json and the comparison only. */
+  tokens?: number;
   /** could_not_test: why. */
   reason?: CouldNotTestReason;
   /** question: one question in the person's terms. */

@@ -1238,7 +1238,7 @@ type EventRecord = { key: string; index: number; kind: string; input: string; le
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
 type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot>; redesigns?: RedesignRecord[] };
 /** One redesign session of a learner: after which event, whether it ended, and its line for the page. */
-type RedesignRecord = { at_event: number; received: boolean; line: string; did?: Did };
+type RedesignRecord = { at_event: number; received: boolean; line: string; did?: Did; tokens?: number | null };
 /** Treatment of one arm: each learner's. */
 type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[] };
 
@@ -1430,7 +1430,7 @@ async function waitForFix(runId: string, id: string, env: NodeJS.ProcessEnv, fil
       if (!received) return { received, outcome, run_id: runId, judgment_id: id, reason: stoppedWhy[record.outcome?.outcome] ?? `Method's fix ended ${outcomeWords[outcome]}` };
       // What the learner changed: its summary for the person and the diff of the Method's files.
       const change = outcome === 'fixed' && typeof record.outcome?.diff === 'string' ? { ...(record.outcome.summary ? { summary: String(record.outcome.summary) } : {}), diff: record.outcome.diff as string } : undefined;
-      return { received, outcome, run_id: runId, judgment_id: id, tokens: null, ...(change ? { change } : {}) };
+      return { received, outcome, run_id: runId, judgment_id: id, tokens: typeof record.outcome?.tokens === 'number' ? record.outcome.tokens : null, ...(change ? { change } : {}) };
     }
     // The fix stopped: its error in its own words (a usage limit says so), with the cause for the CLI.
     const error = typeof record?.error === 'string' && record.error.trim() ? record.error.trim() : null;
@@ -1561,7 +1561,7 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   removeTree(join(workDir, 'artifacts'));
   placeInput(learner.project, event.input, event.input.deliverable);
   for (const part of ['project', 'cache', 'memory'] as const) copyTree(learner[part], join(start, part));
-  const before = projectFiles(learner.project), memoryBefore = projectFiles(learner.memory);
+  const before = projectFiles(learner.project), memoryBefore = projectFiles(learner.memory), fixesBefore = fixRecords(learner.cache);
   const message = projectMessage(project, event.input.value, first);
   const chat = await openChat(learner.project, chatSettings(project, learner.cache, plan.folder), join(workDir, 'artifacts'), learner.memory);
   const turns = [];
@@ -1582,8 +1582,10 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable, { before: memoryBefore, after: projectFiles(learner.memory) });
   const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory }, project.agent);
   removeTree(start);
-  // A Method fix's tokens are not reported: a chat that started one reports none, so usage falls back to minutes.
-  const tokens = did.judged.includes('wrong') ? null : sumTokens(turns.map(t => t.tokens));
+  // A chat's tokens and the tokens of each Method fix that it started (its sessions and test runs).
+  const chatTokens = sumTokens(turns.map(t => t.tokens));
+  const fixed = did.judged.includes('wrong') ? fixTokens(learner.cache, fixesBefore) : 0;
+  const tokens = chatTokens === null || fixed === null ? null : chatTokens + fixed;
   if (event.kind !== 'correction') return { received: true, outcome: 'given', did, tokens };
   const outcome: CorrectionOutcome = none !== null ? 'no_feedback' : keptSomething(did) ? 'edited' : right ? 'was_right' : 'not_edited';
   return { received: true, outcome, text: none ?? text ?? '', output: keptOutput(output), did, tokens, change: { summary: didSummary(did, project.agent), diff } };
@@ -1688,7 +1690,7 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       records.set(key, record);
     }
     const record = records.get(key);
-    redesigns.push({ at_event: at, received: record.received, line: record.line, ...(record.did ? { did: record.did } : {}) });
+    redesigns.push({ at_event: at, received: record.received, line: record.line, ...(record.did ? { did: record.did } : {}), tokens: record.tokens ?? null, ...(record.duration_ms ? { duration_ms: record.duration_ms } : {}) } as RedesignRecord);
     return record.received;
   };
   const done: EventRecord[] = [], missing: LearnerTreatment['missing'] = [];
@@ -1729,6 +1731,32 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
     if (plan.checkpoints?.includes(event.index)) await freeze(event.index);
   }
   return { learner, events: done, missing, snapshots, ...(redesigns.length ? { redesigns } : {}) };
+}
+
+/** The fix outcome records in a Method cache (fixes/METHOD/outcomes/JUDGMENT.json), by path, with their times. */
+function fixRecords(cache: string) {
+  const found = new Map<string, number>();
+  let methods: string[] = [];
+  try { methods = readdirSync(join(cache, 'fixes')); } catch { return found; }
+  for (const id of methods) {
+    let names: string[] = [];
+    try { names = readdirSync(join(cache, 'fixes', id, 'outcomes')).filter(n => /^jdg_.*\.json$/.test(n)); } catch { continue; }
+    for (const name of names) { const path = join(cache, 'fixes', id, 'outcomes', name); try { found.set(path, statSync(path).mtimeMs); } catch { /* gone */ } }
+  }
+  return found;
+}
+/** The tokens of the fixes that ended in a chat: each outcome written or changed since before, or null when one has no count. */
+function fixTokens(cache: string, before: Map<string, number>) {
+  let total = 0;
+  for (const [path, at] of fixRecords(cache)) {
+    if (before.get(path) === at) continue;
+    let record: any;
+    try { record = JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+    const tokens = record?.outcome?.tokens;
+    if (typeof tokens !== 'number') return null;
+    total += tokens;
+  }
+  return total;
 }
 
 /** The message of a project arm without the Method plugin at a redesign point: the same session as the Method arm's redesign. */
@@ -1772,12 +1800,13 @@ function writerOwnsStart(dir: string, userFiles: string[]) {
  * its Methods, in the arm's clean room and its own Method cache. A project arm without the plugin: one chat with the
  * notes message. Received when every session ended.
  */
-async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: string; file: string; cache: string } | null; project: { project: string; cache: string; memory: string } | null }, workDir: string): Promise<{ received: boolean; line: string; did?: Did }> {
+async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: string; file: string; cache: string } | null; project: { project: string; cache: string; memory: string } | null }, workDir: string): Promise<{ received: boolean; line: string; did?: Did; tokens?: number | null }> {
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
   const files = learner.method ? [join(learner.method.dir, learner.method.file)] : arm.project?.plugins?.includes('method') ? methodFiles(learner.project!.project) : null;
   if (files) {
     if (!files.length) return { received: true, line: 'there is no Method in the project to redesign.' };
     const lines: string[] = [];
+    let tokens: number | null = 0;
     for (const file of files) {
       const room = await armRoom(file, learner.method?.cache ?? learner.project!.cache, true);
       try {
@@ -1786,9 +1815,10 @@ async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: s
         let out: any;
         try { out = JSON.parse(done.stdout); } catch { return { received: false, line: `method redesign ${basename(file)} failed: ${done.stderr.trim().split('\n').at(-1) ?? ''}` }; }
         lines.push(out.line);
+        tokens = typeof out.tokens === 'number' && tokens !== null ? tokens + out.tokens : null;
       } finally { await room.remove(); }
     }
-    return { received: true, line: lines.join(' ') };
+    return { received: true, line: lines.join(' '), tokens };
   }
   const project = learner.project!;
   const before = projectFiles(project.project), memoryBefore = projectFiles(project.memory);
@@ -1796,7 +1826,7 @@ async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: s
   let turn;
   try { turn = await chat.send(NOTES_MESSAGE); } finally { await chat.close(); }
   const did = whatItDid(before, projectFiles(project.project), turn.entries, null, { before: memoryBefore, after: projectFiles(project.memory) });
-  return { received: true, line: `the agent was asked: "${NOTES_MESSAGE}" ${didSummary(did, arm.project.agent)}`, did };
+  return { received: true, line: `the agent was asked: "${NOTES_MESSAGE}" ${didSummary(did, arm.project.agent)}`, did, tokens: turn.tokens };
 }
 
 /** The redesign session of a learner; tests replace it. */
@@ -1813,7 +1843,7 @@ function treatmentNote(plan: Plan, arm: any, checkpoint: number | null, learner?
   const name = (id: string) => plan.names?.[id] ?? id.replace(/^.*[/\\]/, '').replace(/\.[a-z0-9]+$/i, '');
   // A feedback writer's words are this copy's own.
   const words = (e: any) => record(e)?.text ?? e.text ?? (e.feedback ? `(from the feedback writer ${e.feedback.name})` : '');
-  const redesigned = (at: number) => learner?.redesigns?.filter(r => r.at_event === at && at <= checkpoint).map(r => `${at === 0 ? 'Before the first event' : `After event ${at}`}, a redesign session: ${r.line}`) ?? [];
+  const redesigned = (at: number) => learner?.redesigns?.filter(r => r.at_event === at && at <= checkpoint).map(r => `${at === 0 ? 'Before the first event' : `After event ${at}`}, a redesign session: ${r.line}${typeof r.tokens === 'number' ? ` (${r.tokens} tokens)` : ''}`) ?? [];
   return [`Copy ${(learner?.learner ?? 0) + 1}. ${how}:`, ...redesigned(0), ...given.flatMap((e: any) => [`${e.index}. ${e.kind === 'correction' ? `Correction on ${name(e.input.id)}: ${words(e)}${outcome(e)}` : `New input: ${name(e.input.id)}`}`, ...redesigned(e.index)])].join('\n');
 }
 

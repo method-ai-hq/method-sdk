@@ -59,6 +59,8 @@ it('a redesign may split steps and move the person\'s words, unchanged, when eve
   const result = await redesignMethod(file, { corrections: [{ id: 'jdg_' + 'a'.repeat(32), note: 'Accept the term clause.', run_dir: run, created_at: '2026-11-03T10:00:00Z', outcome: 'fixed' }], model: { agent: 'codex' }, workDir: join(root, 'work'), runCases: runCases as any });
   expect(result.outcome).toBe('redesigned');
   expect(result.checks).toBe(1);
+  // Its tokens: the stub session and the script Method's test runs report none.
+  expect(result.tokens).toBe(0);
   expect(result.changed).toEqual(expect.arrayContaining(['guide.md', 'kind.mjs', 'reply.method', 'rules.md']));
   // The session read the guide and every correction with its run, and was told it may move the person's words.
   expect(prompts[0]).toBe(redesignPrompt('reply.method'));

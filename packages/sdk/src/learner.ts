@@ -540,13 +540,18 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
   removeTree(options.workDir);
   mkdirSync(options.workDir, { recursive: true, mode: 0o700 });
   const each = (outcome: Final) => corrections.map(c => ({ id: c.id, ...outcome }) as CorrectionOutcome);
-  const done = (outcomes: CorrectionOutcome[], tries: number, extra: Partial<Learned> = {}): Learned => ({ outcomes, changed: [], diff: '', tries, log: options.workDir, ...extra });
+  // An agent that reports no usage (or a stub) leaves the count out.
+  const withTokens = (outcomes: CorrectionOutcome[]) => tokens ? outcomes.map(o => ({ ...o, tokens: Math.round(tokens / corrections.length) })) : outcomes;
+  const done = (outcomes: CorrectionOutcome[], tries: number, extra: Partial<Learned> = {}): Learned => ({ outcomes: withTokens(outcomes), changed: [], diff: '', tries, log: options.workDir, ...extra });
   try { copyMethod(folder, base); copyMethod(folder, room); }
   catch (error: any) { if (error.code === 'too_large') return done(each({ outcome: 'could_not_test', reason: 'too_large', detail: error.message }), 0); throw error; }
   const written = readWritten(folder);
   await writeBrief(room, name, corrections, options.earlier, options.caseIds, written);
   const prompt = learnerPrompt(name, options.caseIds) + (options.failure ? `\n\nAn earlier change for ${several ? 'these corrections' : 'this correction'} passed its first tests and was applied. Then Method tested the earlier checks again, and the change broke one, so Method undid it:\n${options.failure}\nFind a change that keeps every earlier check passing.` : '');
   const noFix = (outcome: string) => ({ outcome: 'no_fix_found' as const, detail: outcome });
+  // The tokens of the fix: each session and each test run of the gate.
+  let tokens = 0;
+  const runCases: CaseRunner = async (...args) => { const report = await options.runCases(...args); tokens += reportTokens(report); return report; };
   let failure = '', others: { by: string; note: string }[] | undefined;
   for (let tries = 1; tries <= maxTries; tries++) {
     const left = deadline - now();
@@ -556,19 +561,20 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
     mkdirSync(tryDir, { recursive: true, mode: 0o700 });
     const text = tries === 1 ? prompt : `${prompt}\n\nThis is try ${tries} of ${maxTries}. Your earlier work is still in this folder. Method checked it, and it did not pass:\n${failure}\nFix this, test your new check again, and write .fix/result.json again.`;
     const session = await learnerAgent.session({ room, prompt: text, model: options.model, timeoutMs: left, workDir: tryDir });
+    tokens += sessionTokens(session.run_dir);
     if (session.status === 'timeout') return done(each(noFix(`the time for one correction (${FIX_LIMIT_MS / 3_600_000} hours) ran out`)), tries);
     if (session.status === 'failed') throw Error(session.message ?? 'The learner\'s session stopped.');
-    const checked = await gate({ file, base, room, caseIds: options.caseIds, corrections, written, runCases: options.runCases, later: !!options.later });
+    const checked = await gate({ file, base, room, caseIds: options.caseIds, corrections, written, runCases, later: !!options.later });
     if (checked.pass) {
       const outcomes = corrections.map((c, i) => ({ id: c.id, ...checked.finals.get(options.caseIds[i]!)! }) as CorrectionOutcome);
       const fixed = outcomes.some(o => o.outcome === 'fixed'), kept = outcomes.filter(o => o.outcome === 'no_change_needed').map(o => options.caseIds[outcomes.indexOf(o)]!);
-      if (!fixed && !kept.length) return { outcomes, changed: [], diff: '', tries, log: options.workDir };
+      if (!fixed && !kept.length) return { outcomes: withTokens(outcomes), changed: [], diff: '', tries, log: options.workDir };
       const all = changedFiles(base, room);
       const changed = fixed ? all : all.filter(p => kept.some(id => p.startsWith(`cases/${id}/`)));
       const diff = fixed ? changeDiff(base, room, changed.filter(p => !p.startsWith('cases/'))) : '';
       for (const o of outcomes) if (o.outcome === 'fixed') o.diff = diff;
       const next = nextWritten(textPlaces(parseDocumentValue(readFileSync(join(base, name), 'utf8')), base), textPlaces(parseDocumentValue(readFileSync(join(room, name), 'utf8')), room), written);
-      return { outcomes, room, base, changed, diff, written: next, tries, log: options.workDir, ...(checked.later ? { later: checked.later } : {}) };
+      return { outcomes: withTokens(outcomes), room, base, changed, diff, written: next, tries, log: options.workDir, ...(checked.later ? { later: checked.later } : {}) };
     }
     failure = checked.failure; others = checked.others;
     writeFileSync(join(tryDir, 'gate.txt'), failure + '\n');
@@ -579,6 +585,18 @@ export async function learnCorrection(file: string, corrections: LearnerCorrecti
   if (others?.length && others.every(o => o.by)) return done(each({ outcome: 'held', by: others[0]!.by, detail: clip(others[0]!.note, 200) }), MAX_TRIES);
   // The exact failures stay in the work folder (tries/N/gate.txt); the person reads one plain line.
   return done(each(noFix(`I tried ${MAX_TRIES} changes, and none fixed this result without breaking another one or your own words`)), MAX_TRIES);
+}
+
+/** The tokens that the case runs of a test report used: every run of every case, the changed version's and the old one's. */
+export const reportTokens = (report: any) => ((report?.cases ?? []) as any[]).reduce((sum, row) => sum + [row.candidate, row.baseline].flatMap(r => r?.attempts ?? []).reduce((s: number, a: any) => s + (Number(a?.tokens) || 0), 0), 0);
+/** The tokens that one agent session reported, from its run's events. */
+export function sessionTokens(runDir: string | undefined) {
+  if (!runDir) return 0;
+  try {
+    const events = readFileSync(join(runDir, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+    return events.filter(e => ['codex.completed', 'agent.completed'].includes(e.event)).flatMap(e => Array.isArray(e.usage) ? e.usage : e.usage ? [e.usage] : [])
+      .reduce((sum: number, u: any) => sum + ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'].reduce((t, k) => t + (Number(u?.[k]) || 0), 0), 0);
+  } catch { return 0; }
 }
 
 /** The diff of a change: each changed text file, as unified lines. */
