@@ -143,14 +143,16 @@ function fakeLearner(root: string, kind: 'change' | 'none' | 'question' | 'stops
     const result = (value: unknown) => writeFileSync(join(room, '.fix', 'result.json'), JSON.stringify(value));
     if (kind === 'question' && !briefs.at(-1)!.includes('the person answered')) { result({ outcome: 'question', question: 'Should every counterparty NDA come back redlined, or only some?' }); return { status: 'completed' as const }; }
     if (kind === 'none') { result({ outcome: 'no_fix_found', detail: 'the reply needs the playbook, which the agent does not get' }); return { status: 'completed' as const }; }
-    const id = readFileSync(join(room, '.fix', 'correction.md'), 'utf8').match(/has the ID (correction-[a-z0-9]+)/)![1]!;
+    // One correction, or several together (each with its own run and check).
+    const ids = [...readFileSync(join(room, '.fix', 'correction.md'), 'utf8').matchAll(/has the ID (correction-[a-z0-9]+)/g)].map(m => m[1]!);
+    const say = (outcome: unknown) => result(ids.length === 1 ? outcome : { outcomes: Object.fromEntries(ids.map(i => [i, outcome])) });
     // Escalating already, unless this learner made it so in an earlier try (its notes say so).
     const done = readFileSync(join(room, 'write.mjs'), 'utf8') === escalating && !existsSync(join(room, '.fix', 'notes.md'));
-    if (!existsSync(join(room, 'cases', id))) await createCase({ methodFile: join(room, 'reply.method'), runDir: join(room, '.fix', 'run'), id, note: noteOf(room), expect: [{ kind: 'equals', ref: 'outputs.reply', value: ESCALATED }] } as any);
-    if (done) { result({ outcome: 'no_change_needed', detail: 'the reply already escalates the non-compete' }); return { status: 'completed' as const }; }
+    for (const [k, i] of ids.entries()) if (!existsSync(join(room, 'cases', i))) await createCase({ methodFile: join(room, 'reply.method'), runDir: join(room, '.fix', ids.length === 1 ? 'run' : `run-${k + 1}`), id: i, note: ids.length === 1 ? noteOf(room) : `Correction ${k + 1}.`, expect: [{ kind: 'equals', ref: 'outputs.reply', value: ESCALATED }] } as any);
+    if (done) { say({ outcome: 'no_change_needed', detail: 'the reply already escalates the non-compete' }); return { status: 'completed' as const }; }
     writeFileSync(join(room, 'write.mjs'), escalating);
     writeFileSync(join(room, '.fix', 'notes.md'), 'The reply step now escalates.\n');
-    result({ outcome: 'fixed', summary: 'replies now escalate restrictions that the playbook does not cover' });
+    say({ outcome: 'fixed', summary: 'replies now escalate restrictions that the playbook does not cover' });
     return { status: 'completed' as const };
   });
   return { briefs, models };
@@ -330,15 +332,15 @@ it('on the next method run: outcomes not yet shown come first, and corrections f
   // The run did not wait for the fix.
   expect(JSON.parse(s.printed())).toMatchObject({ status: 'completed' });
   await backgroundFix(client, file, ids);
-  // One at a time, oldest first: the first fixes it, a run with no folder here cannot be tested, and the third finds it fixed.
-  expect(client.outcomes.map((o: any) => [o.id, o.outcome])).toEqual([[ids[0], 'fixed'], [ids[1], 'could_not_test'], [ids[2], 'no_change_needed']]);
+  // A run with no folder here cannot be tested; the other two go to one session together, and one change fixes both.
+  expect(client.outcomes.map((o: any) => [o.id, o.outcome])).toEqual([[ids[1], 'could_not_test'], [ids[0], 'fixed'], [ids[2], 'fixed']]);
   expect(JSON.parse(readFileSync(join(folder, 'cases', correctionCaseId(ids[0]!), 'case.json'), 'utf8')).author).toBe('Gráinne');
-  // The next run prints the three outcomes first, once. The fixed correction is watched on later runs.
-  expect((await import('../../packages/sdk/src/watch.js')).watchedCorrections(file).map(w => w.judgment)).toEqual([ids[0]]);
+  // The next run prints the three outcomes first, once. The fixed corrections are watched on later runs.
+  expect((await import('../../packages/sdk/src/watch.js')).watchedCorrections(file).map(w => w.judgment)).toEqual([ids[0], ids[2]]);
   s.stderr.mockClear(); start.mockClear();
   await methodMain(['run', file], () => client);
   const lines = s.stderr.mock.calls.map(c => String(c[0]));
-  expect(lines.slice(0, 3).map(line => line.split(':')[0])).toEqual(['Fixed', 'Could not test a fix safely', 'No change needed']);
+  expect(lines.slice(0, 3).map(line => line.split(':')[0]).sort()).toEqual(['Could not test a fix safely', 'Fixed', 'Fixed']);
   expect(start).not.toHaveBeenCalled();
   s.stderr.mockClear();
   await methodMain(['run', file], () => client);

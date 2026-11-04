@@ -12,15 +12,18 @@ import { localProposals, saveLocalProposal, writeMethodFile } from './proposals.
 import { changedSteps } from './merge.js';
 import { localJudgments, localMethodFolder, runFolderIndex, type LocalJudgment } from './local-judgments.js';
 import type { CorrectionOutcome } from './fix-lines.js';
-import { fixFolder, markWorking, saveError, saveOutcome, storedOutcome } from './fix-outcomes.js';
-import { recordChange, restoreSnapshot, saveVersion, snapshot } from './undo.js';
-import { learnCorrection, writtenFile, type CaseRunner, type LearnerModel, type Learned } from './learner.js';
+import { fixFolder, markWorking, saveError, saveNotice, saveOutcome, storedOutcome } from './fix-outcomes.js';
+import { recordChange, restoreSnapshot, saveVersion, snapshot, undoLast } from './undo.js';
+import { finishLater, learnCorrection, writtenFile, type CaseRunner, type LearnerModel, type Learned } from './learner.js';
+import { undidLine } from './fix-lines.js';
 
 // The fix loop on this computer. method judge starts it in its own process for a wrong judgment, and method run starts
 // it for corrections that wait (from the dashboard, an answer, or a fix that stopped). Each correction goes to Method's
-// learner (learner.ts): one agent session on the person's own Claude Code or Codex, checked by a gate in code. A tested
-// change is applied to the Method's folder, saved as a new version, and recorded with its correction, its summary and
-// its diff; method undo restores the folder as it was before.
+// learner (learner.ts): one agent session on the person's own Claude Code or Codex, checked by a gate in code; the
+// corrections that wait together go to one session. A tested change is applied to the Method's folder, saved as a new
+// version, and recorded with its corrections, its summary and its diff; method undo restores the folder as it was
+// before. When the full test of the earlier corrections is slow, the person sees "Fixed" after one test of each, the
+// other tests run next, and a change that breaks one is undone and fixed again.
 
 type AccountJudgment = { id: string; run_id: string; step_id: string | null; verdict: 'right' | 'wrong'; note: string | null; corrected: unknown; source: string; created_at: string; pending: boolean;
   noted_by?: string | null; outcome?: string | null; outcome_detail?: string | null; handled_by?: string | null; held_with?: string | null; question?: string | null; answer?: string | null };
@@ -65,9 +68,10 @@ export async function waitingCorrections(client: MethodClient, file: string, met
 /**
  * Fix the pending corrections of a Method file on this computer: one pass of the loop. Returns undefined when nothing
  * waits. It takes the pending corrections in the account first, so two computers never fix one correction twice, and
- * gives back those it did not decide when it stops. The corrections go to the learner one at a time, oldest first, so
- * each one learns on the Method that the one before it left. A usage limit or another failure of the agent is a plain
- * error.
+ * gives back those it did not decide when it stops. The corrections go to the learner together, in one session; when
+ * they find no change together, each half goes again, oldest first, so each one learns on the Method that the one
+ * before it left. Each outcome is saved for method wait when it is decided. A usage limit or another failure of the
+ * agent is a plain error.
  */
 export async function fixCorrections(client: MethodClient, file: string, options: { runCases?: CaseRunner; waitMs?: number } = {}): Promise<FixOutcome | undefined> {
   const document = readDocument(file) as any;
@@ -104,36 +108,61 @@ export async function fixCorrections(client: MethodClient, file: string, options
   };
   const outcomes: CorrectionOutcome[] = [];
   let applied = 0, log = '';
+  // An outcome is saved for method wait as soon as it is decided (unless it was shown already).
+  const decide = (decided: CorrectionOutcome[], saved = false) => { for (const o of decided) { outcomes.push(o); if (o.outcome !== 'retry' && !saved) saveOutcome(methodId, file, o, log); } };
   try {
     restoreUnfinished(file);
-    // A fix of a correction that ended here and saved its change: its outcome stands, and it does not run again.
+    // A fix of a correction that ended here and saved its change: its outcome stands, and it does not run again. A change
+    // whose later tests did not end (the fix stopped) is undone, and the correction is fixed again.
     for (const j of claimed) {
       const ended = endedFix(file, j.id);
       if (!ended) continue;
+      if (ended.later?.length) { await undoChange(client, file, { undo: ended.undo_id, proposal: ended.id }); continue; }
       const { path: _path, source: _source, file: _file, ...record } = ended;
       if (!record.applied_version_id) await saveFixVersion(client, file, record);
-      outcomes.push(record.outcomes[0]);
+      decide([record.outcomes.find((o: CorrectionOutcome) => o.id === j.id)]);
     }
     // A correction of a step whose text changed since its run is not fixed: the change may already answer it.
-    outcomes.push(...await changedSinceRun(client, methodId, claimed.filter(j => !outcomes.some(c => c.id === j.id)), methodContent(readDocument(file))));
+    decide(await changedSinceRun(client, methodId, claimed.filter(j => !outcomes.some(c => c.id === j.id)), methodContent(readDocument(file))));
     const fresh = claimed.filter(j => !outcomes.some(c => c.id === j.id));
     if (fresh.length) process.stderr.write(`Testing fixes for ${fresh.length} correction${fresh.length === 1 ? '' : 's'} of ${file}.\n`);
     const runCases = options.runCases ?? ((await import('./quality.js')).runCases as unknown as CaseRunner);
-    for (const j of fresh) {
-      if (!j.run_dir) { outcomes.push({ id: j.id, outcome: 'could_not_test', reason: 'missing_file', detail: 'The run is not on this computer.' }); continue; }
-      const base = methodContent(readDocument(file));
-      const earlier = all.filter(e => e.verdict === 'wrong' && e.id !== j.id && e.created_at <= j.created_at)
+    decide(fresh.filter(j => !j.run_dir).map(j => ({ id: j.id, outcome: 'could_not_test', reason: 'missing_file', detail: 'The run is not on this computer.' })));
+    const ready = fresh.filter(j => j.run_dir);
+    // The corrections that wait go together; failure: why a change for them was undone.
+    const batches: { batch: typeof ready; failure?: string }[] = ready.length ? [{ batch: ready }] : [];
+    while (batches.length) {
+      const { batch, failure } = batches.shift()!;
+      const base = methodContent(readDocument(file)), ids = new Set(batch.map(j => j.id)), newest = batch.at(-1)!.created_at;
+      const earlier = all.filter(e => e.verdict === 'wrong' && !ids.has(e.id) && e.created_at <= newest)
         .map(e => ({ id: e.id, note: e.note, noted_by: e.noted_by ?? null, created_at: e.created_at, outcome: outcomes.find(o => o.id === e.id)?.outcome ?? e.outcome ?? null, detail: e.outcome_detail ?? null, answer: e.answer ?? null }));
-      const learned = await learnCorrection(file, { id: j.id, run_dir: j.run_dir, note: j.note, corrected: j.corrected, noted_by: j.noted_by ?? null, created_at: j.created_at, question: j.question ?? null, answer: j.answer ?? null },
-        { earlier, caseId: correctionCaseId(j.id), model: await learnerModel(readDocument(file)), workDir: join(fixFolder(methodId), 'learn', j.id.replace(/[^A-Za-z0-9_-]/g, '_')), runCases });
+      const learned = await learnCorrection(file, batch.map(j => ({ id: j.id, run_dir: j.run_dir!, note: j.note, corrected: j.corrected, noted_by: j.noted_by ?? null, created_at: j.created_at, question: j.question ?? null, answer: j.answer ?? null })),
+        { earlier, caseIds: batch.map(j => correctionCaseId(j.id)), model: await learnerModel(readDocument(file)), workDir: join(fixFolder(methodId), 'learn', batch[0]!.id.replace(/[^A-Za-z0-9_-]/g, '_')), runCases,
+          // A change that was undone is tested in full before it is applied again.
+          ...(failure ? { failure } : { later: true }) });
       log = learned.log;
-      if (learned.outcome.outcome === 'fixed' || learned.outcome.outcome === 'no_change_needed') {
+      if (learned.split) { cleanRoom(learned); const half = Math.ceil(batch.length / 2); batches.unshift({ batch: batch.slice(0, half) }, { batch: batch.slice(half) }); continue; }
+      let change: Awaited<ReturnType<typeof applyLearned>> = undefined;
+      if (learned.outcomes.some(o => o.outcome === 'fixed' || o.outcome === 'no_change_needed')) {
         // The file must be the one the learner started from; a change made meanwhile is not overwritten.
-        if (!isDeepStrictEqual(methodContent(readDocument(file)), base)) { outcomes.push({ id: j.id, outcome: 'retry' }); continue; }
-        const change = await applyLearned(client, file, methodId, j, learned);
+        if (!isDeepStrictEqual(methodContent(readDocument(file)), base)) { decide(batch.map(j => ({ id: j.id, outcome: 'retry' }))); cleanRoom(learned); continue; }
+        change = await applyLearned(client, file, methodId, batch, learned);
         if (change) applied++;
       }
-      outcomes.push(learned.outcome);
+      if (change && learned.later?.length) {
+        // "Fixed" now, after one test of each earlier correction; the other tests run next.
+        for (const o of learned.outcomes) saveOutcome(methodId, file, o, log);
+        const broke = await finishLater(learned, file, runCases);
+        cleanRoom(learned);
+        if (!broke) { settleLater(file, change.proposal); decide(learned.outcomes, true); continue; }
+        await undoChange(client, file, change);
+        applied--;
+        saveNotice(methodId, file, 'undone', undidLine(batch.length === 1 ? batch[0]!.note : null, broke.broke));
+        markWorking(methodId, file, batch.map(j => j.id), process.pid);
+        batches.unshift({ batch, failure: broke.failure });
+        continue;
+      }
+      decide(learned.outcomes);
       cleanRoom(learned);
     }
     await giveBack(outcomes.filter(o => o.outcome === 'retry').map(o => o.id));
@@ -145,7 +174,6 @@ export async function fixCorrections(client: MethodClient, file: string, options
     const undecided = [...taken].filter(id => !outcomes.some(o => o.id === id && o.outcome !== 'retry'));
     await giveBack(undecided);
     await report(outcomes.filter(o => o.outcome !== 'retry'));
-    for (const outcome of outcomes) if (outcome.outcome !== 'retry') saveOutcome(methodId, file, outcome, log);
     throw Object.assign(error instanceof Error ? error : Error(String(error)), { judgments: undecided, ...(log ? { log } : {}) });
   }
 }
@@ -170,18 +198,20 @@ function cleanRoom(learned: Learned) {
 }
 
 /**
- * Apply what the learner left in its room. fixed: every changed file of the Method, its new check and the record of
- * the words Method wrote, with an undo record, a new version, and a local record of the change with its correction,
- * summary and diff. no_change_needed: only the new check, so later changes keep it. Returns whether the Method changed.
+ * Apply what the learner left in its room. fixed: every changed file of the Method, its new checks and the record of
+ * the words Method wrote, with an undo record, a new version, and a local record of the change with its corrections,
+ * summary and diff. no_change_needed alone: only the new checks, so later changes keep them. Returns the records of a
+ * change of the Method, or undefined.
  */
-async function applyLearned(client: MethodClient, file: string, methodId: string, j: AccountJudgment, learned: Learned) {
+async function applyLearned(client: MethodClient, file: string, methodId: string, batch: AccountJudgment[], learned: Learned) {
   const folder = dirname(resolve(file)), name = basename(file);
   const inFolder = (path: string) => { const full = resolve(folder, packagePath(path)); if (!full.startsWith(folder + sep)) throw Error(`The change names a file outside the Method folder: ${path}`); return full; };
   const copy = (path: string) => {
     const from = join(learned.room!, path), to = inFolder(path);
     if (existsSync(from) && statSync(from).isFile()) { mkdirSync(dirname(to), { recursive: true }); cpSync(from, to); } else rmSync(to, { force: true });
   };
-  if (learned.outcome.outcome === 'no_change_needed') { for (const path of learned.changed) copy(path); return false; }
+  const fixed = learned.outcomes.filter(o => o.outcome === 'fixed');
+  if (!fixed.length) { for (const path of learned.changed) copy(path); return undefined; }
   const before = snapshot(file, [...learned.changed.filter(p => p !== name), '.method/written.json']);
   const baseWorkflow = methodContent(readDocument(file));
   const content = methodContent(parseDocumentValue(readFileSync(join(learned.room!, name), 'utf8')) as any);
@@ -189,20 +219,38 @@ async function applyLearned(client: MethodClient, file: string, methodId: string
   const baseVersion = await currentVersion(file).catch(() => undefined);
   // Until the change and its record are written, the folder can go back to this snapshot (restoreUnfinished).
   localMethodFolder(file);
-  writePrivateJson(unfinishedPath(file), { judgment: j.id, before });
+  writePrivateJson(unfinishedPath(file), { judgments: batch.map(j => j.id), before });
   for (const path of learned.changed) if (path !== name) copy(path);
   if (!isDeepStrictEqual(content, baseWorkflow)) writeMethodFile(file, methodId, content);
   writePrivateJson(writtenFile(folder), learned.written);
-  const summary = learned.outcome.summary ?? 'Method changed the agent from a correction.';
-  recordChange(file, 'fix', summary, j.note?.trim() ? `the fix for "${j.note.trim().slice(0, 300)}"` : 'the last fix', before);
-  // The fix has ended when its change is recorded with its outcome: a later fix of this correction takes this record.
+  const summary = fixed.map(o => o.summary?.trim()).filter(Boolean).join(' ') || 'Method changed the agent from a correction.';
+  const notes = batch.filter(j => fixed.some(o => o.id === j.id)).map(j => j.note?.trim()).filter((n): n is string => !!n);
+  const undo = recordChange(file, 'fix', summary, notes.length ? `the fix for ${notes.map(n => `"${n.slice(0, 300)}"`).join(' and ')}` : 'the last fix', before);
+  // The fix has ended when its change is recorded with its outcomes: a later fix of these corrections takes this record.
+  const j = batch[0]!;
   const record = { id: `lp_${randomBytes(8).toString('hex')}`, method_id: methodId, base_version_id: baseVersion?.version_id ?? null, status: 'applied', cause: summary,
-    evidence: { kind: 'change', steps: changedSteps(baseWorkflow, content), judgment: j.id, note: j.note, summary, diff: learned.diff, files: learned.changed, tries: learned.tries },
-    created_at: new Date().toISOString(), applied_at: new Date().toISOString(), base_workflow: baseWorkflow, proposed_workflow: content, judgments: [j.id], outcomes: [learned.outcome] };
+    evidence: { kind: 'change', steps: changedSteps(baseWorkflow, content), judgment: j.id, ...(batch.length > 1 ? { judgments: batch.map(b => b.id) } : {}), note: j.note, summary, diff: learned.diff, files: learned.changed, tries: learned.tries },
+    created_at: new Date().toISOString(), applied_at: new Date().toISOString(), base_workflow: baseWorkflow, proposed_workflow: content, judgments: batch.map(b => b.id), outcomes: learned.outcomes,
+    // Until the later tests end, the change can be undone: undo_id names its undo record.
+    undo_id: undo.id, ...(learned.later?.length ? { later: learned.later } : {}) };
   saveLocalProposal(file, record);
   rmSync(unfinishedPath(file), { force: true });
   await saveFixVersion(client, file, record);
-  return true;
+  return { undo: undo.id, proposal: record.id };
+}
+/** The later tests of a change ended and passed: its record no longer waits for them. */
+function settleLater(file: string, proposal: string) {
+  const found = localProposals(file).find((p: any) => p.id === proposal);
+  if (found) { const { path: _path, later: _later, ...record } = found as any; saveLocalProposal(file, record); }
+}
+/** Undo an applied change whose later test broke an earlier correction, and save the restored file as a new version. */
+async function undoChange(client: MethodClient, file: string, change: { undo: string; proposal: string }) {
+  let last;
+  try { last = undoLast(file, change.undo); }
+  catch { throw Error('the fix broke an earlier correction when I tested it again, and the agent changed since, so I could not undo it. Run method undo'); }
+  const proposal = localProposals(file).find((p: any) => p.id === change.proposal);
+  if (proposal) { const { path: _path, ...record } = proposal as any; saveLocalProposal(file, { ...record, status: 'undone' }); }
+  await saveVersion(client, file, `Undid Method's change: ${last.cause}`.slice(0, 500));
 }
 /** Save the version of a recorded change and keep its ID in the record. Nothing when the version cannot be saved now. */
 async function saveFixVersion(client: MethodClient, file: string, record: any) {
@@ -223,7 +271,7 @@ function restoreUnfinished(file: string) {
 }
 /** The recorded change of a fix of this correction that ended on this computer, or undefined. */
 function endedFix(file: string, judgmentId: string) {
-  return localProposals(file).find((p: any) => p.status === 'applied' && Array.isArray(p.judgments) && p.judgments.includes(judgmentId) && p.outcomes?.[0]?.id === judgmentId) as any;
+  return localProposals(file).find((p: any) => p.status === 'applied' && Array.isArray(p.judgments) && p.judgments.includes(judgmentId) && p.outcomes?.some((o: any) => o.id === judgmentId)) as any;
 }
 
 // One fix at a time per Method on this computer. A correction that arrives while a fix runs joins it: the running fix
@@ -253,7 +301,8 @@ export function fixRunning(methodId: string) {
 
 /**
  * Fix the waiting corrections of a Method file while holding its lock, pass after pass until none waits, so the
- * corrections that arrive during a pass join the next. Each correction's outcome is saved for method wait. Returns
+ * corrections that arrive during a pass join the next. Each correction's outcome is saved for method wait when the
+ * pass decides it. Returns
  * undefined when another fix of the Method holds the lock.
  */
 export async function fixWaiting(client: MethodClient, file: string, options: { runCases?: CaseRunner; waitMs?: number } = {}): Promise<FixOutcome[] | undefined> {
@@ -271,7 +320,6 @@ export async function fixWaiting(client: MethodClient, file: string, options: { 
         throw error;
       }
       if (!fix) break;
-      for (const outcome of fix.outcomes) if (outcome.outcome !== 'retry') saveOutcome(methodId, file, outcome, fix.log);
       fixes.push(fix);
     }
     return fixes;

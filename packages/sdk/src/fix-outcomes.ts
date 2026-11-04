@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
 import { valueText } from '@withmethod/runtime/rubric.js';
-import { type CorrectionOutcome, answerNext, errorLine, heldBackHeading, outcomeLine, stoppedLine, testedOutputHeading, waitsForComputerLine, workingLine } from './fix-lines.js';
+import { type CorrectionOutcome, answerNext, errorLine, heldBackHeading, outcomeLine, stoppedLine, testedOutputHeading, waitsForComputerLine, workingForLine, workingLine } from './fix-lines.js';
 
 // What a fix in the background did with each correction, kept on this computer:
 // ~/.cache/method/fixes/<methodId>/outcomes/<judgmentId>.json. method judge writes a working record and starts the fix;
@@ -14,8 +14,8 @@ import { type CorrectionOutcome, answerNext, errorLine, heldBackHeading, outcome
 export type StoredOutcome = {
   judgment: string; method_id: string; file: string; status: 'working' | 'done' | 'stopped';
   started_at: string; pid?: number | undefined; finished_at?: string; outcome?: CorrectionOutcome; error?: string; log?: string; shown: boolean;
-  /** A record that is not about one correction: a fix that stopped holding. */
-  kind?: 'came_back'; line?: string;
+  /** A record that is not about one correction: a fix that stopped holding, or a fix undone after a later test. */
+  kind?: 'came_back' | 'undone'; line?: string;
 };
 
 export const fixFolder = (methodId: string) => join(methodCache(), 'fixes', methodId);
@@ -44,8 +44,8 @@ export function saveError(methodId: string, file: string, id: string, error: str
   const before = read(recordPath(methodId, id));
   write({ judgment: id, method_id: methodId, file: resolve(file), status: 'stopped', started_at: before?.started_at ?? new Date().toISOString(), finished_at: new Date().toISOString(), error, ...(log ? { log } : {}), shown: false });
 }
-/** A line that is not about one correction: a fix that came back. */
-export function saveNotice(methodId: string, file: string, kind: 'came_back', line: string) {
+/** A line that is not about one correction: a fix that came back, or a fix that was undone. */
+export function saveNotice(methodId: string, file: string, kind: 'came_back' | 'undone', line: string) {
   const id = `${kind}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   write({ judgment: id, method_id: methodId, file: resolve(file), status: 'done', kind, line, started_at: new Date().toISOString(), finished_at: new Date().toISOString(), shown: false });
 }
@@ -125,23 +125,26 @@ export const fixStarter = {
 };
 
 /**
- * `method wait [JUDGMENT_ID] [--timeout SECONDS] [--json]`: wait for the fix of a correction (or of every correction
- * that is being fixed on this computer) and print what it did. A wait that ends before the fix says so in one line;
- * the fix goes on, and method wait can run again.
+ * `method wait [JUDGMENT_ID] [--timeout SECONDS] [--json]`: wait until the fix of a correction (or of every correction
+ * that is being fixed on this computer) has an outcome, and print what it did. While it waits it prints one line a
+ * minute. With --timeout, a wait that ends before the fix says so in one line; the fix goes on, and method wait can run
+ * again.
  */
-export async function waitCommand(args: string[], options: { pollMs?: number } = {}) {
+export async function waitCommand(args: string[], options: { pollMs?: number; minuteMs?: number } = {}) {
   const { parseArgs } = await import('node:util');
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { timeout: { type: 'string' }, json: { type: 'boolean' } } });
   const id = positionals[0];
-  const timeout = values.timeout !== undefined ? Number(values.timeout) : 100;
-  if (!Number.isFinite(timeout) || timeout < 0) throw Error('Use method wait [JUDGMENT_ID] [--timeout SECONDS].');
-  const deadline = Date.now() + timeout * 1000;
+  const timeout = values.timeout !== undefined ? Number(values.timeout) : Infinity;
+  if (Number.isNaN(timeout) || timeout < 0) throw Error('Use method wait [JUDGMENT_ID] [--timeout SECONDS].');
+  const started = Date.now(), deadline = started + timeout * 1000, minute = options.minuteMs ?? 60_000;
   const chosen = () => storedOutcomes().filter(r => id ? r.judgment === id : !r.shown);
-  let records = chosen();
+  let records = chosen(), told = 0;
   if (id && !records.length) throw Error(`This computer is not fixing ${id} now. ${waitsForComputerLine} Its outcome will be on the run's page on the dashboard.`);
   while (records.some(r => r.status === 'working') && Date.now() < deadline) {
     await new Promise(done => setTimeout(done, options.pollMs ?? 500));
     records = chosen();
+    const minutes = Math.floor((Date.now() - started) / minute);
+    if (minutes > told && records.some(r => r.status === 'working')) { told = minutes; process.stderr.write(workingForLine(minutes) + '\n'); }
   }
   const finished = records.filter(r => r.status !== 'working'), working = records.filter(r => r.status === 'working');
   for (const record of finished) markShown(record);

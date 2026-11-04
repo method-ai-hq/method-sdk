@@ -170,7 +170,9 @@ export async function ownAgentModel(document: any): Promise<{ backend: 'claude' 
 
 /** Run the cases of a Method with the same preparation as method run. */
 export type CaseRunOptions = { casesDir?: string | undefined; ids?: string[] | undefined; baseline?: string | undefined; newIds?: string[]; once?: boolean;
-  runs?: number | undefined; minPass?: number | undefined; live?: string[] | undefined; judgeCache?: boolean | undefined; keepDir?: string | undefined };
+  runs?: number | undefined; minPass?: number | undefined; live?: string[] | undefined; judgeCache?: boolean | undefined; keepDir?: string | undefined;
+  /** The fix's gate: the old version runs only for a failing case, and the test stops at the first break (testSuite gate). */
+  gate?: boolean; firstRun?: boolean; moreRuns?: number };
 export async function runCases(file: string, flags: { workspace?: string }, options: CaseRunOptions = {}) {
   const prepared = await preparedConfig(file, flags, { judge: true });
   // Claude Code and Codex both judge when both are signed in; a disagreement fails the criterion as unsure.

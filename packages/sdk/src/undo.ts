@@ -71,12 +71,18 @@ export function undoLast(file: string, id?: string) {
   writePrivateJson(last.path, { ...stripPath(last), undone_at: new Date().toISOString() });
   return last;
 }
-/** Write the Method file and the named files back as a snapshot took them. */
+/**
+ * Write the Method file and the named files back as a snapshot took them. A folder that a removed file leaves empty
+ * goes too, as a check of the correction whose fix is undone, so the same check can be written again.
+ */
 export function restoreSnapshot(file: string, before: UndoRecord['before']) {
   writeFileSync(file, before.text);
+  const folder = dirname(resolve(file));
   for (const [path, content] of Object.entries(before.files)) {
     const full = inFolder(file, path);
-    if (content === null) rmSync(full, { force: true }); else { mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, Buffer.from(content, 'base64')); }
+    if (content !== null) { mkdirSync(dirname(full), { recursive: true }); writeFileSync(full, Buffer.from(content, 'base64')); continue; }
+    rmSync(full, { force: true });
+    for (let dir = dirname(full); dir.startsWith(folder + sep); dir = dirname(dir)) { try { if (readdirSync(dir).length) break; rmSync(dir, { recursive: true }); } catch { break; } }
   }
 }
 

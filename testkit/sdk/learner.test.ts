@@ -79,7 +79,7 @@ async function project(root: string, kind: 'script' | 'model' = 'script') {
 
 const JUDGMENT = 'jdg_' + 'a'.repeat(32), CASE = correctionCaseId(JUDGMENT);
 const correction = (run: string, extra: Partial<LearnerCorrection> = {}): LearnerCorrection => ({ id: JUDGMENT, run_dir: run, note: 'Non-competes go to Legal.', noted_by: 'Ryan', created_at: '2026-10-28T10:00:00Z', ...extra });
-const learn = (file: string, c: LearnerCorrection, root: string) => learnCorrection(file, c, { earlier: [], caseId: CASE, model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
+const learn = async (file: string, c: LearnerCorrection, root: string) => { const learned = await learnCorrection(file, [c], { earlier: [], caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any }); return { ...learned, outcome: learned.outcomes[0]! }; };
 
 /** What a stub agent does in its room: write the check (as method case new does), edit files, and say its outcome. */
 const room = {
@@ -88,7 +88,7 @@ const room = {
   method: (dir: string) => JSON.parse(readFileSync(join(dir, 'reply.method'), 'utf8')),
   save: (dir: string, method: any) => writeFileSync(join(dir, 'reply.method'), JSON.stringify(method, null, 2) + '\n'),
   check: async (dir: string, value = 'Thanks. The non-compete clause goes to Legal.') => {
-    if (existsSync(join(dir, 'cases', CASE))) return;
+    if (existsSync(join(dir, 'cases', CASE, 'case.json'))) return;
     await createCase({ methodFile: join(dir, 'reply.method'), runDir: join(dir, '.fix', 'run'), id: CASE, note: 'Non-competes go to Legal.', expect: [{ kind: 'equals', ref: 'outputs.reply', value }] } as any);
   },
   result: (dir: string, value: unknown) => writeFileSync(join(dir, '.fix', 'result.json'), JSON.stringify(value)),
@@ -126,7 +126,7 @@ it('a stub learner adds a run step with a data file: the gate tests it for real,
   expect(learned.diff).not.toContain('cases/');
   // One session: it read the brief in its room, with the run, the earlier corrections and the guide.
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toBe(learnerPrompt('reply.method', CASE));
+  expect(prompts[0]).toBe(learnerPrompt('reply.method', [CASE]));
   const brief = join(root, 'work', 'room', '.fix');
   expect(readFileSync(join(brief, 'correction.md'), 'utf8')).toContain('Ryan wrote (2026-10-28):\n\nNon-competes go to Legal.');
   expect(readFileSync(join(brief, 'run.md'), 'utf8')).toContain('Thanks. We accept the non-compete clause.');
@@ -321,7 +321,7 @@ it('the loop applies a tested change with undo, saves a version, records its cor
   expect(readFileSync(file, 'utf8')).toBe(before);
   expect(existsSync(join(folder, 'legal.json'))).toBe(false);
   expect(existsSync(join(folder, 'route.mjs'))).toBe(false);
-  expect(existsSync(join(folder, 'cases', CASE, 'case.json'))).toBe(false);
+  expect(existsSync(join(folder, 'cases', CASE))).toBe(false);
   expect(readWritten(folder).places).toEqual({});
 }, 60_000);
 
@@ -393,3 +393,130 @@ it('a diff shows each changed line with 2 lines around it', () => {
   expect(textDiff('a\nb\nc\nd\ne\nf\ng\nh\ni', 'a\nb\nC\nd\ne\nf\ng\nh\ni\nj', 'x', 'x')).toBe(['--- x', '+++ x', '@@ -1,5 +1,5 @@', ' a', ' b', '-c', '+C', ' d', ' e', '@@ -8,2 +8,3 @@', ' h', ' i', '+j'].join('\n'));
   expect(textDiff('same', 'same')).toBe('');
 });
+
+// ---------- A faster fix ----------
+
+it('the learner tests only its new check; Method tests the new check first, and the earlier ones only when it passes', async () => {
+  const root = setup();
+  const { file, badRun } = await project(root);
+  const calls: any[] = [];
+  const spy = (async (f: string, flags: any, options: any) => { calls.push(options); return runCases(f, flags, options); }) as any;
+  // A check that still fails on the change: no earlier check runs.
+  const prompts = stub(async dir => { await room.check(dir, 'Thanks. The non-compete clause goes to Legal today.'); await codeStep(dir); }, async dir => { rmSync(join(dir, 'cases', CASE), { recursive: true }); await codeStep(dir); });
+  await learnCorrection(file, [correction(badRun)], { earlier: [], caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: spy });
+  expect(prompts[0]).toContain(`method test reply.method --case ${CASE}. You need not test the earlier checks: when you finish, Method tests every earlier check itself`);
+  expect(prompts[0]).not.toMatch(/method test reply\.method\. Every check/);
+  expect(calls[0]).toMatchObject({ ids: [CASE], newIds: [CASE], gate: true });
+  // The failed new check went back to the agent before any earlier check ran; its next try passed, and then the earlier one ran once.
+  expect(calls.map(c => c.ids)).toEqual([[CASE], [CASE], ['correction-term']]);
+  expect(calls[2]).toMatchObject({ gate: true, baseline: expect.stringContaining('base') });
+  expect(calls[2].firstRun).toBeUndefined();
+}, 60_000);
+
+it('two corrections that wait together go to one session, and one change fixes both', async () => {
+  const root = setup();
+  const { file, badRun, termRun } = await project(root);
+  const other = 'jdg_' + 'b'.repeat(32), otherCase = correctionCaseId(other);
+  const prompts = stub(async (dir, prompt) => {
+    expect(prompt).toContain('People corrected 2 of its runs');
+    for (const [k, id] of [CASE, otherCase].entries()) await createCase({ methodFile: join(dir, 'reply.method'), runDir: join(dir, '.fix', `run-${k + 1}`), id, note: 'Non-competes go to Legal.', expect: [{ kind: 'equals', ref: 'outputs.reply', value: 'Thanks. The non-compete clause goes to Legal.' }] } as any);
+    await codeStep(dir);
+    room.result(dir, { outcomes: { [CASE]: { outcome: 'fixed', summary: 'Replies now send non-compete clauses to Legal.' }, [otherCase]: { outcome: 'fixed', summary: 'Replies now send non-compete clauses to Legal.' } } });
+  });
+  const learned = await learnCorrection(file, [correction(badRun), correction(badRun, { id: other, noted_by: 'Gráinne' })], { earlier: [], caseIds: [CASE, otherCase], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
+  expect(prompts).toHaveLength(1);
+  expect(learned.outcomes.map(o => [o.id, o.outcome])).toEqual([[JUDGMENT, 'fixed'], [other, 'fixed']]);
+  expect(readFileSync(join(root, 'work', 'room', '.fix', 'correction.md'), 'utf8')).toContain(`Its run is .fix/run-2 (.fix/run-2.md). Its check has the ID ${otherCase}.`);
+  expect(JSON.parse(readFileSync(join(root, 'work', 'room', 'cases', otherCase, 'case.json'), 'utf8'))).toMatchObject({ author: 'Gráinne', source: { run_dir: badRun } });
+  expect(termRun).toBeTruthy();
+  // A batch that does not pass its gate is split: each half is fixed again on its own.
+  stub(dir => room.result(dir, { outcomes: {} }));
+  const split = await learnCorrection(file, [correction(badRun), correction(badRun, { id: other })], { earlier: [], caseIds: [CASE, otherCase], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
+  expect(split).toMatchObject({ split: true, outcomes: [], tries: 1 });
+}, 60_000);
+
+it('the loop splits waiting corrections that found no change together, and fixes each half on its own', async () => {
+  const root = setup();
+  const { file } = await project(root);
+  const other = 'jdg_' + 'b'.repeat(32);
+  const judgment = (id: string, at: string) => ({ id, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: at, pending: true, noted_by: 'Ryan' });
+  const client = fakeClient([judgment(JUDGMENT, '2026-10-28T10:00:00Z'), judgment(other, '2026-10-28T10:05:00Z')]);
+  const prompts = stub(dir => room.result(dir, { outcome: 'fixed' }), codeStep, async dir => {
+    await createCase({ methodFile: join(dir, 'reply.method'), runDir: join(dir, '.fix', 'run'), id: correctionCaseId(other), note: 'Non-competes go to Legal.', expect: [{ kind: 'equals', ref: 'outputs.reply', value: 'Thanks. The non-compete clause goes to Legal.' }] } as any);
+    room.result(dir, { outcome: 'no_change_needed', detail: 'the reply already sends it to Legal' });
+  });
+  await backgroundFix(client, file, [JUDGMENT, other], { runCases: runCases as any });
+  expect(prompts).toHaveLength(3);
+  expect(prompts[0]).toContain('People corrected 2 of its runs');
+  expect(prompts[1]).toContain('A person corrected one of its runs');
+  expect(client.outcomes.map((o: any) => [o.id, o.outcome])).toEqual([[JUDGMENT, 'fixed'], [other, 'no_change_needed']]);
+}, 60_000);
+
+it('a slow Method shows Fixed after one test of each earlier correction; a later test that breaks one undoes the fix, and it is fixed again', async () => {
+  const root = setup();
+  const { folder, file } = await project(root);
+  const before = readFileSync(file, 'utf8');
+  const client = fakeClient([{ id: JUDGMENT, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: '2026-10-28T10:00:00Z', pending: true, noted_by: 'Ryan' }]);
+  // The new check's runs took 4 minutes each with a live model step, so a full test of the earlier one would be slow;
+  // the first later test breaks Gráinne's check.
+  const seen: any[] = [];
+  let broke = false;
+  const spy = (async (f: string, flags: any, options: any) => {
+    seen.push(options);
+    const report = await runCases(f, flags, options);
+    if (options.newIds?.length) for (const row of report.cases) for (const a of row.candidate.attempts) Object.assign(a, { duration_ms: 240_000, live_model_steps: ['write'] });
+    if (options.firstRun) for (const row of report.cases) if (row.verdict === 'pass') row.more = 2;
+    if (options.moreRuns && !broke) {
+      broke = true;
+      expect(storedOutcome(METHOD_ID, JUDGMENT)?.outcome).toMatchObject({ outcome: 'fixed', tested: { times: 1, earlier: 1, later: 2 } });
+      expect(readFileSync(file, 'utf8')).not.toBe(before);
+      report.cases = report.cases.map((row: any) => ({ ...row, verdict: 'regression', candidate: { ...row.candidate, status: 'fail', attempts: [{ status: 'fail', results: [{ status: 'fail', reason: 'The reply sends the term clause to Legal.' }] }] } }));
+    }
+    return report;
+  }) as any;
+  const prompts = stub(codeStep);
+  await backgroundFix(client, file, [JUDGMENT], { runCases: spy });
+  expect(seen.filter(o => o.firstRun)).toHaveLength(1);
+  expect(seen.filter(o => o.moreRuns === 2)).toHaveLength(1);
+  // The fix was undone and fixed again with the failure, tested in full.
+  expect(prompts).toHaveLength(2);
+  expect(prompts[1]).toContain('Then Method tested the earlier checks again, and the change broke one, so Method undid it:\nYour change breaks the check correction-term');
+  const { storedOutcomes } = await import('../../packages/sdk/src/fix-outcomes.js');
+  expect(storedOutcomes(METHOD_ID).find(r => r.kind === 'undone')?.line).toBe('I undid the fix ("Non-competes go to Legal"): when I tested it again, it broke Gráinne\'s correction ("Accept the term clause"). I\'m trying again.');
+  expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 1 } } });
+  expect(storedOutcome(METHOD_ID, JUDGMENT)?.outcome?.tested?.later).toBeUndefined();
+  expect(client.outcomes).toEqual([{ id: JUDGMENT, outcome: 'fixed', detail: 'Replies now send non-compete clauses to Legal.' }]);
+  expect(readFileSync(join(folder, 'legal.json'), 'utf8')).toBe('["non-compete"]\n');
+  // Three versions: the fix, the undo, and the fix again.
+  expect(client.calls.filter((c: any) => c.verb === 'PUT').map((c: any) => c.body.reason.split(':')[0])).toEqual(['Method fixed it from a correction', 'Undid Method\'s change', 'Method fixed it from a correction']);
+}, 60_000);
+
+it('the Fixed line says when each earlier result was tested once and is being tested again', () => {
+  expect(outcomeLine({ id: JUDGMENT, outcome: 'fixed', summary: 'Replies now send non-compete clauses to Legal.', tested: { times: 3, earlier: 49, later: 2 } }))
+    .toBe('Fixed: Replies now send non-compete clauses to Legal. Tested 3 times on this result and once on 49 earlier ones; I\'m testing those 2 more times and will undo this if one fails. Undo: method undo.');
+});
+
+it('a change whose later tests did not end (the fix stopped) is undone, and the correction is fixed again', async () => {
+  const root = setup();
+  const { folder, file } = await project(root);
+  const judgments = [{ id: JUDGMENT, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: '2026-10-28T10:00:00Z', pending: true, noted_by: 'Ryan' }];
+  const client = fakeClient(judgments);
+  const slow = (async (f: string, flags: any, options: any) => {
+    const report = await runCases(f, flags, options);
+    if (options.newIds?.length) for (const row of report.cases) for (const a of row.candidate.attempts) Object.assign(a, { duration_ms: 240_000, live_model_steps: ['write'] });
+    if (options.firstRun) for (const row of report.cases) if (row.verdict === 'pass') row.more = 2;
+    // The process stops during the later tests.
+    if (options.moreRuns) throw Error('the computer went to sleep');
+    return report;
+  }) as any;
+  stub(codeStep);
+  await backgroundFix(client, file, [JUDGMENT], { runCases: slow });
+  expect(readFileSync(join(folder, 'legal.json'), 'utf8')).toBe('["non-compete"]\n');
+  // The next fix undoes the change that was not fully tested, and fixes the correction again.
+  judgments[0]!.pending = true;
+  const prompts = stub(codeStep);
+  await backgroundFix(client, file, [JUDGMENT], { runCases: runCases as any });
+  expect(prompts).toHaveLength(1);
+  expect(storedOutcome(METHOD_ID, JUDGMENT)).toMatchObject({ status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 1 } } });
+  expect(client.calls.filter((c: any) => c.verb === 'PUT').map((c: any) => c.body.reason.split(':')[0])).toEqual(['Method fixed it from a correction', 'Undid Method\'s change', 'Method fixed it from a correction']);
+}, 60_000);
