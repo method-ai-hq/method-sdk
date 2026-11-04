@@ -1,3 +1,11 @@
+# 0.33.0
+
+Use runtime 0.18.2.
+
+- **A fix reads only what its correction needs, so its cost does not grow with the corrections before it.** The learner's copy of the Method holds only its new check: Method tests every earlier check itself, as before, and gives a check that the change breaks back to the next try. The brief has the parts of the guide that a fix uses (about 46,000 characters in place of 126,000), and a step output longer than 4,000 characters is cut in the run's notes, with the whole value in a file.
+- **`method test` prints a passing run's output once.** A case's first passing run shows its output; its other passing runs leave it out, and a passing criterion's reason is cut short. A failing run shows everything.
+- **`method case new --expect FILE` says the form of the file.** A file that holds one object, not a list of checks, is refused with the list form, and the help says what a predicate script reads and prints.
+
 # 0.32.0
 
 Use runtime 0.18.2.
