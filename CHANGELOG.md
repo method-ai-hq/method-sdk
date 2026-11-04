@@ -1,3 +1,9 @@
+# 0.34.2
+
+Use runtime 0.18.2.
+
+- **A comparison's treatment stays under the run's output limit.** The learner's record keeps a long change diff or handed-in file (over 2000 characters) in a file in the learner's folder, and the treatment steps return its first part and path. Before, a Codex project chat that recorded a case changed thousands of lines, and the Trial treatment step returned two 7 MB diffs twice and stopped at the 16 MB output limit.
+
 # 0.34.1
 
 Use runtime 0.18.2.
