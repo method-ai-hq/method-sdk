@@ -217,6 +217,31 @@ it('a wrong judgment returns at once; the fix in the background writes the outco
   expect(JSON.parse(s.printed()).outcomes[0]).toMatchObject({ judgment: id, status: 'done', outcome: { outcome: 'fixed', tested: { times: 1, earlier: 0 } } });
 }, 60_000);
 
+it('method wait shows the tested output once and cut, with the path of each whole file, so the agent copies a file and never searches for it', async () => {
+  const s = setup();
+  const { saveOutcome } = await import('../../packages/sdk/src/fix-outcomes.js');
+  const answers = { reviewed: 'NDA_434.txt', answers: Array.from({ length: 60 }, (_, i) => ({ question: i + 1, answer: 'not mentioned', quote: 'x'.repeat(60) })) };
+  const notes = 'n'.repeat(5000), file = join(s.root, 'review.method');
+  saveOutcome(METHOD_ID, file, { id, outcome: 'fixed', summary: 'questions 3 and 16 are now not mentioned', tested: { times: 1, earlier: 2 },
+    tested_output: { result: { answers, file: 'answers.json' }, files: { 'answers.json': JSON.stringify(answers, null, 2), 'out/notes.txt': notes, 'short.txt': 'short', '../escape.txt': 'no' } } });
+  await methodMain(['wait'], () => fakeClient());
+  const kept = join(s.root, 'cache', 'fixes', METHOD_ID, 'outcomes', `${id}.output`), whole = join(s.root, 'cache', 'fixes', METHOD_ID, 'outcomes', `${id}.result`, 'result.json');
+  const printed = s.printed();
+  // The file that holds the result is named, not shown again; the cut result and the long file say where their whole text is.
+  expect(printed).toContain(`answers.json: the same as above. Whole file: ${join(kept, 'answers.json')}\n`);
+  expect(printed).toContain(`\n(cut; the whole result: ${whole})\n`);
+  expect(printed).toContain(`out/notes.txt (cut; whole file: ${join(kept, 'out', 'notes.txt')}):\n${'n'.repeat(4000)}…\n`);
+  expect(printed).toContain(`short.txt (${join(kept, 'short.txt')}):\nshort\n`);
+  expect(printed.split(answers.answers[0]!.quote).length).toBeLessThan(60);
+  expect(printed.length).toBeLessThan(10_000);
+  expect(JSON.parse(readFileSync(join(kept, 'answers.json'), 'utf8'))).toEqual(answers);
+  expect(readFileSync(join(kept, 'out', 'notes.txt'), 'utf8')).toBe(notes);
+  expect(JSON.parse(readFileSync(whole, 'utf8'))).toEqual({ answers, file: 'answers.json' });
+  // A name that leaves the folder is not kept.
+  expect(existsSync(join(kept, '..', 'escape.txt'))).toBe(false);
+  expect(printed).toContain('../escape.txt:\nno\n');
+});
+
 it('a correction goes to the newest run of the Method: an earlier run is refused with the newest named, unless --earlier', async () => {
   const s = setup(); noStart();
   const { file, run } = await project(s.root);

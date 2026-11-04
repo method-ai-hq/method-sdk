@@ -348,7 +348,10 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   const day = path.join(home, 'sessions', '2026', '11', '03');
   fs.mkdirSync(day, { recursive: true });
   fs.appendFileSync(path.join(day, 'rollout-2026-11-03T00-00-00-' + thread + '.jsonl'), JSON.stringify({ type: 'turn_context', payload: { model, cwd } }) + '\\n');
-  out({ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 50, output_tokens: 20 } });
+  // As Codex does, a resumed chat reports the tokens of the whole chat so far: 100 input and 20 output per message.
+  const count = path.join(home, 'tokens-' + thread), before = fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0;
+  fs.writeFileSync(count, String(before + 1));
+  out({ type: 'turn.completed', usage: { input_tokens: 100 * (before + 1), cached_input_tokens: 50 * (before + 1), output_tokens: 20 * (before + 1) } });
 });
 `, { mode: 0o700 });
   mkdirSync(join(process.env.HOME!, '.codex'), { recursive: true });
@@ -422,7 +425,8 @@ it('a Codex project chat is codex exec in the project folder, resumed by its thr
   const events = (arm: string) => treated.find((t: any) => t.arm === arm).learners[0].events;
   expect(events('plain').map((e: any) => [e.outcome, e.change.summary])).toEqual([['edited', 'Saved to Codex memory (AGENTS.md).'], ['was_right', 'Changed nothing in the project.']]);
   expect(events('plain')[0].change.diff).toContain('+++ Codex memory/AGENTS.md');
-  expect(events('plain')[0].tokens).toBeGreaterThan(0);
+  // The task and its correction: 120 tokens each, counted once though the resumed chat reports 240.
+  expect(events('plain')[0].tokens).toBe(240);
   expect(events('method').map((e: any) => [e.outcome, e.change.summary])).toEqual([
     ['edited', 'Wrote NOTES.md. Built a Method (review.method). Ran method judge (wrong).'], ['was_right', 'Ran method judge (wrong).']]);
   const learner = treated.find((t: any) => t.arm === 'plain').learners[0];

@@ -310,7 +310,8 @@ async function openCodexChat(project: string, settings: ChatSettings, artifacts:
       // A person trusts the plugin's hooks once in Codex; here every chat runs them.
       hooks.push('--dangerously-bypass-hook-trust');
     }
-    let thread: string | null = null, n = 0;
+    // Codex reports the tokens of the whole chat so far: a resumed chat's count includes its earlier messages.
+    let thread: string | null = null, n = 0, chatTokens = 0;
     const send = async (message: string): Promise<Turn> => {
       const attempt = join(artifacts, 'session', `attempt-${++n}`);
       mkdirSync(attempt, { recursive: true, mode: 0o700 });
@@ -346,7 +347,9 @@ async function openCodexChat(project: string, settings: ChatSettings, artifacts:
         throw Error(`${/\b(hit|reached) your usage limit\b/i.test(why) ? 'Codex hit a usage limit' : 'Codex did not finish the message'}: ${why.slice(0, 500)}`);
       }
       if (!thread) throw Error('Codex did not name its chat, so the chat cannot go on.');
-      const tokens = turns.reduce((sum, e) => sum + (Number(e.usage?.input_tokens) || 0) + (Number(e.usage?.output_tokens) || 0), 0);
+      const total = turns.reduce((sum, e) => sum + (Number(e.usage?.input_tokens) || 0) + (Number(e.usage?.output_tokens) || 0), 0);
+      const tokens = Math.max(0, total - chatTokens);
+      chatTokens = Math.max(chatTokens, total);
       return { message, reply, model: codexModel(home, thread), entries, tokens, attempt };
     };
     const close = async () => {

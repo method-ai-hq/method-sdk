@@ -1,6 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
@@ -21,6 +22,11 @@ export type StoredOutcome = {
 export const fixFolder = (methodId: string) => join(methodCache(), 'fixes', methodId);
 const outcomesDir = (methodId: string) => join(fixFolder(methodId), 'outcomes');
 const recordPath = (methodId: string, id: string) => join(outcomesDir(methodId), `${id}.json`);
+/** The whole output of a fix's tested run, beside its record: the files that it wrote, and its result when that is long. */
+const outputDir = (methodId: string, id: string) => join(outcomesDir(methodId), `${id}.output`);
+const resultPath = (methodId: string, id: string) => join(outcomesDir(methodId), `${id}.result`, 'result.json');
+/** method wait shows at most this many characters of the result and of each file. */
+const CLIP = 4000;
 const read = (path: string): StoredOutcome | undefined => { try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; } };
 function write(record: StoredOutcome) {
   mkdirSync(outcomesDir(record.method_id), { recursive: true, mode: 0o700 });
@@ -38,8 +44,39 @@ export function setWorker(methodId: string, ids: string[], pid: number) {
 }
 export function saveOutcome(methodId: string, file: string, outcome: CorrectionOutcome, log?: string) {
   const before = read(recordPath(methodId, outcome.id));
+  keepOutput(methodId, outcome);
   write({ judgment: outcome.id, method_id: methodId, file: resolve(file), status: 'done', started_at: before?.started_at ?? new Date().toISOString(), finished_at: new Date().toISOString(), outcome, ...(log ? { log } : {}), shown: false });
 }
+/**
+ * Keep the whole output of a fixed correction's tested run as files, so that the agent copies a file from its path:
+ * method wait shows each file only once and at most CLIP characters of it. A name that leaves the folder is not kept.
+ */
+function keepOutput(methodId: string, outcome: CorrectionOutcome) {
+  const dir = outputDir(methodId, outcome.id), shown = outcome.tested_output;
+  rmSync(dir, { recursive: true, force: true }); rmSync(dirname(resultPath(methodId, outcome.id)), { recursive: true, force: true });
+  if (outcome.outcome !== 'fixed' || !shown) return;
+  if (shown.result !== undefined && shown.result !== null && valueText(shown.result).length > CLIP) {
+    try { mkdirSync(dirname(resultPath(methodId, outcome.id)), { recursive: true, mode: 0o700 }); writeFileSync(resultPath(methodId, outcome.id), JSON.stringify(shown.result, null, 2) + '\n', { mode: 0o600 }); } catch { /* the lines show the cut text */ }
+  }
+  for (const [name, text] of Object.entries(shown.files ?? {})) {
+    const path = resolve(dir, name), inside = relative(dir, path);
+    if (!inside || inside.startsWith('..') || resolve(dir, inside) !== path) continue;
+    try { mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); writeFileSync(path, text, { mode: 0o600 }); } catch { /* the lines show the text without its path */ }
+  }
+}
+/** The kept file of a record's tested output, or undefined. */
+function keptPath(record: StoredOutcome, name: string) {
+  const dir = outputDir(record.method_id, record.judgment), path = resolve(dir, name), inside = relative(dir, path);
+  return inside && !inside.startsWith('..') && existsSync(path) ? path : undefined;
+}
+/** Whether a file's text is the result, or one value of the result, as JSON. */
+function sameAsResult(text: string, result: unknown) {
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { return false; }
+  if (isDeepStrictEqual(value, result)) return true;
+  return !!result && typeof result === 'object' && !Array.isArray(result) && Object.values(result).some(v => v && typeof v === 'object' && isDeepStrictEqual(value, v));
+}
+
 export function saveError(methodId: string, file: string, id: string, error: string, log?: string) {
   const before = read(recordPath(methodId, id));
   write({ judgment: id, method_id: methodId, file: resolve(file), status: 'stopped', started_at: before?.started_at ?? new Date().toISOString(), finished_at: new Date().toISOString(), error, ...(log ? { log } : {}), shown: false });
@@ -79,13 +116,26 @@ export function recordLines(record: StoredOutcome, options: { brief?: boolean } 
   if (o.outcome === 'question') lines.push(answerNext(record.judgment));
   const shown = o.tested_output;
   if (o.outcome === 'fixed' && shown && !options.brief) {
-    const parts = [...(shown.result !== undefined && shown.result !== null ? [clip(valueText(shown.result))] : []), ...Object.entries(shown.files ?? {}).map(([name, text]) => `${name}:\n${clip(text)}`)];
+    // Each part once: a file that holds the result (or one value of it) is named, not shown again. A long part is cut,
+    // with the path of its whole text, so the agent copies the file and never searches for it.
+    const parts: string[] = [];
+    const result = shown.result !== undefined && shown.result !== null ? shown.result : undefined;
+    if (result !== undefined) {
+      const text = valueText(result), path = resultPath(record.method_id, record.judgment), whole = text.length > CLIP && existsSync(path) ? path : undefined;
+      parts.push(whole ? `${clip(text)}\n(cut; the whole result: ${whole})` : clip(text));
+    }
+    for (const [name, text] of Object.entries(shown.files ?? {})) {
+      const path = keptPath(record, name);
+      if (result !== undefined && sameAsResult(text, result)) parts.push(`${name}: the same as above${path ? `. Whole file: ${path}` : ''}`);
+      else if (text.length > CLIP && path) parts.push(`${name} (cut; whole file: ${path}):\n${clip(text)}`);
+      else parts.push(`${name}${path ? ` (${path})` : ''}:\n${clip(text)}`);
+    }
     if (parts.length) lines.push(testedOutputHeading, ...parts);
     if (shown.held_back?.length) lines.push(heldBackHeading, ...shown.held_back.map(call => clip(valueText(call.args))));
   }
   return lines;
 }
-const clip = (text: string, max = 4000) => text.length > max ? `${text.slice(0, max)}…` : text;
+const clip = (text: string, max = CLIP) => text.length > max ? `${text.slice(0, max)}…` : text;
 
 /** The JSON of a record for --json: the outcome as the agent reads it, with the person's line. */
 export const recordJson = (record: StoredOutcome) => ({ judgment: record.judgment, status: record.status, ...(record.outcome ? { outcome: record.outcome } : {}), ...(record.error ? { error: record.error } : {}),
@@ -160,4 +210,4 @@ const lastChangeFile = () => join(methodCache(), 'fixes', 'last-change.json');
 export function recordLastChange(file: string) { mkdirSync(join(methodCache(), 'fixes'), { recursive: true, mode: 0o700 }); writePrivateJson(lastChangeFile(), { file: resolve(file) }); }
 export function lastChangedFile(): string | undefined { try { const file = JSON.parse(readFileSync(lastChangeFile(), 'utf8')).file; return existsSync(file) ? file : undefined; } catch { return undefined; } }
 
-export function forgetOutcome(methodId: string, id: string) { rmSync(recordPath(methodId, id), { force: true }); }
+export function forgetOutcome(methodId: string, id: string) { rmSync(recordPath(methodId, id), { force: true }); rmSync(outputDir(methodId, id), { recursive: true, force: true }); rmSync(dirname(resultPath(methodId, id)), { recursive: true, force: true }); }
