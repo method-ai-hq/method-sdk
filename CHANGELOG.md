@@ -1,6 +1,6 @@
 # 0.38.0
 
-Use runtime 0.20.0.
+Use runtime 0.20.1.
 
 A comparison page checks sources and labels exactly, and one model review finds claims that the facts contradict.
 
@@ -8,6 +8,7 @@ A comparison page checks sources and labels exactly, and one model review finds 
 - **A source is structure.** Each correction's `source` is `{kind: person, who, expert}`, `{kind: code, file}` or `{kind: model, prompt}` (each with `about`). The page checks a feedback event's source against its feedback writer and states a mismatch. The page asks the expert about words that are not the expert's own.
 - **What the main measure compares with.** `measure.compares_with` is `labels` or `nothing`; `method validate` and `method publish` ask for it when the file has expected answers. The page states it beside `labels_by`.
 - **One model review.** Each record that `method publish` or a run stage sends gets one review on the account's hosted model: the claims of the file that the page's facts contradict, each with the claim and the fact quoted word for word. It is cached for the same file and facts, and the page shows it apart, as found by a model review.
+- **A step that reads a folder runs again when the folder's files change.** A reused step's key now covers the content of the local files and folders that it can read: each absolute path among its inputs, each `files` connection that its inputs name, a session's room, and, for a step that runs a script, every `files` connection. Before, a step whose input was a files connection was reused when the path was the same, so a run on a folder whose one NDA had been swapped returned the earlier NDA's result in 1.4 s. Past 5,000 files or 100 MB the step is not reused.
 
 # 0.37.0
 
