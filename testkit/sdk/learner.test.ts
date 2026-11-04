@@ -523,3 +523,108 @@ it('the brief has the guide of a fix, not the whole manual, and a long step outp
   expect(run).toContain('the whole value is in .fix/run-outputs/reply.json.');
   expect(readFileSync(join(fix, 'run-outputs', 'reply.json'), 'utf8')).toContain('x'.repeat(6000));
 }, 60_000);
+
+// ---------- A general fix ----------
+
+const NDA_A = 'Acme may share Confidential Information with a third party only with the written approval of the Discloser. The Recipient shall return all copies on request.';
+const NDA_B = 'Beta Corp shall obtain the written approval of the Discloser before it discloses any Confidential Information to a third party. Nothing here survives termination.';
+/** The answer script: question 1 (sharing allowed) and question 2 (return), each with a quote. rule decides question 1. */
+const answerScript = (rule = `'yes'`) => `import{readFileSync}from'node:fs';const{text}=JSON.parse(readFileSync(0,'utf8'));
+const q1=${rule};const q2=text.includes('return')?'yes':'not mentioned';
+console.log(JSON.stringify({answers:[{question:1,answer:q1,quote:text.split('. ')[0]},{question:2,answer:q2,quote:q2==='yes'?text.split('. ')[1]:''}]}));\n`;
+/**
+ * A Method that answers 2 questions about an NDA. Gráinne's earlier check on NDA A covers only question 2 (it passes).
+ * The run on NDA B answers question 1 "yes"; the person corrects it to "no": sharing that needs written approval is a
+ * restriction. NDA A says the same, so the rule holds there too, though its check does not test it.
+ */
+async function review(root: string) {
+  const folder = join(root, 'project'); mkdirSync(folder);
+  const file = join(folder, 'reply.method');
+  writeFileSync(join(folder, 'answer.mjs'), answerScript());
+  writeFileSync(file, JSON.stringify({ format: 'method/3.4', id: METHOD_ID, name: 'NDA questions', goal: 'Answer 2 questions about an NDA.', inputs: { text: { type: 'text', description: 'The NDA.' } },
+    steps: { answer: { name: 'Answer', purpose: 'Answers the questions.', in: { text: 'inputs.text' }, do: { kind: 'run', runtime: 'node', entrypoint: 'answer.mjs' }, out: { answers: { type: 'list', fields: { question: 'number', answer: 'text', quote: 'text' }, description: 'The answers.' } } } }, result: 'answers' }, null, 2) + '\n');
+  const run = async (name: string, text: string) => {
+    const dir = join(root, 'cache', 'runs', name);
+    await runCurrentMethod(file, node, { runDir: dir, inputs: { text } });
+    writeFileSync(join(dir, 'run-id.json'), JSON.stringify({ id: name }));
+    return dir;
+  };
+  const runA = await run('aaaaaaaa-0000-4000-8000-00000000000a', NDA_A), runB = await run('aaaaaaaa-0000-4000-8000-00000000000b', NDA_B);
+  await createCase({ methodFile: file, passingRun: runA, id: 'correction-return', note: 'Question 2 is yes.', author: 'Gráinne', expect: [{ kind: 'parts', ref: 'outputs.answers', key: 'question', kept: { 2: { answer: 'yes' } } }] } as any);
+  return { folder, file, runB };
+}
+const ndaNote = 'Question 1 (Sharing with third parties) needs to be "no", not "yes": sharing only after written approval is a restriction.';
+/** The check of the NDA correction: question 1 is corrected, question 2 was left; with every_input, the rule for every NDA as a script. */
+async function ndaCheck(dir: string, { copy = false, everyInput = false } = {}) {
+  if (existsSync(join(dir, 'cases', CASE, 'case.json'))) return;
+  const rule = 'import{readFileSync}from"node:fs";const o=JSON.parse(readFileSync(0,"utf8"));const t=o.inputs.text,a=o.outputs.answers?.find(x=>x.question===1)?.answer;const applies=/written approval/.test(t);console.log(JSON.stringify({pass:!applies||a==="no",reason:applies?`question 1 is ${a} where sharing needs written approval`:"no approval clause"}));\n';
+  if (everyInput) room.write(dir, 'approval-rule.mjs', rule);
+  const expect = copy ? [{ kind: 'equals', ref: 'outputs.answers', value: [{ question: 1, answer: 'no', quote: NDA_B.split('. ')[0] }, { question: 2, answer: 'not mentioned', quote: '' }] }]
+    : [{ kind: 'parts', ref: 'outputs.answers', key: 'question', corrected: { 1: { answer: 'no' } }, kept: { 2: { answer: 'not mentioned' } } },
+      ...(everyInput ? [{ kind: 'predicate', scope: 'every_input', runtime: 'node', entrypoint: 'approval-rule.mjs' }] : [])];
+  await createCase({ methodFile: join(dir, 'reply.method'), runDir: join(dir, '.fix', 'run'), id: CASE, note: ndaNote, expect, config: node } as any);
+}
+const ndaCorrection = (run: string) => correction(run, { note: ndaNote });
+
+it('a check that copies the whole result is refused; the next try checks the corrected and the kept parts as labels', async () => {
+  const root = setup();
+  const { file, runB } = await review(root);
+  const fix = (copy: boolean) => async (dir: string) => {
+    if (!copy) rmSync(join(dir, 'cases', CASE), { recursive: true, force: true });
+    await ndaCheck(dir, { copy });
+    room.write(dir, 'answer.mjs', answerScript(`/written approval/.test(text)?'no':'yes'`));
+    room.result(dir, { outcome: 'fixed', summary: 'Sharing that needs written approval is now a no.' });
+  };
+  const prompts = stub(fix(true), fix(false));
+  const learned = await learn(file, ndaCorrection(runB), root);
+  expect(prompts[1]).toContain(`The check ${CASE} requires outputs.answers to equal a copy of a whole result. Check what the correction says instead: a parts check`);
+  expect(learned.outcome).toMatchObject({ outcome: 'fixed', tested: { earlier: 1 } });
+  // The saved check compares labels: the corrected part and the part that the person left, not the quotes.
+  expect(JSON.parse(readFileSync(join(root, 'work', 'room', 'cases', CASE, 'case.json'), 'utf8')).expect[0]).toMatchObject({ kind: 'parts', corrected: { 1: { answer: 'no' } }, kept: { 2: { answer: 'not mentioned' } } });
+});
+
+it('a change that copies the text of the corrected input is refused as a rule for one input; the general rule passes', async () => {
+  const root = setup();
+  const { file, runB } = await review(root);
+  const lookup = async (dir: string) => {
+    await ndaCheck(dir);
+    room.write(dir, 'rules.json', JSON.stringify([{ question: 1, answer: 'no', evidence: NDA_B.split('. ')[0] }]) + '\n');
+    room.write(dir, 'answer.mjs', answerScript(`JSON.parse(readFileSync(new URL('./rules.json',import.meta.url),'utf8')).some(r=>text.includes(r.evidence))?'no':'yes'`));
+    room.result(dir, { outcome: 'fixed', summary: 'Answers follow your corrections.' });
+  };
+  const general = async (dir: string) => {
+    rmSync(join(dir, 'rules.json'), { force: true });
+    room.write(dir, 'answer.mjs', answerScript(`/written approval/.test(text)?'no':'yes'`));
+    room.result(dir, { outcome: 'fixed', summary: 'Sharing that needs written approval is now a no.' });
+  };
+  const prompts = stub(lookup, general);
+  const learned = await learn(file, ndaCorrection(runB), root);
+  expect(prompts[1]).toMatch(new RegExp(`rules\\.json copies text of the input of the check ${CASE} \\("shall obtain the written approval of the discloser.*"\\)\\. A rule that applies to one input only is refused`));
+  expect(learned.outcome).toMatchObject({ outcome: 'fixed', summary: 'Sharing that needs written approval is now a no.' });
+  expect(learned.changed).not.toContain('rules.json');
+  // The learner is told what a general fix is.
+  expect(prompts[0]).toContain('a rule that applies to one input only is refused');
+  expect(prompts[0]).toContain('--every-input');
+});
+
+it('leave-one-out: a rule for every input must hold on an earlier check\'s input that the change was not taught on', async () => {
+  const root = setup();
+  const { file, runB } = await review(root);
+  // A narrow fix: it keys on the party of NDA B (too short to be a copy), so NDA A, which needs written approval too, stays "yes".
+  const narrow = async (dir: string) => {
+    await ndaCheck(dir, { everyInput: true });
+    room.write(dir, 'answer.mjs', answerScript(`text.startsWith('Beta Corp')?'no':'yes'`));
+    room.result(dir, { outcome: 'fixed', summary: 'Answers follow your correction.' });
+  };
+  const general = async (dir: string) => {
+    room.write(dir, 'answer.mjs', answerScript(`/written approval/.test(text)?'no':'yes'`));
+    room.result(dir, { outcome: 'fixed', summary: 'Sharing that needs written approval is now a no.' });
+  };
+  const prompts = stub(narrow, general);
+  const learned = await learn(file, ndaCorrection(runB), root);
+  expect(prompts[1]).toContain('Your rule for every input does not hold on the input of the check correction-return, from Gráinne\'s correction ("Question 2 is yes"), which your change was not taught on: question 1 is yes where sharing needs written approval.');
+  expect(learned.outcome).toMatchObject({ outcome: 'fixed', tested: { earlier: 1 } });
+  // The copies of the earlier checks are gone; the real check is as it was.
+  expect(existsSync(join(root, 'work', 'held-out'))).toBe(false);
+  expect(JSON.parse(readFileSync(join(root, 'work', 'room', 'cases', 'correction-return', 'case.json'), 'utf8')).expect).toHaveLength(1);
+}, 60_000);

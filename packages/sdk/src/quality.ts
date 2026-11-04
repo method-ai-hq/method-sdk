@@ -278,7 +278,7 @@ export function expectList(path: string | undefined): any[] {
 
 export async function caseCommand(args: string[]) {
   const text = { type: "string" } as const;
-  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { run: text, "passing-run": text, id: text, note: text, rubric: { type: "string", multiple: true }, ref: text, context: { type: "string", multiple: true }, expect: text,
+  const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { run: text, "passing-run": text, id: text, note: text, rubric: { type: "string", multiple: true }, "every-input": { type: "string", multiple: true }, ref: text, context: { type: "string", multiple: true }, expect: text,
     observations: text, redact: text, runs: text, "min-pass": text, author: text, reason: text, by: text, cases: text, workspace: text,
     "retention-days": text, supersedes: { type: "string", multiple: true }, "accept-conflict": text } });
   const [action, file, id] = positionals as string[];
@@ -289,12 +289,12 @@ export async function caseCommand(args: string[]) {
   if (action === "list") return print((await listCases(methodFile, casesDir)).map(({ id, status, note, created, superseded_by, retention_until }: any) => ({ id, status, note, created, superseded_by, retention_until })));
   if (action === "retire") { if (!id || !values.reason) throw Error("Supply the case ID and --reason."); await retireCase(methodFile, id, { by: values.by ?? null, reason: values.reason, casesDir }); return print({ retired: id }); }
   if (!values.id || !values.note || (!values.run && !values["passing-run"])) throw Error('Supply --id, --note "the person\'s words", and --run (the run that went wrong) or --passing-run (a run that was right).');
-  if (!values.rubric?.length && !values.expect) throw Error('Say what must be true with --rubric "plain sentence" (repeatable), or give --expect FILE.');
+  if (!values.rubric?.length && !values["every-input"]?.length && !values.expect) throw Error('Say what must be true with --rubric "plain sentence" (repeatable), --every-input "rule", or give --expect FILE.');
   const prepared = await preparedConfig(methodFile, { ...(values.workspace ? { workspace: values.workspace } : {}) }, { judge: true });
   const privacy = casesPrivacyWarning(methodFile, casesDir);
   if (privacy) process.stderr.write(privacy + "\n");
   print(await createCase({ methodFile, runDir: values.run ? authoringPath(values.run) : undefined, passingRun: values["passing-run"] ? authoringPath(values["passing-run"]) : undefined,
-    id: values.id, note: values.note, author: values.author ?? await signedInName(), rubric: values.rubric ?? [], ref: values.ref, context: values.context ?? [], expect: expectList(values.expect),
+    id: values.id, note: values.note, author: values.author ?? await signedInName(), rubric: values.rubric ?? [], everyInput: values["every-input"] ?? [], ref: values.ref, context: values.context ?? [], expect: expectList(values.expect),
     observations: json(values.observations), redact: json(values.redact), runs: integer(values.runs, "--runs"), minPass: integer(values["min-pass"], "--min-pass"),
     retentionDays: integer(values["retention-days"], "--retention-days"), supersedes: values.supersedes ?? [], casesDir, acceptConflict: values["accept-conflict"], config: prepared.config,
     options: { runOptions: { processPath: prepared.processPath, secrets: await declaredSecrets(methodFile), ...(prepared.classification ? { classification: prepared.classification } : {}), ...(prepared.hostedModels ? { hostedModels: prepared.hostedModels } : {}) } } }));

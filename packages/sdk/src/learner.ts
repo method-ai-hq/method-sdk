@@ -9,6 +9,7 @@ import { removeTree, writePrivateJson } from './files.js';
 import type { CorrectionOutcome, CouldNotTestReason, TestedOutput } from './fix-lines.js';
 import { correctionName } from './fix-lines.js';
 import { textDiff } from './text-diff.js';
+import { addedLines, checkCopies, checkInputs, inputLookups, lookupFailure, type Lookup } from './generalize.js';
 
 // Method's learner. A person corrected a run; one agent session (Claude Code, or Codex when that is the Method's agent,
 // on the person's own subscription, on the model and effort of the Method's own agent steps) works in a private copy
@@ -48,7 +49,7 @@ export type EarlierCorrection = { id: string; note: string | null; noted_by?: st
 /** What the agent's session did: completed, timed out, or failed with a message. */
 export type SessionResult = { status: 'completed' | 'timeout' | 'failed'; final_text?: string; message?: string; run_dir?: string };
 /** Runs cases as method test does (quality.ts runCases); tests replace it. */
-export type CaseRunner = (file: string, flags: Record<string, never>, options: { casesDir?: string; ids?: string[]; baseline?: string; newIds?: string[]; gate?: boolean }) => Promise<any>;
+export type CaseRunner = (file: string, flags: Record<string, never>, options: { casesDir?: string; ids?: string[]; baseline?: string; newIds?: string[]; gate?: boolean; once?: boolean }) => Promise<any>;
 
 /** The agent session of the learner. Tests replace session with a stub agent that edits the room. */
 export const learnerAgent = {
@@ -343,8 +344,12 @@ Read these first:
 Read each file once.
 
 Then:
-1. Write the check of ${one ? 'this correction' : 'each correction'}: method case new ${file} --run ${one ? '.fix/run' : 'ITS RUN'} --id ${one ? id : 'ITS CHECK ID'} --note "THE PERSON'S WORDS" --rubric "ONE PLAIN SENTENCE THAT A RIGHT RESULT MEETS" (repeat --rubric; or --expect FILE, for example with a predicate script for an exact rule, a form or an action). It must fail on ${one ? 'this run' : 'its run'} and pass on a right result. Check what the correction asks for, and keep what it left: when the person names some parts of a result as wrong (some answers of several, some lines or fields), they read the rest and left it, so the check also requires each part that they did not correct to stay as it is in this run (a predicate script with --expect does this exactly). Leave a part out only when the correction says that it was not checked.
-2. Find the cause and change the Method. You may change anything: a prompt, a learned rule in learned.json, a new run step with a data file, a check, a split of a step that does too much, examples. Put exact rules, values, dates and lists in code or data; use a model step only for judgement; one task per prompt; add a check on an output that matters.
+1. Write the check of ${one ? 'this correction' : 'each correction'}: method case new ${file} --run ${one ? '.fix/run' : 'ITS RUN'} --id ${one ? id : 'ITS CHECK ID'} --note "THE PERSON'S WORDS" and what the correction says, not a copy of the result. It must fail on ${one ? 'this run' : 'its run'} and pass on a right result.
+   - A result of parts (answers, fields, lines, items) where the person corrected some: --expect FILE with a parts check, [{"kind": "parts", "ref": "outputs.NAME.LIST", "key": "THE FIELD THAT NAMES A PART", "corrected": {"PART": {"FIELD": "THE VALUE THE PERSON GAVE"}}, "kept": {"PART": {"FIELD": "ITS VALUE IN THIS RUN"}}}]. The person read the parts that they did not correct and left them: put each in kept, so that a later change cannot make it worse. Leave a part out only when the correction says that it was not checked. Compare labels and short values (an answer, a status, a number), never quotes or long text: a later run may quote other words and still be right.
+   - Otherwise --rubric "ONE PLAIN SENTENCE THAT A RIGHT RESULT MEETS" (repeat it), or --expect FILE with a predicate script for an exact rule, a form or an action.
+   - When the correction gives a reason that applies to other inputs too, add that rule: --every-input "THE RULE, AS A SENTENCE THAT IS TRUE OF A RIGHT RESULT FOR ANY INPUT" (for example "When the NDA lets the receiver share only after the discloser's written approval, the answer to question 6 is no."). Method also judges it on the inputs of earlier checks, which your change was not taught on.
+   Never require a whole result to equal a copy.
+2. Find the cause and change the Method so that it decides the next input right, not only this one. Write the general rule that the correction's reason gives: what in any input decides the answer. Never store an input's text, its file name, or answers for one input: a rule that applies to one input only is refused. You may change anything: a prompt, a learned rule in learned.json, a new run step with a data file, a check, a split of a step that does too much, examples. Put exact rules, values, dates and lists in code or data; use a model step only for judgement; one task per prompt; add a check on an output that matters.
 3. Run method validate ${file} and ${one ? `method test ${file} --case ${id}` : `method test ${file} --case ID for each new check`}. The checks of earlier corrections are not in this folder: when you finish, Method tests every earlier check itself, and gives you any that your change breaks.
 4. Write .fix/result.json, ${one ? `one of:
    ${outcomes}` : `with one outcome for each check ID: {"outcomes": {"CHECK ID": OUTCOME, ...}}, where each OUTCOME is one of:
@@ -353,7 +358,10 @@ Then:
 
 When you finish, Method checks your work, and gives you the exact failure when it does not pass:
 - The person's own words stay word for word. Every paragraph of the goal and the prompts in ${file}, and of the .md and .txt files in this folder, was written by the person, except the paragraphs in .fix/method-text.md. Add text before, after or between their paragraphs as you need. You may move a paragraph of theirs, unchanged, to another prompt or another .md or .txt file, for example to split a step. To change or remove one of their paragraphs, ask first: give outcome question, and quote the paragraph in the question.
+- The new check tests what the correction says: no whole result that must equal a copy, and no text copied from the input.
+- Your change takes nothing from one input: no line that you add holds 80 or more letters and digits of the input of only one check, or the file name of a check's input.
 - The new check fails on the Method as it was, and passes on your version (3 runs in 3 when a model step runs live).
+- Each rule for every input holds on the inputs of the newest earlier checks too (at most ${HELD_OUT}).
 - Every earlier check that passed before still passes. Change no file in cases/ except your new check${one ? '' : 's'}.
 - method validate ${file} gives no errors.
 Send nothing and change no real service. A file that you delete stays in the folder: to stop using it, take it out of ${file}. Keep notes for a later try in .fix/notes.md.`;
@@ -434,6 +442,62 @@ export function broken(rows: any[], casesDir: string, correction: LearnerCorrect
   return { problems, others, checks };
 }
 
+// ---------- A general fix ----------
+
+/** The text that a change added to the Method's files (not its checks), with what it takes from one input. */
+export function changeLookups(base: string, room: string, changed: string[], inputs: ReturnType<typeof checkInputs>) {
+  const read = (root: string, path: string) => { const full = join(root, path); try { const b = lstatSync(full).isFile() ? readFileSync(full) : null; return b && !b.subarray(0, 8192).includes(0) ? b.toString('utf8') : null; } catch { return null; } };
+  const found: { path: string; lookup: Lookup }[] = [];
+  for (const path of changed.filter(p => !p.startsWith('cases/'))) {
+    const after = read(room, path);
+    if (after === null) continue;
+    for (const lookup of inputLookups(addedLines(read(base, path) ?? '', after), inputs)) found.push({ path, lookup });
+  }
+  return found;
+}
+
+/** The earlier checks on whose inputs a new rule for every input is judged: the newest that passed, at most this many. */
+export const HELD_OUT = 8;
+/**
+ * Leave-one-out within the corrections: each rule for every input (scope every_input) of a new check is judged on the
+ * inputs of the earlier checks that the change was not taught on, on the changed Method. The case runs serve the step
+ * outputs that the passing earlier runs kept, so the cost is the judge's. A rule that holds on the input it was taught
+ * on but not on another input is a rule for one input. Each failure as a sentence for the learner.
+ */
+export async function heldOut(runCases: CaseRunner, roomFile: string, room: string, fixed: string[], rows: any[]) {
+  const casesDir = join(room, 'cases');
+  const read = (id: string) => { try { return JSON.parse(readFileSync(join(casesDir, id, 'case.json'), 'utf8')); } catch { return null; } };
+  const rules = fixed.flatMap(id => ((read(id)?.expect ?? []) as any[]).filter(item => item?.scope === 'every_input').map(item => ({ id, item })));
+  if (!rules.length) return [];
+  const passed = rows.filter(r => ['pass', 'fixed'].includes(r.verdict)).map(r => ({ id: r.id as string, made: read(r.id) })).filter(r => r.made)
+    .sort((a, b) => String(b.made.created ?? '').localeCompare(String(a.made.created ?? ''))).slice(0, HELD_OUT);
+  if (!passed.length) return [];
+  // A copy of each earlier check whose only expectations are the new rules.
+  const dir = join(room, '..', 'held-out');
+  removeTree(dir);
+  for (const { id, made } of passed) {
+    const to = join(dir, id);
+    cpSync(join(casesDir, id), to, { recursive: true, verbatimSymlinks: true });
+    const expect = rules.map(({ id: from, item }, i) => {
+      if (item.kind !== 'predicate') return item;
+      const entrypoint = `held-out-${i}-${basename(item.entrypoint)}`;
+      cpSync(join(casesDir, from, item.entrypoint), join(to, entrypoint));
+      return { ...item, entrypoint };
+    });
+    writeFileSync(join(to, 'case.json'), JSON.stringify({ ...made, expect, runs: null, min_pass: null }, null, 2) + '\n');
+  }
+  // The changed Method is its own baseline, so each step that the earlier runs kept is served, not run again.
+  const report = await runCases(roomFile, {}, { casesDir: dir, ids: passed.map(p => p.id), baseline: roomFile, gate: true, once: true });
+  const problems: string[] = [];
+  for (const row of report.cases ?? []) {
+    if (row.candidate?.status !== 'fail') continue;
+    const made = caseAuthor(join(casesDir, row.id));
+    problems.push(`Your rule for every input does not hold on the input of the check ${row.id}, from ${correctionName({ author: made.author, note: made.note })}, which your change was not taught on: ${failReasons(row.candidate)}. Make the change follow the rule on every input (not by the text, file name or answers of one input), or write the rule so that it holds there too. When that correction and this one disagree, ask (outcome question).`);
+  }
+  removeTree(dir);
+  return problems;
+}
+
 type Final = Omit<CorrectionOutcome, 'id'>;
 /** A failed gate: the failure for the next try, the people whose checks broke, and the IDs of those checks. */
 type Checked = { pass: true; finals: Map<string, Final> } | { pass: false; failure: string; others?: { by: string; note: string }[]; checks?: string[] };
@@ -472,6 +536,11 @@ async function gate(ctx: { file: string; base: string; room: string; caseIds: st
   const approved = ctx.corrections.filter(c => c.answer?.trim() && c.question).map(c => c.question!).join('\n') || null;
   for (const { place, paragraph } of changedUserText(textPlaces(parseDocumentValue(readFileSync(baseFile, 'utf8')), base), textPlaces(document, room), ctx.written, approved))
     problems.push(`You changed the person's own words in ${placeName(place)}: "${clip(paragraph, 200)}". Put the paragraph back word for word. To change it, ask the person first (outcome question) and quote it in the question.`);
+  // A general fix: each new check tests what its correction says, and the change looks up no one input.
+  const inputs = checkInputs(join(room, 'cases'));
+  for (const id of tested) problems.push(...checkCopies(join(room, 'cases', id), inputs));
+  const lookups = changeLookups(base, room, changed, inputs);
+  if (lookups.length) problems.push(lookupFailure(lookups));
   if (problems.length) return { pass: false, failure: problems.join('\n') };
   const casesDir = join(room, 'cases');
   // no_change_needed: the check passes on the Method as it is.
@@ -513,6 +582,9 @@ async function gate(ctx: { file: string; base: string; room: string; caseIds: st
   const rows: any[] = earlierIds.length ? (await ctx.runCases(roomFile, {}, { casesDir, ids: earlierIds, baseline: baseFile, gate: true })).cases ?? [] : [];
   const { problems: broke, others, checks } = broken(rows, casesDir, ctx.corrections.length === 1 ? ctx.corrections[0] : undefined);
   if (broke.length) return { pass: false, failure: broke.join('\n'), others, checks };
+  // The new rules for every input hold on the inputs of earlier checks, which the change was not taught on.
+  const astray = await heldOut(ctx.runCases, roomFile, room, fixed, rows);
+  if (astray.length) return { pass: false, failure: astray.join('\n') };
   const earlier = rows.filter(r => ['pass', 'fixed'].includes(r.verdict)).length;
   for (const id of fixed) {
     const row = mine.get(id), shown = testedOutput(row.candidate);

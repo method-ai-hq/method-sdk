@@ -15,7 +15,8 @@ import { localMethodFolder } from './local-judgments.js';
 import { fixFolder } from './fix-outcomes.js';
 import { recordChange, saveVersion, snapshot } from './undo.js';
 import { authoringGuide } from './method-help.js';
-import { FIX_LIMIT_MS, MAX_TRIES, broken, reportTokens, sessionTokens, changeDiff, changedFiles, changedUserText, copyMethod, learnerAgent, nextWritten, paragraphs, placeName, readWritten, textPlaces, writeRun, writtenFile,
+import { checkInputs, lookupFailure } from './generalize.js';
+import { FIX_LIMIT_MS, MAX_TRIES, broken, changeLookups, reportTokens, sessionTokens, changeDiff, changedFiles, changedUserText, copyMethod, learnerAgent, nextWritten, paragraphs, placeName, readWritten, textPlaces, writeRun, writtenFile,
   type CaseRunner, type LearnerModel, type Written } from './learner.js';
 
 // Method's redesign. One agent session (the learner's agent, on the model of the Method's own agent steps) rewrites a
@@ -36,7 +37,7 @@ const clip = (text: string, max: number) => text.length > max ? `${text.slice(0,
 
 /** The prompt of the redesign session. The same text for every Method: it names no task. */
 export function redesignPrompt(file: string) {
-  return `You are given a Method (a workflow of steps) in this folder, in the file ${file}, Method's guide in .fix/guide.md, and what the people who use it said, in .fix/corrections.md, with each corrected run in .fix/. Rewrite the Method from the problem, as a careful person who builds Methods would: first write in .fix/design.md what one input in and one answer out are, what decides each answer, where an answer usually goes wrong (use the corrections, their runs and the checks in cases/ only), which step catches each kind of error, and which evidence each model step receives (Design from the problem in the guide: code finds the passages that a step needs; no more than one step reads every document). Then change the Method to that design. You may replace, split, add or remove any step, prompt, script or data file. Keep the model of the model steps.
+  return `You are given a Method (a workflow of steps) in this folder, in the file ${file}, Method's guide in .fix/guide.md, and what the people who use it said, in .fix/corrections.md, with each corrected run in .fix/. Rewrite the Method from the problem, as a careful person who builds Methods would: first write in .fix/design.md what one input in and one answer out are, what decides each answer, where an answer usually goes wrong (use the corrections, their runs and the checks in cases/ only), which step catches each kind of error, and which evidence each model step receives (Design from the problem in the guide: code finds the passages that a step needs; no more than one step reads every document). Then change the Method to that design. You may replace, split, add or remove any step, prompt, script or data file. Keep the model of the model steps. The design decides the next input right, not only the corrected ones: write the general rule that each correction's reason gives, never an input's text, its file name or answers for one input. A rule that applies to one input only is refused; replace any rule of that kind that the Method has now with the general rule.
 
 Keep the person's own words word for word: every paragraph of the goal and the prompts in ${file}, and of the .md and .txt files in this folder, except the paragraphs in .fix/method-text.md. You may move one of their paragraphs, unchanged, to another prompt or another .md or .txt file, and you may pass a file of theirs whole to every step that applies it; do not reword, shorten or drop one.
 
@@ -47,7 +48,7 @@ Then write .fix/result.json, one of:
    {"outcome": "no_change_needed", "detail": "WHY, IN PLAIN WORDS FOR THE PERSON"}: the Method already follows this design.
 Write for the person about their work: no names of steps, files, checks or Method's parts.
 
-When you finish, Method checks your work, and gives you the exact failure when it does not pass: the person's words are kept, method validate ${file} gives no errors, and every check in cases/ that passed before still passes.`;
+When you finish, Method checks your work, and gives you the exact failure when it does not pass: the person's words are kept, no line that you add holds 80 or more letters and digits of the input of only one check or the file name of a check's input, method validate ${file} gives no errors, and every check in cases/ that passed before still passes.`;
 }
 
 /** Write what the session reads in .fix/: the guide, every correction with its run, and the paragraphs Method wrote. */
@@ -92,6 +93,8 @@ async function gate(file: string, base: string, room: string, written: Written, 
   for (const issue of (methodIssues(readFileSync(roomFile, 'utf8')) as any[]).filter(i => i.level === 'error')) problems.push(`method validate: ${issue.step ? `step ${issue.step}: ` : ''}${issue.message}${issue.fix ? ` ${issue.fix}` : ''}`);
   for (const { place, paragraph } of changedUserText(textPlaces(parseDocumentValue(readFileSync(baseFile, 'utf8')), base), textPlaces(document, room), written))
     problems.push(`You changed the person's own words in ${placeName(place)}: "${clip(paragraph, 200)}". Put the paragraph back word for word; you may move it, unchanged, to another prompt or file.`);
+  const lookups = changeLookups(base, room, changedFiles(base, room), checkInputs(join(room, 'cases')));
+  if (lookups.length) problems.push(lookupFailure(lookups));
   if (problems.length) return { failure: problems.join('\n') };
   const casesDir = join(room, 'cases');
   const { listCases } = await import('@withmethod/runtime/cases.js');

@@ -62,7 +62,8 @@ export const justWorksRules = `# A Method that just works
 - **A check on each output that matters**, so a wrong output is caught and tried again.
 - **One task per prompt.** Split a step that does several things.
 - **Keep the user's words word for word.** Their rules and instructions stay as they wrote them; add your own text beside them, and ask before you change theirs.
-- **Each correction becomes a check** (a case) that fails on the wrong run and passes on a right one, and every earlier check keeps passing.
+- **Each correction becomes a check** (a case) that fails on the wrong run and passes on a right one, and every earlier check keeps passing. The check tests what the correction says (the corrected parts, and the parts the person left, as labels: a parts check), not a copy of the whole result.
+- **A fix works on the next input.** Write the general rule that the correction's reason gives, never an input's text, file name or answers: a rule for one input is refused. A reason that applies to other inputs becomes a rule for every input (\`--every-input\`), which Method also tests on the inputs of earlier checks.
 `;
 
 /**
