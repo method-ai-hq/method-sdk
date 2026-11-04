@@ -1,3 +1,13 @@
+# 0.38.2
+
+Use runtime 0.20.2.
+
+A comparison no longer stops a Method arm with "Method said Fixed, but the project does not keep the change" for a fix that is not the event's own. In the Codex NDA comparison both Method copies stopped at event 3 this way.
+
+- **Only the fixes that a chat started count.** The check of a chat's fixes (and their tokens) reads only the fix records that started during the chat. Before, a record of an earlier event's fix (or of a fix that a stopped run left running) that changed during the chat counted as this chat's fix.
+- **A stopped run's fixes stop.** When a project's desk opens for a chat, a redesign or a full check, Method stops each fix that still runs in the desk's Method cache: a comparison run that was stopped left it, and it belongs to no event of this run.
+- **A chat waits for a fix whose process has not started yet.** method judge marks the correction as being fixed before the fix's process exists; the chat now waits for that record (for up to 60 s until the process names itself), not only for a running process.
+
 # 0.38.1
 
 Use runtime 0.20.2.

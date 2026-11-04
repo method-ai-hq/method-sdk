@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { compareStage, compileComparison, decide, readComparison } from '../../packages/sdk/src/compare.js';
 import { comparisonPlugin, didSummary, methodCommands, waitForFixes, whatItDid } from '../../packages/sdk/src/compare-project.js';
@@ -554,4 +554,52 @@ it('a chat ends only when the fix that its judgment started has ended, also befo
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
     expect(fix.exitCode).toBe(0);
   } finally { rmSync(cache, { recursive: true, force: true }); }
+});
+
+it('a fix that an earlier, stopped comparison run started is not this chat\'s: only fixes that started during the chat count as lost', async () => {
+  const { lostFixes } = await import('../../packages/sdk/src/compare.js');
+  const root = mkdtempSync(join(tmpdir(), 'method-lost-')); roots.push(root);
+  const outcomes = join(root, 'cache', 'fixes', 'wf_1', 'outcomes'); mkdirSync(outcomes, { recursive: true });
+  const desk = join(root, 'desk'), since = '2026-11-04T21:40:00.000Z';
+  const record = (id: string, started: string) => writeFileSync(join(outcomes, `${id}.json`), JSON.stringify({ judgment: id, status: 'done', file: join(root, 'old-room', 'review.method'), started_at: started, outcome: { outcome: 'fixed' } }));
+  const did = { added: [], changed: [], removed: [], judged: [] } as any;
+  // Started at 19:11 by the stopped run, ended during this chat: not this chat's.
+  record('jdg_old', '2026-11-04T19:11:00.000Z');
+  expect(lostFixes(join(root, 'cache'), new Map(), since, desk, did)).toEqual([]);
+  // Started during this chat, and its change is not in the desk: lost.
+  record('jdg_new', '2026-11-04T21:41:00.000Z');
+  expect(lostFixes(join(root, 'cache'), new Map(), since, desk, did)).toEqual([`jdg_new (${join(root, 'old-room', 'review.method')})`]);
+});
+
+it('opening a project\'s desk stops a Method fix that a stopped comparison run left running there', async () => {
+  const { openDesk, projectDesk, stopFixes } = await import('../../packages/sdk/src/compare-project.js');
+  const root = mkdtempSync(join(tmpdir(), 'method-stop-')); roots.push(root);
+  const project = join(root, 'project'), cache = join(root, 'cache'); mkdirSync(project); mkdirSync(cache);
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
+  await new Promise(done => child.once('spawn', done));
+  const exited = new Promise(done => child.once('exit', done));
+  const fixes = join(dirname(projectDesk(project)), 'cache', 'fixes', 'wf_1');
+  mkdirSync(join(fixes, 'outcomes'), { recursive: true });
+  writeFileSync(join(fixes, 'lock'), JSON.stringify({ pid: child.pid }));
+  writeFileSync(join(fixes, 'outcomes', 'jdg_old.json'), JSON.stringify({ judgment: 'jdg_old', status: 'working', pid: child.pid }));
+  const desk = openDesk(project, cache);
+  await exited;
+  expect(existsSync(join(fixes, 'lock'))).toBe(false);
+  desk.remove();
+  stopFixes(join(root, 'nothing'));
+});
+
+it('a chat waits for a fix that method judge marked as working before the fix\'s process has started', async () => {
+  const cache = mkdtempSync(join(tmpdir(), 'method-fixes-')); roots.push(cache);
+  const outcomes = join(cache, 'fixes', 'wf_' + 'b'.repeat(32), 'outcomes');
+  mkdirSync(outcomes, { recursive: true });
+  const record = join(outcomes, 'jdg_2.json');
+  writeFileSync(record, JSON.stringify({ judgment: 'jdg_2', status: 'working', started_at: new Date().toISOString() }));
+  // The fix ends 1.5 s later (its process started, fixed, and wrote its outcome).
+  setTimeout(() => writeFileSync(record, JSON.stringify({ judgment: 'jdg_2', status: 'done', started_at: new Date().toISOString(), outcome: { outcome: 'fixed' } })), 1500);
+  const started = Date.now();
+  await waitForFixes(cache);
+  expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
+  expect(JSON.parse(readFileSync(record, 'utf8')).status).toBe('done');
 });

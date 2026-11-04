@@ -1651,7 +1651,7 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   removeTree(join(workDir, 'artifacts'));
   placeInput(learner.project, event.input, event.input.deliverable);
   for (const part of ['project', 'cache', 'memory'] as const) copyTree(learner[part], join(start, part));
-  const before = projectFiles(learner.project), memoryBefore = projectFiles(learner.memory), fixesBefore = fixRecords(learner.cache);
+  const before = projectFiles(learner.project), memoryBefore = projectFiles(learner.memory), fixesBefore = fixRecords(learner.cache), chatStarted = new Date().toISOString();
   const message = projectMessage(project, event.input.value, first);
   const chat = await openChat(learner.project, chatSettings(project, learner.cache, plan.folder), join(workDir, 'artifacts'), learner.memory);
   const turns = [];
@@ -1672,14 +1672,14 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable, { before: memoryBefore, after: projectFiles(learner.memory) });
   // A fix that said Fixed changed the project's file in its desk; when the project does not keep its change, the
   // comparison is wrong, not the agent: the event stops (its start stays, so a rerun gives it again).
-  const lost = lostFixes(learner.cache, fixesBefore, projectDesk(learner.project), did);
+  const lost = lostFixes(learner.cache, fixesBefore, chatStarted, projectDesk(learner.project), did);
   if (lost.length) return { received: false, outcome: 'stopped', reason: 'a product error: Method said Fixed, but the project does not keep the change',
     detail: `The fix of ${lost.join(', ')} said Fixed, but its change is not in the project that the comparison keeps. Nothing after this event is given.` };
   const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory }, project.agent);
   removeTree(start);
   // A chat's tokens (with the Method runs it started) and the tokens of each Method fix that it started (its sessions and test runs).
   const chatTokens = sumTokens(turns.map(t => t.tokens));
-  const fixed = did.judged.includes('wrong') ? fixTokens(learner.cache, fixesBefore) : 0;
+  const fixed = fixTokens(learner.cache, fixesBefore, chatStarted);
   const tokens = chatTokens === null || fixed === null ? null : chatTokens + fixed;
   if (event.kind !== 'correction') return { received: true, outcome: 'given', did, tokens };
   const outcome: CorrectionOutcome = none !== null ? 'no_feedback' : keptSomething(did) ? 'edited' : right ? 'was_right' : 'not_edited';
@@ -1875,15 +1875,30 @@ function fixRecords(cache: string) {
   return found;
 }
 /**
- * The fixes that ended in a chat with Fixed whose change the project does not keep: the fixed file is not in the
- * project's desk, or no file of the project changed. Each as "JUDGMENT (FILE)".
+ * The fix records of a chat: each outcome written or changed since before, of a fix that started during the chat
+ * (started_at at or after since). A fix that an earlier, stopped comparison run started and that ended during this chat
+ * belongs to no event of this run.
  */
-function lostFixes(cache: string, before: Map<string, string>, desk: string, did: Did) {
-  const lost: string[] = [];
+function chatFixes(cache: string, before: Map<string, string>, since: string) {
+  const found: any[] = [];
   for (const [path, at] of fixRecords(cache)) {
     if (before.get(path) === at) continue;
     let record: any;
-    try { record = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
+    try { record = JSON.parse(readFileSync(path, 'utf8')); } catch { found.push(null); continue; }
+    if (typeof record?.started_at === 'string' && record.started_at < since) continue;
+    found.push({ ...record, path });
+  }
+  return found;
+}
+/**
+ * The fixes that this chat started and that ended with Fixed whose change the project does not keep: the fixed file
+ * is not in the project's desk, or no file of the project changed. Each as "JUDGMENT (FILE)".
+ */
+export function lostFixes(cache: string, before: Map<string, string>, since: string, desk: string, did: Did) {
+  const lost: string[] = [];
+  for (const record of chatFixes(cache, before, since)) {
+    if (!record) continue;
+    const path = record.path;
     if (record?.outcome?.outcome !== 'fixed') continue;
     const file = typeof record.file === 'string' ? resolve(record.file) : null;
     if (!file || !file.startsWith(desk + sep) || !(did.added.length + did.changed.length + did.removed.length))
@@ -1891,13 +1906,11 @@ function lostFixes(cache: string, before: Map<string, string>, desk: string, did
   }
   return lost;
 }
-/** The tokens of the fixes that ended in a chat: each outcome written or changed since before, or null when one has no count. */
-function fixTokens(cache: string, before: Map<string, string>) {
+/** The tokens of the fixes that a chat started (chatFixes), or null when one has no count. */
+function fixTokens(cache: string, before: Map<string, string>, since: string) {
   let total = 0;
-  for (const [path, at] of fixRecords(cache)) {
-    if (before.get(path) === at) continue;
-    let record: any;
-    try { record = JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+  for (const record of chatFixes(cache, before, since)) {
+    if (!record) return null;
     const tokens = record?.outcome?.tokens;
     if (typeof tokens !== 'number') return null;
     total += tokens;

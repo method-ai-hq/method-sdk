@@ -17,7 +17,7 @@
  * comparison's Method account. A Method fix that a Codex chat starts runs on Codex, the agent that started it. A project
  * without the plugin has no plugin and no method command on PATH.
  */
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { removeTree } from './files.js';
 import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -188,8 +188,11 @@ export function projectDesk(project: string) {
  */
 export function openDesk(project: string, cache: string | null) {
   const desk = projectDesk(project);
-  copyTree(project, desk);
   const deskCache = cache ? join(dirname(desk), 'cache') : null;
+  // A comparison run that stopped (killed, or a usage limit) can leave a Method fix running in the desk: it belongs to
+  // no event of this run, so it stops before the desk is filled again. Within a run, a chat ends only after its fixes.
+  if (deskCache) stopFixes(deskCache);
+  copyTree(project, desk);
   if (cache && deskCache) copyTree(cache, deskCache);
   const keep = () => { copyTree(desk, project); if (cache && deskCache) copyTree(deskCache, cache); };
   return { desk, cache: deskCache, keep, remove: () => removeTree(dirname(desk)) };
@@ -452,10 +455,39 @@ export function ownMethodIds(project: string) {
  * no correction is still being fixed by a live process (method judge marks it before the fix takes its lock), so the
  * next task runs the fixed Method.
  */
+/**
+ * Stop every Method fix that still runs with this Method cache: the process (and its process group: its agent session
+ * and test runs) that holds a Method's fix lock or a working outcome record. Its record then reads as stopped.
+ */
+export function stopFixes(cache: string) {
+  let names: string[];
+  try { names = readdirSync(join(cache, 'fixes')); } catch { return; }
+  const stop = (path: string) => {
+    let pid: unknown;
+    try { const value = JSON.parse(readFileSync(path, 'utf8')); if (value.status !== undefined && value.status !== 'working') return; pid = value.pid; } catch { return; }
+    if (typeof pid !== 'number' || pid === process.pid) return;
+    try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* it has ended */ } }
+  };
+  for (const name of names) {
+    stop(join(cache, 'fixes', name, 'lock'));
+    rmSync(join(cache, 'fixes', name, 'lock'), { force: true });
+    let records: string[] = [];
+    try { records = readdirSync(join(cache, 'fixes', name, 'outcomes')).filter(file => file.endsWith('.json')); } catch { /* no outcomes */ }
+    for (const file of records) stop(join(cache, 'fixes', name, 'outcomes', file));
+  }
+}
+/** How long a fix that method judge marked as working may take to start its process. */
+const FIX_START_MS = 60_000;
 export async function waitForFixes(cache: string) {
   const deadline = Date.now() + MESSAGE_LIMIT_MS;
   const alive = (path: string, working = false) => {
-    try { const value = JSON.parse(readFileSync(path, 'utf8')); if (working && value.status !== 'working') return false; process.kill(value.pid, 0); return true; } catch { return false; }
+    let value: any;
+    try { value = JSON.parse(readFileSync(path, 'utf8')); } catch { return false; }
+    if (working && value.status !== 'working') return false;
+    // method judge marks its correction as working before the fix's process exists: until the process starts (and
+    // names itself), the record holds the chat for up to FIX_START_MS.
+    if (working && typeof value.pid !== 'number') return Date.now() - Date.parse(value.started_at ?? '') < FIX_START_MS;
+    try { process.kill(value.pid, 0); return true; } catch { return false; }
   };
   const running = () => {
     let names: string[];
