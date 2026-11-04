@@ -101,6 +101,8 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
     // A comparison file: its parts, checked as method run checks them before anything runs.
     try {
       const compare = await import("./compare.js"), doc = compare.readComparison(file);
+      const gaps = compare.comparisonGaps(doc);
+      if (gaps.length) { print({ valid: false, executed: false, error: `${file} does not state what the page cannot find in the files. ${gaps.join(" ")}` }); process.exitCode = 1; return true; }
       await compare.armModels(doc, dirname(authoringPath(file)));
       // The exhibits that the page shows first, made with the run's code; a measure or a correction without one is an error.
       const { armSources, comparisonExhibits } = await import("./compare-exhibits.js");

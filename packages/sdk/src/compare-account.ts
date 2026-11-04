@@ -164,6 +164,15 @@ export async function linkCells(folder: string, cells: Array<Record<string, unkn
 }
 
 /**
+ * The page's literal record of one version (compare-literal.ts): what the comparison does, literally, where it could be
+ * wrong, and the counts per item. It replaces the version's record at any stage; a failed send prints one line.
+ */
+export async function sendLiteral(account: Account, literal: unknown) {
+  try { await sendAgain(() => clientOf(account).request(`/api/cli/comparisons/${account.comparison_id}/versions/${account.version_number}/literal`, 'POST', literal)); }
+  catch (error) { warn(error); }
+}
+
+/**
  * Report a stage: trial (what each arm received, the trial size and the estimate), running (the person approved; the
  * file is locked), done (the decision). A version that is past the stage keeps its stage.
  */

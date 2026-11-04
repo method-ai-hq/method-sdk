@@ -34,7 +34,7 @@ export type Exhibits = { see: Exhibit[]; scored: Exhibit[]; labels: Record<strin
  * Method arms'), and its prompt: a Method file, a plain agent's instructions, or a project's messages and start folder.
  */
 export type ArmSource = { name: string; label: string; folders: Record<string, string>; file?: string;
-  plain?: { agent: 'claude' | 'codex'; instructions: string }; project?: { message: string; first_message: string | null; start: string } };
+  plain?: { agent: 'claude' | 'codex'; instructions: string }; project?: { agent: 'claude' | 'codex'; message: string; first_message: string | null; start: string } };
 
 /** The most of one text that an exhibit keeps; the contract takes the same. */
 export const BLOCK_CHARS = 100_000;
@@ -101,7 +101,7 @@ export async function comparisonExhibits(doc: Comparison, root: string, arms: Ar
       } else if (arm.file) blocks.push(...await methodPrompts(arm.file, one.value, name));
     }
     const how = arm.plain ? `One ${arm.plain.agent === 'codex' ? 'Codex' : 'Claude Code'} session gets this prompt and nothing else, before any correction edits its instructions.`
-      : arm.project ? 'The chat\'s first message, as Claude Code gets it. Nothing else is added.'
+      : arm.project ? `The chat's first message, as ${arm.project.agent === 'codex' ? 'Codex' : 'Claude Code'} gets it. Nothing else is added.`
         : 'Each model step\'s prompt in the Method at the start, filled with the input\'s values; a value from an earlier step stays as {{name}}.';
     if (blocks.length) see.push({ id: `prompt-${slug(arm.name)}`, title: `What ${arm.label} receives`, caption: how, arm: arm.name, blocks });
   }
@@ -306,7 +306,7 @@ export async function armSources(doc: Comparison, root: string): Promise<ArmSour
     if (armIsPlain(arm)) out.push({ name: armName, label: labels[armName]!, folders: shared, plain: { agent: arm.agent, instructions: readFileSync(resolve(root, arm.instructions), 'utf8') } });
     if (armIsProject(arm)) {
       const start = arm.files ? resolve(root, arm.files) : join(tmpdir(), 'method-no-files');
-      out.push({ name: armName, label: labels[armName]!, folders: {}, project: { message: readFileSync(resolve(root, doc.message!), 'utf8'), first_message: doc.first_message ? readFileSync(resolve(root, doc.first_message), 'utf8') : null, start } });
+      out.push({ name: armName, label: labels[armName]!, folders: {}, project: { agent: arm.project, message: readFileSync(resolve(root, doc.message!), 'utf8'), first_message: doc.first_message ? readFileSync(resolve(root, doc.first_message), 'utf8') : null, start } });
     }
   }
   const order = Object.keys(doc.arms);

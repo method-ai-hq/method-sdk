@@ -368,7 +368,7 @@ if (argv[0] === 'run') {
 else if (argv[0] === 'wait') console.log(JSON.stringify({ outcomes: [{ status: 'done', outcome: { outcome: 'fixed' } }] }));
 `, { mode: 0o700 });
   const compiled = await compileComparison(file);
-  expect(compiled.spec.treatment!.list![0]!.text).toBe('The feedback writer expert reads the agent\'s own output and the hidden expected answer, and writes this correction.');
+  expect(compiled.spec.treatment!.list![0]!.text).toBe('Not written yet: code (writer.mjs) writes it from each agent\'s own output when the agent hands it in.');
   expect(compiled.spec.decisions.find((d: any) => d.what === 'feedback writer')).toMatchObject({ part: 'treatment', value: 'expert: the script writer.mjs', by: 'writer' });
   expect(compiled.spec.method_rules.map((r: any) => r.text).join(' ')).toContain('When it checked only a part and found nothing wrong there, the agent gets no feedback (no feedback)');
   const comparison = await stagePlan(file);
@@ -834,14 +834,16 @@ it('method publish NAME.compare saves the comparison as a draft with its inputs 
   stdout.mockRestore();
   expect(printed).toEqual({ comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1`, questions_open: 3,
     next: 'Give the user this link. The page asks them about the comparison one question at a time; when they say yes to the trial there, run it: method run numbers.compare' });
-  expect(sent.map(s => `${s.verb} ${s.path}`)).toEqual([`PUT /api/cli/comparisons/${id()}`, `GET /api/cli/comparisons/${id()}/versions/1/answers`]);
+  // The draft's literal record (what it does, literally, from its files) goes with it.
+  expect(sent.map(s => `${s.verb} ${s.path}`)).toEqual([`PUT /api/cli/comparisons/${id()}`, `POST /api/cli/comparisons/${id()}/versions/1/literal`, `GET /api/cli/comparisons/${id()}/versions/1/answers`]);
+  expect(sent[1]!.body.from).toBe('design');
   // The same spec that method run saves, with each input's content uploaded.
   expect(sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(uploaded).toContain(`/api/cli/result-files/${sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256}`);
   expect([calls(root, 'a'), calls(root, 'b')]).toEqual([0, 0]);
   // method run of the same file saves the same spec, so the account answers the same draft.
   await comparisonRunArgs(['run', file]);
-  expect(sent[2]!.body).toEqual(sent[0]!.body);
+  expect(sent[3]!.body).toEqual(sent[0]!.body);
   await expect(methodMain(['publish', file, '--reason', 'x'])).rejects.toThrow('It takes no options');
 });
 

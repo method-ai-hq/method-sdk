@@ -24,7 +24,7 @@ import { packageFileNames } from './method-files.js';
 import { removeTree, writePrivateJson } from './files.js';
 import { configRoot } from './computer-settings.js';
 import { ownKeyForRoom } from './own-model-key.js';
-import { linkCells, readAccount, readAnswers, saveComparison, sendPlan, sendStage, uploadSignedIn, uploadText, type PageAnswers, type PlannedCell } from './compare-account.js';
+import { linkCells, readAccount, readAnswers, saveComparison, sendLiteral, sendPlan, sendStage, uploadSignedIn, uploadText, type Account, type PageAnswers, type PlannedCell } from './compare-account.js';
 import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS, paragraphs, textPlaces, writtenFile } from './learner.js';
@@ -122,6 +122,7 @@ export const comparisonSchema = z.strictObject({
     description: text.optional().describe('What the measured inputs are, in one sentence.'),
     teaching_description: text.optional().describe('What the teaching inputs are, in one sentence.'),
     names: z.record(text, text).optional().describe('A short name for each input, by input ID.'),
+    labels_by: text.optional().describe('Who made the expected answers, and how, in one sentence, such as "One computational-linguistics researcher and two Mechanical Turk workers (ContractNLI appendix A.1); no lawyer." The page shows it beside the right answers. Give it whenever the file has expected answers.'),
   }).optional().describe('How the page names and describes the inputs. It changes no run.'),
   teaching: z.array(text).min(1).optional().describe('Inputs that the arms learn from (treatment events), kept apart from the measured inputs. A teaching input\'s own files (inputs/ID/ beside inputs/ID.json, or the case\'s snapshot/env/), one folder per files connection, replace the arms\' folders of those names for its training runs.'),
   other_measures: z.array(measureSchema).optional().describe('Numbers that are shown but do not decide.'),
@@ -381,6 +382,19 @@ export function readComparison(file: string): Comparison {
   }
   if (problems.length) throw Error(`${basename(path)} cannot run. ${problems.join(' ')}`);
   return doc;
+}
+
+/**
+ * The facts that the page cannot find in the files or records, so the file must state them: who made the expected
+ * answers (about_inputs.labels_by), and where the words of each written correction come from (source). Each missing
+ * one in a plain sentence. method validate and method publish refuse a file with any; method run says them.
+ */
+export function comparisonGaps(doc: Comparison): string[] {
+  const out: string[] = [];
+  if (doc.expected && !doc.about_inputs?.labels_by) out.push('Say who made the expected answers, and how, in about_inputs.labels_by (for example "One researcher and two crowd workers; no lawyer"). The page shows it beside the right answers.');
+  const unsourced = (doc.treatment?.events ?? []).flatMap((e, i) => e.correction !== undefined && !e.source ? [i + 1] : []);
+  if (unsourced.length) out.push(`Say where the words of correction${unsourced.length === 1 ? '' : 's'} ${unsourced.join(', ')} come from in source (for example "her reply of 22 Oct, word for word" or "written by us").`);
+  return out;
 }
 
 /** The most questions that a comparison page asks. */
@@ -854,14 +868,15 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     arms: arms.map(arm => ({ id: arm.name, name: arm.label, ...(arm.plain ? { agent: arm.plain.agent, instructions: arm.plain.instructions } : arm.project ? { agent: arm.project.agent, instructions: arm.project.start_words } : { method_id: arm.id }) })),
     difference: doc.difference, ...(doc.other_differences?.length ? { other_differences: doc.other_differences } : {}),
     inputs: { checking: doc.inputs, ...(doc.teaching?.length ? { teaching: doc.teaching } : {}), ...(about?.description ? { description: about.description } : {}),
-      ...(about?.teaching_description ? { teaching_description: about.teaching_description } : {}), ...(about?.noun ? { noun: about.noun } : {}), details },
+      ...(about?.teaching_description ? { teaching_description: about.teaching_description } : {}), ...(about?.noun ? { noun: about.noun } : {}),
+      ...(about?.labels_by ? { labels_by: about.labels_by } : {}), details },
     main_measure: await measure(doc.measure),
     other_measures: [...await Promise.all((doc.other_measures ?? []).map(measure)),
       ...(corrections ? [{ name: 'Usage per correction', how: 'usage', higher_is_better: false, description: 'What each arm used to take one correction (its training run or chat, the Method runs that the chat started, and its fix or edit): tokens when every agent reports them, else minutes.' }] : [])],
     rule: doc.rule, runs_per_point: doc.runs, learners: doc.runs,
     ...(doc.treatment ? { treatment: { kind, items: kinds.length, checkpoints: [...doc.treatment.checkpoints].sort((a, b) => a - b),
       order: doc.treatment.seed !== undefined ? 'shuffled' : 'given', ...(doc.treatment.seed !== undefined ? { seed: doc.treatment.seed } : {}),
-      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name) : `New input: ${e.input.id}`), 4000), ...(e.source ? { source: short(e.source, 2000) } : {}) })) } } : {}),
+      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name, doc.treatment?.feedback_writers?.[e.feedback.name]?.code) : `New input: ${e.input.id}`), 4000), ...(e.source ? { source: short(e.source, 2000) } : {}) })) } } : {}),
     ...(doc.expected ? { expected_answers: true } : {}),
     judge: { agent: settings.judge.agent, model: settings.judge.model ?? `${settings.judge.agent === 'codex' ? 'Codex' : 'Claude Code'}'s default model` },
     assumptions: assumptionsOf(doc),
@@ -876,8 +891,11 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
   };
 }
 
-/** A feedback event in the treatment list: the words differ for each agent, so the list names the writer. */
-const feedbackWords = (writer: string) => `The feedback writer ${writer} reads the agent's own output and the hidden expected answer, and writes this correction.`;
+/**
+ * A feedback event in the treatment list, before any agent has received it: its words are written at run time from
+ * each agent's own output, so the list says who writes them. The page shows each agent's real words once received.
+ */
+const feedbackWords = (writer: string, code?: string) => `Not written yet: ${code ? `code (${basename(code)})` : `the judge ${writer}`} writes it from each agent's own output when the agent hands it in.`;
 
 /** A list in one order made from a seed (the same every time), or as it is without a seed. */
 export function shuffled<T>(list: T[], seed: number | undefined): T[] {
@@ -1013,6 +1031,9 @@ export const feedbackWriting = {
 export async function compileComparison(file: string, options: { strict?: boolean } = {}) {
   const path = authoringPath(file), root = dirname(path);
   const doc = readComparison(path);
+  const gaps = comparisonGaps(doc);
+  if (gaps.length && options.strict) throw Error(`${basename(path)} cannot be published. ${gaps.join(' ')}`);
+  if (gaps.length) process.stderr.write(`The comparison page will say that the file does not state this: ${gaps.join(' ')}\n`);
   if (doc.treatment?.events.some(event => event.model !== undefined)) throw Error('A treatment event that changes the model cannot run yet: that is not built yet. Corrections and new inputs run today.');
   const models = await armModels(doc, root);
   const id = ensureComparisonId(path, doc);
@@ -1120,7 +1141,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
   let shown: Awaited<ReturnType<typeof comparisonExhibits>> | null = null;
   try {
     shown = await comparisonExhibits(doc, root, arms.map(arm => ({ name: arm.name, label: arm.label, folders: arm.folders ?? {},
-      ...(arm.plain ? { plain: { agent: arm.plain.agent, instructions: arm.plain.instructions } } : arm.project ? { project: { message: arm.project.message, first_message: arm.project.first_message, start: arm.project.start } } : { file: join(arm.dir, arm.file) }) })));
+      ...(arm.plain ? { plain: { agent: arm.plain.agent, instructions: arm.plain.instructions } } : arm.project ? { project: { agent: arm.project.agent, message: arm.project.message, first_message: arm.project.first_message, start: arm.project.start } } : { file: join(arm.dir, arm.file) }) })));
   } catch (error) {
     if (options.strict) throw Error(`${basename(path)} cannot be published: Method could not make its exhibits. ${(error as Error).message}`);
     process.stderr.write(`The comparison page shows no exhibits: ${(error as Error).message}\n`);
@@ -1131,6 +1152,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
   const digest = sha({ ...spec, inputs: { ...spec.inputs, details: Object.fromEntries(Object.entries(spec.inputs.details).map(([key, d]) => [key, d.name])) } });
   writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
   const methodPath = join(folder, 'comparison.method');
+  const ran = readAccount(folder);
   let previousId: string | undefined;
   try { const old = JSON.parse(readFileSync(methodPath, 'utf8')).id; if (typeof old === 'string' && methodIdPattern.test(old)) previousId = old; } catch { /* first run */ }
   const account = await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec, { ...options, ...(previousId ? { methodId: previousId } : {}) });
@@ -1145,6 +1167,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
     rule: doc.rule, rule_sentence: ruleSentence(doc), learners: doc.runs,
     assumptions: assumptionsOf(doc), compare_root: root, web, judge, judge_method: judgeMethod, model: models.shared, names: doc.about_inputs?.names ?? {},
   };
+  await sendLiterals(doc, root, plan, shown?.exhibits ?? null, ran, account);
   const cellCount = arms.length * doc.inputs.length * Math.max(doc.runs, NOISE_LEARNERS) * ((plan.checkpoints?.length ?? 1) + 1);
   writeFileSync(join(folder, 'stage.mjs'), stageScript, { mode: 0o600 });
   // The answers on the comparison page: the approvals let the run go on, and the other answers are for the agent.
@@ -1154,6 +1177,32 @@ export async function compileComparison(file: string, options: { strict?: boolea
   const inputs = join(folder, 'inputs.json');
   writePrivateJson(inputs, { comparison: JSON.stringify(plan), marks: JSON.stringify(readMarks(folder)) });
   return { method: methodPath, inputs, folder, plan, spec, account, page };
+}
+
+/**
+ * The page's literal record (compare-literal.ts) for the versions that this save touches: the version that ran before
+ * (ran) gets it from the run's records on this computer, and the saved version from its records when it has run, else
+ * from the samples. A record that cannot be made prints one line; the comparison goes on.
+ */
+async function sendLiterals(doc: Comparison, root: string, plan: any, exhibits: Exhibits | null, ran: Account | null, saved: Account | null) {
+  if (!saved && !ran) return;
+  try {
+    const { comparisonLiteral, recordsOnDisk } = await import('./compare-literal.js');
+    const records = await recordsOnDisk(plan);
+    const hasRun = (account: Account) => account.stage !== 'draft' && (records.treated !== null || records.grades.length > 0);
+    if (ran && saved && ran.version_number !== saved.version_number && hasRun(ran)) await sendLiteral(ran, await comparisonLiteral(doc, root, plan, exhibits, records));
+    if (saved) await sendLiteral(saved, await comparisonLiteral(doc, root, plan, exhibits, hasRun(saved) ? records : null));
+  } catch (error) { process.stderr.write(`The comparison page shows no literal record: ${(error as Error).message}\n`); }
+}
+/** The literal record of a run stage (the trial, the decision), from the stage's records. */
+async function sendRunLiteral(plan: any, records: { treated: ArmTreatment[] | null; runs: any[]; grades: any[] }) {
+  const account = readAccount(plan.folder);
+  if (!account) return;
+  try {
+    const { comparisonLiteral } = await import('./compare-literal.js');
+    const doc = readComparison(plan.file);
+    await sendLiteral(account, await comparisonLiteral(doc, dirname(plan.file), plan, null, records));
+  } catch (error) { process.stderr.write(`The comparison page shows no literal record: ${(error as Error).message}\n`); }
 }
 
 /**
@@ -1638,7 +1687,7 @@ const readRecords = (file: string) => {
   return records;
 };
 /** The folder of one learner's treatment: its own copy of the arm, its own cache and its record. */
-const learnerFolder = (plan: Plan, arm: any, learner: number) => join(plan.folder, 'arms', arm.name, `treatment-${(plan.redesign ? sha({ arm: arm.hash, feedback: plan.feedback_hash ?? null, redesign: plan.redesign, user_files: plan.user_files }) : plan.feedback_hash ? sha({ arm: arm.hash, feedback: plan.feedback_hash }) : arm.hash).slice(0, 12)}`, `learner-${learner + 1}`);
+export const learnerFolder = (plan: Plan, arm: any, learner: number) => join(plan.folder, 'arms', arm.name, `treatment-${(plan.redesign ? sha({ arm: arm.hash, feedback: plan.feedback_hash ?? null, redesign: plan.redesign, user_files: plan.user_files }) : plan.feedback_hash ? sha({ arm: arm.hash, feedback: plan.feedback_hash }) : arm.hash).slice(0, 12)}`, `learner-${learner + 1}`);
 
 /**
  * Give each learner of each arm its events in order, up to its limit (limits[learner]), one at a time, and freeze a
@@ -2031,7 +2080,7 @@ const runKey = (c: { arm: string; hash: string; input: { hash: string; deliverab
 /** The version of the judge: a new judge grades every run again. */
 const JUDGE_VERSION = 'session-judge/1';
 /** The grader: every measure, as the comparison defines it, and the judge. A changed measure is a new grader, and every run is graded again. */
-const graderVersion = (plan: Plan) => sha({ judge: JUDGE_VERSION, model: plan.judge?.model ?? null, ...(plan.judge?.agent === 'codex' ? { agent: 'codex' } : {}), measures: plan.measures.map((m: any) => ({ name: m.name, code: m.code?.hash ?? null, rubric: m.rubric ?? null, checklist: m.checklist ?? null, covered: m.covered ?? null, person: m.person ?? null })) }).slice(0, 16);
+export const graderVersion = (plan: Plan) => sha({ judge: JUDGE_VERSION, model: plan.judge?.model ?? null, ...(plan.judge?.agent === 'codex' ? { agent: 'codex' } : {}), measures: plan.measures.map((m: any) => ({ name: m.name, code: m.code?.hash ?? null, rubric: m.rubric ?? null, checklist: m.checklist ?? null, covered: m.covered ?? null, person: m.person ?? null })) }).slice(0, 16);
 /**
  * The keys of the grade cells of these runs, by run key. A measure may read other runs of the same arm (a regression
  * measure reads the earlier checkpoints), so a grade key holds the hash of each run of that arm and learner up to and
@@ -2471,6 +2520,7 @@ async function trialCheck(plan: Plan, runs: any[], grades: any[], treated: ArmTr
     ...(noise.spread !== null ? { noise: { spread: noise.spread, margin: noise.margin, start: noise.start } } : {}),
     ...(easy ? { too_easy: { start: easy.start, margin: easy.margin, passes: easy.passes } } : {}) },
     cost_estimate: { ...estimate.account, ...(usage ? { usage: { unit: usage.unit, values: Object.fromEntries(Object.entries(usage.values).map(([arm, v]) => [arm, v.value])) } } : {}) } });
+  await sendRunLiteral(plan, { treated, runs, grades });
   if (short.length) throw Error(`The trial stopped: an arm did not receive everything.\n${short.join('\n')}\nFix the cause and run the comparison again; everything that was received is kept.`);
   const noiseText = noise.spread === null ? `Noise at the start: not measured (${plan.measures.find((m: any) => m.main).person !== undefined ? 'a person marks the main measure after the full run' : 'the trial runs have no number on the main measure'}).`
     : `Noise at the start: two learners of the same arm differ by up to ${fixed(noise.spread)} on ${noise.measure} (${Object.entries(noise.by_arm).map(([arm, v]) => `${labelOf(plan, arm)} ${v === null ? 'not measured' : fixed(v)}`).join(', ')}). The decision checks the spread between learners at the point that decides.`;
@@ -2956,6 +3006,7 @@ export async function compareStage(stage: string, bindings: any): Promise<Record
     const minutes = Math.round(runs.reduce((sum, r) => sum + (r.duration_ms ?? 0), 0) / 60_000);
     const usd = runs.length && runs.every(r => typeof r.cost_usd === 'number') ? runs.reduce((sum, r) => sum + r.cost_usd, 0) : null;
     await sendStage(plan.folder, { stage: 'done', decision: result.decision, received: accountReceived(result.received), cost_estimate: { minutes, runs: runs.length, usd } });
+    await sendRunLiteral(plan, { treated, runs, grades });
     return { answer: result.text, ...reported };
   }
   throw Error(`Unknown comparison stage ${stage}.`);

@@ -25,31 +25,32 @@ about_inputs:
   description: Three new tickets that the corrections never saw.
   teaching_description: Four past tickets that the support lead corrected.
   names: {tickets/t-201.json: Cracked lamp, tickets/t-202.json: Parcel not moving, tickets/t-203.json: Late return}
+  labels_by: The support lead wrote each new ticket's checklist from the replies she sends; nobody else checked them.
 deliverable: work/reply.md
 treatment:
   seed: 7
   checkpoints: [0, 5, 10, 15, 20]
   events:
-    - {input: teach/t-101.json, correction: "It needs to ask for one photo of the damage first, because we approve a damaged-item refund only with a photo."}
-    - {input: teach/t-101.json, correction: "It needs to say the money goes back to the card that paid, because customers ask where the refund goes."}
-    - {input: teach/t-102.json, correction: "It needs to say that 7 days with no movement counts as lost, because that is our rule and it ends the waiting."}
-    - {input: teach/t-102.json, correction: "It needs to leave out the carrier's phone number, because we handle the carrier ourselves."}
-    - {input: teach/t-101.json, correction: "It needs to leave out store credit, because we offer it only when the customer asks for it."}
-    - {input: teach/t-102.json, correction: "It needs to say we send a replacement now, because a lost parcel is replaced without more waiting."}
-    - {input: teach/t-104.json, correction: "It needs to check the date against the 30-day limit, because refunds stop 30 days after delivery."}
-    - {input: teach/t-103.json, correction: "It needs to say the address can change only until the label is printed, because after that we cannot stop it."}
-    - {input: teach/t-101.json, correction: "It needs to call the item what the customer called it, because our product codes mean nothing to them."}
-    - {input: teach/t-102.json, correction: "It needs to apologize once, in the first sentence, because repeated apologies read as a script."}
-    - {input: teach/t-104.json, correction: "It needs to promise only what the articles allow, because an exception we cannot keep makes a second complaint."}
-    - {input: teach/t-103.json, correction: "It needs to ask for the new address in full, because a partial address delays the change."}
-    - {input: teach/t-104.json, correction: "It needs to stay under 120 words, because customers read replies on their phones."}
-    - {input: teach/t-104.json, correction: "It needs to give the refund time as 5 business days after approval, because that is when the bank shows it."}
-    - {input: teach/t-102.json, correction: "It needs to stop asking the customer to wait longer, because 7 days is already the limit."}
-    - {input: teach/t-103.json, correction: "It needs to say express shipping takes 1 to 2 business days, because the customer asked how fast it can be."}
-    - {input: teach/t-104.json, correction: "It needs to name the order number the customer gave, because it shows we found the right order."}
-    - {input: teach/t-102.json, correction: "It needs to give the replacement's shipping time as 3 to 5 business days, because customers plan around it."}
-    - {input: teach/t-104.json, correction: "It needs to say no when the articles say no, because a vague maybe makes the customer write again."}
-    - {input: teach/t-101.json, correction: "It needs to end with one clear next step, because a reply without one gets a follow-up question."}
+    - {input: teach/t-101.json, correction: "It needs to ask for one photo of the damage first, because we approve a damaged-item refund only with a photo.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-101.json, correction: "It needs to say the money goes back to the card that paid, because customers ask where the refund goes.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-102.json, correction: "It needs to say that 7 days with no movement counts as lost, because that is our rule and it ends the waiting.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-102.json, correction: "It needs to leave out the carrier's phone number, because we handle the carrier ourselves.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-101.json, correction: "It needs to leave out store credit, because we offer it only when the customer asks for it.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-102.json, correction: "It needs to say we send a replacement now, because a lost parcel is replaced without more waiting.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-104.json, correction: "It needs to check the date against the 30-day limit, because refunds stop 30 days after delivery.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-103.json, correction: "It needs to say the address can change only until the label is printed, because after that we cannot stop it.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-101.json, correction: "It needs to call the item what the customer called it, because our product codes mean nothing to them.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-102.json, correction: "It needs to apologize once, in the first sentence, because repeated apologies read as a script.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-104.json, correction: "It needs to promise only what the articles allow, because an exception we cannot keep makes a second complaint.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-103.json, correction: "It needs to ask for the new address in full, because a partial address delays the change.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-104.json, correction: "It needs to stay under 120 words, because customers read replies on their phones.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-104.json, correction: "It needs to give the refund time as 5 business days after approval, because that is when the bank shows it.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-102.json, correction: "It needs to stop asking the customer to wait longer, because 7 days is already the limit.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-103.json, correction: "It needs to say express shipping takes 1 to 2 business days, because the customer asked how fast it can be.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-104.json, correction: "It needs to name the order number the customer gave, because it shows we found the right order.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-102.json, correction: "It needs to give the replacement's shipping time as 3 to 5 business days, because customers plan around it.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-104.json, correction: "It needs to say no when the articles say no, because a vague maybe makes the customer write again.", source: "The support lead's weekly review, word for word"}
+    - {input: teach/t-101.json, correction: "It needs to end with one clear next step, because a reply without one gets a follow-up question.", source: "The support lead's weekly review, word for word"}
 expected:
   tickets/t-201.json: expected/t-201.json
   tickets/t-202.json: expected/t-202.json
