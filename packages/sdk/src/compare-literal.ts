@@ -36,7 +36,11 @@ export type Literal = {
   usage: Record<string, { tokens: number | null; with_tokens: number; events: number }>;
   /** The parts of the page that do not apply to this comparison, each with why, in one sentence. */
   not_shown: string[];
+  /** The model review: claims of the file that the facts above contradict (reviewLiteral), or null when it has not run. */
+  review: Review | null;
 };
+/** One model review of a record: each claim of the file that a fact of the record contradicts, both quoted word for word. */
+export type Review = { model: string; findings: Array<{ claim: string; fact: string; why: string }> };
 /** The records of a run: what each arm received (treated), each run cell, and each grade cell. */
 export type RunRecords = { treated: any[] | null; runs: any[]; grades: any[] };
 
@@ -46,8 +50,6 @@ const one = (text: string, max = 300) => { const t = text.replace(/\s+/g, ' ').t
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 const list = (words: string[]) => words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
-/** A text that continues a sentence: its first letter small, unless its first word is a name (ContractNLI, Ryan). */
-const lower = (text: string) => /^[A-Z][a-z]*[A-Z]|^[A-Z][a-z]+(?:'s)?\s+[A-Z]/.test(text) || /^(?!(?:The|A|An|One|Two|Three|Each|Every|This|That|These|Those|It|Our|We|Its|Their|Some|All|No)\b)[A-Z][a-z]+\b/.test(text) && !/^[A-Z][a-z]+\s/.test(text) ? text : text.charAt(0).toLowerCase() + text.slice(1);
 const fixed2 = (n: number) => n.toFixed(2);
 const json = (text: string) => { try { return JSON.parse(text); } catch { return null; } };
 
@@ -283,7 +285,7 @@ export async function comparisonLiteral(doc: any, root: string, plan: any, exhib
   const event = oneEvent(ctx, perItem);
   const steps = await stepsOf(ctx, perItem, counted, event);
   const concerns = await concernsOf(ctx, perItem, counted, baselines, usage, event);
-  return { from: ctx.records ? 'run' : 'design', paragraph: paragraphOf(ctx), steps, one_event: event?.view ?? null, concerns, per_item: perItem, counted, baselines, usage, not_shown: notShown(ctx, perItem, baselines, event) };
+  return { from: ctx.records ? 'run' : 'design', paragraph: paragraphOf(ctx), steps, one_event: event?.view ?? null, concerns, per_item: perItem, counted, baselines, usage, not_shown: notShown(ctx, perItem, baselines, event), review: null };
 }
 
 /** Why a part of the page is empty, in plain words: the run has not happened, or the comparison's files have another form. */
@@ -665,7 +667,7 @@ async function stepsOf(ctx: Context, perItem: PerItem | null, counted: Literal['
       if (scored.length && scored.every(i => again.some(o => o.measured === i))) lookups.add(m.name);
     }
     const measures = [doc.measure, ...(doc.other_measures ?? [])];
-    const lines = measures.map((m: any, i: number) => `(${String.fromCharCode(97 + i)}) ${m.name}${i === 0 ? ' (main)' : ''}${lookups.has(m.name) ? ', a lookup check only' : ''}: ${m.description ? one(m.description.split(/(?<=\.)\s/)[0]!, 260).replace(/\.$/, '') : 'no description'}; ${m.code ? m.code : m.rubric ? 'a judge with a rubric' : m.checklist ? 'a judge with each input\'s checklist' : 'a person'}.`);
+    const lines = measures.map((m: any, i: number) => `(${String.fromCharCode(97 + i)}) ${m.name}${i === 0 ? ' (main)' : ''}${lookups.has(m.name) ? ', a lookup check only' : ''}: ${m.description ? one(m.description.split(/(?<=\.)\s/)[0]!, 260).replace(/\.$/, '') : 'no description'}; ${m.code ? m.code : m.rubric ? 'a judge with a rubric' : m.checklist ? 'a judge with each input\'s checklist' : 'a person'}${m.checklist || m.compares_with === 'labels' ? '; it compares each answer with the right answers' : m.compares_with === 'nothing' ? '; it reads the output only' : ''}.`);
     if (corrections) lines.push(`(${String.fromCharCode(97 + measures.length)}) usage per correction, both arms; Method counts it.`);
     const artifacts: Artifact[] = [];
     if (main.code) artifacts.push(...coreCode(main.code.path));
@@ -874,30 +876,35 @@ async function concernsOf(ctx: Context, perItem: PerItem | null, counted: Litera
   const add = (kind: string, text: string, evidence: Artifact[] = []) => out.push({ kind, text, evidence });
   const teaching = teachingIds(ctx);
 
-  // Claims of the file that the files and records can check.
-  const texts0 = inputTexts(ctx), again0 = overlaps(ctx, texts0);
-  const description = doc.about_inputs?.description as string | undefined;
-  // A description that says some measured inputs are asked again states the overlap itself.
-  if (description && again0.length && /\b(never|no correction|not seen|unseen|held[- ]out|new)\b/i.test(description) && !/\b(again|re-?asked|repeated|lookup)\b/i.test(description))
-    add('claim', `The file says the measured ${ctx.nouns} are: “${one(description, 300)}” But ${plural(again0.length, `measured ${ctx.noun}`, `measured ${ctx.nouns}`)} ${again0.length === 1 ? 'has' : 'have'} the same text as a teaching ${ctx.noun}: ${list(again0.slice(0, 4).map(o => ctx.name(o.measured)))}${again0.length > 4 ? ' and more' : ''}.`);
-  const writer0 = plan.events.find((e: any) => e.feedback)?.feedback?.name;
-  const code0 = writer0 ? doc.treatment?.feedback_writers?.[writer0]?.code : undefined;
-  const sources: string[] = [...new Set<string>((doc.treatment?.events ?? []).filter((e: any) => e.feedback && e.source).map((e: any) => e.source as string))];
-  if (code0 && sources.length && !sources.some((text: string) => /\b(code|script|program)\b/i.test(text)))
-    add('claim', `The file says where the corrections come from: “${one(sources[0]!, 300)}” But code (${basename(code0)}) writes each one.`);
-  const by0 = doc.about_inputs?.labels_by as string | undefined;
-  if (by0 && doc.expected) {
-    const named = (doc.measure.name as string).toLowerCase().match(/[a-z]{5,}/g) ?? [];
-    const roles = named.filter(word => /(ers|ists|ants|ors|ees)$/.test(word) && !by0.toLowerCase().includes(word.replace(/s$/, '')));
-    if (roles.length) add('claim', `The main measure is named “${doc.measure.name}”, but the file says the right answers were made by ${lower(by0.replace(/\.$/, ''))}.`);
-  }
-  // Who made the labels.
+  // Sources that the treatment contradicts: a feedback event's source names another writer than the one that writes it.
+  const writers = doc.treatment?.feedback_writers ?? {};
+  const mismatches = new Map<string, { said: string; writer: string; real: string; events: number[] }>();
+  (doc.treatment?.events ?? []).forEach((e: any, i: number) => {
+    const writer = e.feedback ? writers[e.feedback] : undefined;
+    if (!writer || !e.source) return;
+    const agrees = writer.code ? e.source.kind === 'code' && resolve(root, e.source.file) === resolve(root, writer.code)
+      : e.source.kind === 'model' && e.source.prompt === writer.judge;
+    if (agrees) return;
+    const said = c.sourceWords(e.source), real = writer.code ? `code (${writer.code})` : `a model judge with the instruction “${one(writer.judge, 300)}”`;
+    const found = mismatches.get(`${e.feedback}\n${said}`) ?? { said, writer: e.feedback, real, events: [] as number[] };
+    found.events.push(i + 1);
+    mismatches.set(`${e.feedback}\n${said}`, found);
+  });
+  for (const m of mismatches.values())
+    add('claim', `The file says who writes the words of ${m.events.length === 1 ? 'event' : 'events'} ${list(m.events.map(String))}: “${one(m.said, 300)}” But the feedback writer ${m.writer} writes them, and it is ${m.real}.`);
+  // Who made the labels, and whether the main measure compares with them, as the file states both.
   if (doc.expected) {
     const by = doc.about_inputs?.labels_by as string | undefined;
-    add('labels_by', by ? `The right answers were made by ${lower(by.replace(/\.$/, ''))}. The agents are taught and scored against them.` : 'The file does not say who made the right answers.');
+    const main = doc.measure, compares = main.checklist ? 'labels' : main.compares_with;
+    const parts = [by ? `Who made the right answers, in the file's words: “${one(by, 1000)}”` : 'The file does not say who made the right answers.'];
+    if (compares === 'labels') parts.push(`The main measure, “${main.name}”, compares each answer with them.`);
+    else if (compares === 'nothing') parts.push(`The main measure, “${main.name}”, reads the output only, not them.`);
+    else parts.push(`The file does not say whether the main measure, “${main.name}”, compares with them.`);
+    if (Object.keys(writers).length) parts.push('The feedback writers read them to write the corrections.');
+    add('labels_by', parts.join(' '));
   }
   // Who writes the corrections.
-  const writerName = plan.events.find((e: any) => e.feedback)?.feedback?.name, writer = writerName ? doc.treatment?.feedback_writers?.[writerName] : undefined;
+  const writerName = plan.events.find((e: any) => e.feedback)?.feedback?.name, writer = writerName ? writers[writerName] : undefined;
   const labels = teachingLabels(ctx);
   if (writer?.code) {
     let silent = 0, lines = 0;
@@ -997,7 +1004,7 @@ async function concernsOf(ctx: Context, perItem: PerItem | null, counted: Litera
   const strongest = baselines[0];
   if (strongest && start.length) {
     const low = Math.min(...start.map(s => s.right / s.of));
-    if (low - strongest.value <= 0.15) add('little_room', `A shortcut that reads no ${ctx.noun} already scores ${fixed2(strongest.value)} on the new ${ctx.nouns} (${lower(strongest.name)}); the arms start at ${list(start.map(s => fixed2(s.right / s.of)))}.`);
+    if (low - strongest.value <= 0.15) add('little_room', `A shortcut that reads no ${ctx.noun} already scores ${fixed2(strongest.value)} on the new ${ctx.nouns}; the arms start at ${list(start.map(s => fixed2(s.right / s.of)))}. The shortcut: ${strongest.name}.`);
   }
   // Restarts.
   const again2 = ctx.records?.treated ? await reruns(plan) : {};
@@ -1019,4 +1026,54 @@ async function concernsOf(ctx: Context, perItem: PerItem | null, counted: Litera
 export async function loadLiteralModules() {
   compareModule ??= await import('./compare.js');
   authoringModule ??= await import('./authoring.js');
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The model review
+
+/** The hosted-model client (managedModels in production, a fake in tests). */
+export type ReviewModels = { model(): Promise<string>; request(body: Record<string, any>, signal: AbortSignal): Promise<any> };
+/** Change it when the prompt or the facts change, so that a cached review is made again. */
+const REVIEW_VERSION = 1;
+const REVIEW_PROMPT = `You review a comparison file before people read its result. You get the file's text and the facts that Method computed from the file, its other files and its run records.
+List each claim of the file that a fact contradicts. A claim is any words of the file: the question, a measure's name or description, a description of the inputs, a source, a note or an assumption. Contradicts means that the claim and the fact cannot both be true. Examples: a measure named for one kind of person ("replies the doctors approve") while the facts say that other people made the answers it compares with; inputs called new while the facts say that some of them are teaching inputs again; words said to be a person's while the facts say that code writes them.
+Do not list a claim that the facts only fail to support, a point of style, or a weakness that the facts already state openly.
+For each one: claim, the words of the file, copied exactly and as short as possible while they still show the contradiction; fact, the words of the facts, copied exactly in the same way; why, one plain sentence.
+Return {"findings": []} when no fact contradicts a claim.`;
+const REVIEW_SCHEMA = { type: 'object', additionalProperties: false, required: ['findings'], properties: { findings: { type: 'array', items: {
+  type: 'object', additionalProperties: false, required: ['claim', 'fact', 'why'], properties: { claim: { type: 'string' }, fact: { type: 'string' }, why: { type: 'string' } } } } } };
+
+/** The facts of a record that the review reads: the paragraph, each part's sentence, each finding and each part not shown. */
+export function literalFacts(literal: Literal): string {
+  return [literal.paragraph, ...literal.steps.map(step => `${step.n}. ${step.title}: ${step.sentence}`), ...literal.concerns.map(c => `- ${c.text}`), ...literal.not_shown.map(text => `- ${text}`)].join('\n');
+}
+const quoteFree = (text: string) => squash(text).replace(/^[\s"'“”]+|[\s"'“”]+$/g, '').trim();
+/**
+ * One model review of a record: one request to the hosted model with the file's text and the record's facts, cached
+ * by their hash. A finding is kept only when its claim is in the file and its fact is in the facts, word for word.
+ */
+export async function reviewLiteral(literal: Literal, fileText: string, models: ReviewModels, cacheDir: string): Promise<Review> {
+  const { createHash } = await import('node:crypto');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const facts = literalFacts(literal);
+  const key = createHash('sha256').update(JSON.stringify([REVIEW_VERSION, fileText, facts])).digest('hex');
+  const cached = join(cacheDir, `${key}.json`);
+  if (existsSync(cached)) { const saved = json(readFileSync(cached, 'utf8')); if (saved) return saved as Review; }
+  const model = await models.model();
+  const data = await models.request({
+    model, max_tokens: 8000, reasoning: { effort: 'low' }, provider: { require_parameters: true },
+    messages: [{ role: 'system', content: REVIEW_PROMPT }, { role: 'user', content: `The file:\n\n${fileText}\n\nThe facts:\n\n${facts}` }],
+    response_format: { type: 'json_schema', json_schema: { name: 'comparison_review', strict: true, schema: REVIEW_SCHEMA } },
+  }, AbortSignal.timeout(180_000));
+  const content = data?.choices?.[0]?.message?.content;
+  const value = typeof content === 'string' ? json(content.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')) : null;
+  if (!value || !Array.isArray(value.findings)) throw Error(`the hosted model returned no review (finish reason: ${data?.choices?.[0]?.finish_reason ?? 'unknown'})`);
+  const file = squash(fileText), known = squash(facts);
+  const findings = value.findings.filter((f: any) => typeof f?.claim === 'string' && typeof f?.fact === 'string' && quoteFree(f.claim) && quoteFree(f.fact)
+    && file.includes(quoteFree(f.claim)) && known.includes(quoteFree(f.fact)))
+    .map((f: any) => ({ claim: quoteFree(f.claim), fact: quoteFree(f.fact), why: typeof f.why === 'string' ? one(f.why, 600) : '' }));
+  const review: Review = { model: typeof data?.model === 'string' ? data.model : model, findings };
+  mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+  writeFileSync(cached, JSON.stringify(review), { mode: 0o600 });
+  return review;
 }

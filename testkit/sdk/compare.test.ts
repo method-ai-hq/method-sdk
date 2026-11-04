@@ -823,10 +823,14 @@ it('method publish NAME.compare saves the comparison as a draft with its inputs 
   vi.spyOn(MethodClient.prototype, 'token').mockReturnValue('method_x');
   const sent: Array<{ path: string; verb: string; body: any }> = [], uploaded: string[] = [];
   vi.spyOn(MethodClient.prototype, 'request').mockImplementation(async (path: string, verb?: string, body?: any) => {
+    // The model review: one request to the account's hosted model.
+    if (path === '/api/cli/models/default') return { provider: 'openrouter', model: 'test/model' } as any;
+    if (path === '/api/cli/models/respond') { reviews.push(body); return { model: 'test/model', choices: [{ message: { content: '{"findings": []}' } }] } as any; }
     sent.push({ path, verb: verb ?? 'GET', body });
     if (path.endsWith('/answers')) return { url: `https://example.test/comparisons/${id()}`, open: 3, approved: { trial: false, full_run: false }, answers: [] } as any;
     return { comparison_id: id(), version_number: 1, stage: 'draft', url: `https://example.test/comparisons/${id()}?version=1` } as any;
   });
+  const reviews: any[] = [];
   vi.spyOn(MethodClient.prototype, 'transfer').mockImplementation(async (path: string) => { uploaded.push(path); return {} as any; });
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   await methodMain(['publish', file]);
@@ -837,6 +841,9 @@ it('method publish NAME.compare saves the comparison as a draft with its inputs 
   // The draft's literal record (what it does, literally, from its files) goes with it.
   expect(sent.map(s => `${s.verb} ${s.path}`)).toEqual([`PUT /api/cli/comparisons/${id()}`, `POST /api/cli/comparisons/${id()}/versions/1/literal`, `GET /api/cli/comparisons/${id()}/versions/1/answers`]);
   expect(sent[1]!.body.from).toBe('design');
+  expect(sent[1]!.body.review).toEqual({ model: 'test/model', findings: [] });
+  expect(reviews).toHaveLength(1);
+  expect(reviews[0].request.messages[1].content).toContain(readFileSync(file, 'utf8'));
   // The same spec that method run saves, with each input's content uploaded.
   expect(sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(uploaded).toContain(`/api/cli/result-files/${sent[0]!.body.spec.inputs.details['inputs/one.json'].file.sha256}`);
@@ -848,7 +855,7 @@ it('method publish NAME.compare saves the comparison as a draft with its inputs 
 });
 
 it('prints the answers on the comparison page for the agent, holds the run while an answer changes the file, and takes the approvals from the page', async () => {
-  const { root, file } = fixture({ treatment: { events: [{ correction: 'It needs to be bigger because small is wrong.', input: 'inputs/three.json', source: 'Written by us: a rule kind she called realistic.' }], checkpoints: [0, 1] }, rule: { margin: 0.1, min_runs: 1, at: 1 } });
+  const { root, file } = fixture({ treatment: { events: [{ correction: 'It needs to be bigger because small is wrong.', input: 'inputs/three.json', source: { kind: 'person', who: 'us', expert: false, about: 'A rule kind she called realistic.' } }], checkpoints: [0, 1] }, rule: { margin: 0.1, min_runs: 1, at: 1 } });
   const id = () => JSON.parse(readFileSync(file, 'utf8')).id as string;
   vi.spyOn(MethodClient.prototype, 'token').mockReturnValue('method_x');
   vi.spyOn(MethodClient.prototype, 'transfer').mockResolvedValue({} as any);
@@ -867,7 +874,7 @@ it('prints the answers on the comparison page for the agent, holds the run while
   });
   // The page shows where the correction's words come from.
   await expect(comparisonRunArgs(['run', file])).rejects.toThrow(`The comparison page has answers that change the file (https://example.test/comparisons/x):\n- ${no.to_do}\n- ${said.to_do}\nChange the file, then publish again: method publish numbers.compare. The run starts when no answer waits for a change.`);
-  expect(specs[0].treatment.list).toEqual([{ input: 'inputs/three.json', text: 'It needs to be bigger because small is wrong.', source: 'Written by us: a rule kind she called realistic.' }]);
+  expect(specs[0].treatment.list).toEqual([{ input: 'inputs/three.json', text: 'It needs to be bigger because small is wrong.', source: 'Written by us, not by the expert. A rule kind she called realistic.', expert_words: false }]);
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   await methodMain(['publish', file]);
   const printed = JSON.parse(stdout.mock.calls.map(c => String(c[0])).join(''));

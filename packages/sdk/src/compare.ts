@@ -24,7 +24,8 @@ import { packageFileNames } from './method-files.js';
 import { removeTree, writePrivateJson } from './files.js';
 import { configRoot } from './computer-settings.js';
 import { ownKeyForRoom } from './own-model-key.js';
-import { linkCells, readAccount, readAnswers, saveComparison, sendLiteral, sendPlan, sendStage, uploadSignedIn, uploadText, type Account, type PageAnswers, type PlannedCell } from './compare-account.js';
+import type { Literal } from './compare-literal.js';
+import { clientOf, linkCells, readAccount, readAnswers, saveComparison, sendLiteral, sendPlan, sendStage, uploadSignedIn, uploadText, type Account, type PageAnswers, type PlannedCell } from './compare-account.js';
 import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS, paragraphs, textPlaces, writtenFile } from './learner.js';
@@ -50,6 +51,7 @@ const measureSchema = z.strictObject({
   checklist: z.literal('expected').optional().describe('expected: each input\'s checklist is its expected answer, a list of items. Each item is a criterion for that input only. The judge marks each one met, partly or not met.'),
   covered: z.boolean().optional().describe('With checklist: expected, true scores only the items that a correction given so far covers (an item names its events in covered_by).'),
   person: text.optional().describe('A question that a person answers with a number for each output, for example 1 for "would send" and 0 for "would not send".'),
+  compares_with: z.enum(['labels', 'nothing']).optional().describe('What the measure compares each output with. labels: the input\'s expected answer (expected), made by about_inputs.labels_by; the page states that measure and labels_by side by side. nothing: it reads the output only. Give it for the main measure whenever the file has expected answers. A checklist measure compares with labels.'),
 }).describe('One number per run. Higher is better. Give exactly one of code, rubric, checklist or person.');
 const armSchema = z.union([
   text.describe('A Method file (.method).'),
@@ -67,12 +69,44 @@ const armSchema = z.union([
     effort: text.optional().describe('The reasoning effort of every chat, the same for every project arm unless the model is tested.'),
   }),
 ]);
+/**
+ * Who or what writes a correction's words, as structure that the page checks exactly: a person (the expert, or someone
+ * who writes for the expert, such as us), code (a file), or a model (its instruction).
+ */
+export const sourceSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('person'),
+    who: text.describe('The person, such as "Gráinne, the support lead" or "us, the comparison\'s writers".'),
+    expert: z.boolean().describe('true: the expert\'s own words, word for word, such as her reply of 22 Oct. false: words that another person wrote for the expert, such as a rule that we wrote in her style; the page asks the expert whether they would give it.'),
+    about: text.optional().describe('What these words are, in one sentence, as the page shows it.'),
+  }),
+  z.strictObject({
+    kind: z.literal('code'),
+    file: text.describe('The script that writes the words, beside this file. For a feedback event, the feedback writer\'s code.'),
+    who: text.optional().describe('Who wrote the code and its words, such as "us, the comparison\'s writers".'),
+    about: text.optional().describe('What the code writes, in one sentence, as the page shows it.'),
+  }),
+  z.strictObject({
+    kind: z.literal('model'),
+    prompt: text.describe('The instruction that the model gets. For a feedback event, the feedback writer\'s judge instruction, word for word.'),
+    who: text.optional().describe('Who wrote the instruction.'),
+    about: text.optional().describe('What the model writes, in one sentence, as the page shows it.'),
+  }),
+]).describe('Where a correction\'s words come from: {kind: person, who, expert}, {kind: code, file} or {kind: model, prompt}. When the words are not the expert\'s own (expert: false, code or a model), the page asks the expert whether they would give them.');
+export type Source = z.infer<typeof sourceSchema>;
+/** A source in plain words, as the page and the review read it. */
+export function sourceWords(source: Source): string {
+  const about = source.about ? ` ${source.about}` : '';
+  if (source.kind === 'person') return `Written by ${source.who}${source.expert ? ', the expert, in their own words' : ', not by the expert'}.${about}`;
+  if (source.kind === 'code') return `Written by code (${source.file})${source.who ? `, made by ${source.who}` : ''}.${about}`;
+  return `Written by a model from this instruction${source.who ? ` by ${source.who}` : ''}: “${source.prompt}”.${about}`;
+}
 const eventSchema = z.strictObject({
   correction: text.optional().describe('The words of a correction, as the expert would say them: "It needs to be X because Y". The arm runs the input, and gets this correction about that run.'),
   feedback: name.optional().describe('Instead of correction: the name of a feedback writer (feedback_writers). The arm runs the input; the writer reads that arm\'s own output and the input\'s hidden expected answer, and writes the correction that the arm gets, or finds nothing wrong (the arm is told the output was right).'),
   input: text.optional().describe('The input (case ID or file) that the arm runs for this event.'),
   model: text.optional().describe('A new model for the arm from this point on.'),
-  source: text.optional().describe('Where the correction\'s words come from, such as "her reply of 22 Oct, word for word" or "written by us: a rule kind she called realistic". When it says "written by us", the comparison page asks the expert whether they would give it. For a feedback event, say here what the writer\'s words are when the agent is wrong.'),
+  source: sourceSchema.optional().describe('Who or what writes the correction\'s words. Needed with correction; for a feedback event the page checks it against the feedback writer.'),
 });
 const feedbackWriterSchema = z.strictObject({
   code: text.optional().describe('A script (.mjs, .js or .py) that reads {input, values, output, expected} as JSON on stdin (output: the text of the file that the arm handed in, or null) and prints {"correction": TEXT or null, "checked": "all" or the part it checked}. correction is null when nothing that it checked is wrong. A null correction with checked "all" tells the arm its output was right; with a part, the arm gets no feedback.'),
@@ -318,6 +352,7 @@ export function readComparison(file: string): Comparison {
     const template = readFileSync(resolve(root, doc.message), 'utf8');
     for (const [id, value] of values) { try { fillMessage(template, value, `The message ${doc.message}`); } catch (error) { problems.push(`For the input ${id}: ${(error as Error).message}`); } }
   }
+  for (const m of measures) if (m.checklist && m.compares_with === 'nothing') problems.push(`The measure ${m.name} is a checklist from the expected answers, so it compares with labels, not nothing.`);
   // A checklist measure: each measured input's expected answer is its checklist.
   const events = doc.treatment?.events ?? [];
   for (const m of measures.filter(m => m.checklist)) {
@@ -352,6 +387,8 @@ export function readComparison(file: string): Comparison {
         if (!writers[event.feedback]) problems.push(`Event ${i + 1} names the feedback writer ${event.feedback}, which is not one of treatment.feedback_writers${Object.keys(writers).length ? ` (${Object.keys(writers).join(', ')})` : ''}.`);
         if (event.input !== undefined && !doc.expected?.[event.input]) problems.push(`Event ${i + 1}: the feedback writer reads the hidden expected answer of ${event.input}, and it has none. Add expected: {${event.input}: FILE}.`);
       }
+      if (event.source?.kind === 'code' && !existsSync(resolve(root, event.source.file))) problems.push(`Event ${i + 1}: its source names the code ${event.source.file}, which is not there.`);
+      if (event.source && event.correction === undefined && event.feedback === undefined) problems.push(`Event ${i + 1} has a source and no correction or feedback writer whose words it names.`);
       if (event.input !== undefined) {
         if (teaching.length && !teaching.includes(event.input)) problems.push(`Event ${i + 1} uses ${event.input}, which is not a teaching input.`);
         else if (!teaching.length) {
@@ -386,14 +423,16 @@ export function readComparison(file: string): Comparison {
 
 /**
  * The facts that the page cannot find in the files or records, so the file must state them: who made the expected
- * answers (about_inputs.labels_by), and where the words of each written correction come from (source). Each missing
+ * answers (about_inputs.labels_by), what the main measure compares with (measure.compares_with), and who or what writes
+ * the words of each written correction (source). Each missing
  * one in a plain sentence. method validate and method publish refuse a file with any; method run says them.
  */
 export function comparisonGaps(doc: Comparison): string[] {
   const out: string[] = [];
   if (doc.expected && !doc.about_inputs?.labels_by) out.push('Say who made the expected answers, and how, in about_inputs.labels_by (for example "One researcher and two crowd workers; no lawyer"). The page shows it beside the right answers.');
+  if (doc.expected && !doc.measure.checklist && !doc.measure.compares_with) out.push('Say what the main measure compares each output with in measure.compares_with: labels (the expected answers, made by about_inputs.labels_by) or nothing (it reads the output only). The page states it beside who made the labels.');
   const unsourced = (doc.treatment?.events ?? []).flatMap((e, i) => e.correction !== undefined && !e.source ? [i + 1] : []);
-  if (unsourced.length) out.push(`Say where the words of correction${unsourced.length === 1 ? '' : 's'} ${unsourced.join(', ')} come from in source (for example "her reply of 22 Oct, word for word" or "written by us").`);
+  if (unsourced.length) out.push(`Say who or what writes the words of correction${unsourced.length === 1 ? '' : 's'} ${unsourced.join(', ')} in source: {kind: person, who, expert: true or false}, {kind: code, file} or {kind: model, prompt}.`);
   return out;
 }
 
@@ -846,7 +885,7 @@ function assumptionsOf(doc: Comparison) {
  * of the definition, each input's name and uploaded content, the checklists, who decided each value, and Method's rules.
  * upload: puts a text in the account and returns its reference (null when signed out).
  */
-async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain; project?: Project }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string }; source?: string }>,
+async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: string; label: string; id?: string; plain?: Plain; project?: Project }>, events: Array<{ input: { id: string }; text?: string; feedback?: { name: string }; source?: Source }>,
   checklists: Record<string, ChecklistItem[]>, settings: { model: ArmModel | null; judge: { agent: 'claude' | 'codex'; model: string | null }; device: boolean }, upload: (text: string) => Promise<{ sha256: string; bytes: number } | null>, exhibits: Exhibits | null = null) {
   const measure = async (m: Measure) => ({ name: m.name, how: m.code ? 'code' : m.rubric || m.checklist ? 'model' : 'person', ...(m.description ? { description: m.description } : {}),
     ...(m.rubric ? { rubric: m.rubric.map(line => `- ${line}`).join('\n') } : {}),
@@ -876,7 +915,8 @@ async function accountSpec(doc: Comparison, root: string, arms: Array<{ name: st
     rule: doc.rule, runs_per_point: doc.runs, learners: doc.runs,
     ...(doc.treatment ? { treatment: { kind, items: kinds.length, checkpoints: [...doc.treatment.checkpoints].sort((a, b) => a - b),
       order: doc.treatment.seed !== undefined ? 'shuffled' : 'given', ...(doc.treatment.seed !== undefined ? { seed: doc.treatment.seed } : {}),
-      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name, doc.treatment?.feedback_writers?.[e.feedback.name]?.code) : `New input: ${e.input.id}`), 4000), ...(e.source ? { source: short(e.source, 2000) } : {}) })) } } : {}),
+      list: events.map(e => ({ input: e.input.id, text: short(e.text ?? (e.feedback ? feedbackWords(e.feedback.name, doc.treatment?.feedback_writers?.[e.feedback.name]?.code) : `New input: ${e.input.id}`), 4000), ...(e.feedback ? { writer: e.feedback.name } : {}),
+        ...(e.source ? { source: short(sourceWords(e.source), 2000), expert_words: e.source.kind === 'person' && e.source.expert } : {}) })) } } : {}),
     ...(doc.expected ? { expected_answers: true } : {}),
     judge: { agent: settings.judge.agent, model: settings.judge.model ?? `${settings.judge.agent === 'codex' ? 'Codex' : 'Claude Code'}'s default model` },
     assumptions: assumptionsOf(doc),
@@ -1190,8 +1230,8 @@ async function sendLiterals(doc: Comparison, root: string, plan: any, exhibits: 
     const { comparisonLiteral, recordsOnDisk } = await import('./compare-literal.js');
     const records = await recordsOnDisk(plan);
     const hasRun = (account: Account) => account.stage !== 'draft' && (records.treated !== null || records.grades.length > 0);
-    if (ran && saved && ran.version_number !== saved.version_number && hasRun(ran)) await sendLiteral(ran, await comparisonLiteral(doc, root, plan, exhibits, records));
-    if (saved) await sendLiteral(saved, await comparisonLiteral(doc, root, plan, exhibits, hasRun(saved) ? records : null));
+    if (ran && saved && ran.version_number !== saved.version_number && hasRun(ran)) await sendLiteral(ran, await reviewed(await comparisonLiteral(doc, root, plan, exhibits, records), plan.file, ran));
+    if (saved) await sendLiteral(saved, await reviewed(await comparisonLiteral(doc, root, plan, exhibits, hasRun(saved) ? records : null), plan.file, saved));
   } catch (error) { process.stderr.write(`The comparison page shows no literal record: ${(error as Error).message}\n`); }
 }
 /** The literal record of a run stage (the trial, the decision), from the stage's records. */
@@ -1201,8 +1241,22 @@ async function sendRunLiteral(plan: any, records: { treated: ArmTreatment[] | nu
   try {
     const { comparisonLiteral } = await import('./compare-literal.js');
     const doc = readComparison(plan.file);
-    await sendLiteral(account, await comparisonLiteral(doc, dirname(plan.file), plan, null, records));
+    await sendLiteral(account, await reviewed(await comparisonLiteral(doc, dirname(plan.file), plan, null, records), plan.file, account));
   } catch (error) { process.stderr.write(`The comparison page shows no literal record: ${(error as Error).message}\n`); }
+}
+/**
+ * The record with its model review: one request to the account's hosted model for each record, cached by the file's
+ * text and the record's facts. When it cannot run, the record says why and the page shows the exact findings alone.
+ */
+async function reviewed(literal: Literal, file: string, account: Account): Promise<Literal> {
+  try {
+    const { reviewLiteral } = await import('./compare-literal.js');
+    const { managedModels } = await import('./hosted-models.js');
+    const { methodCache } = await import('./prepare.js');
+    const client = clientOf(account);
+    if (!client.token()) throw Error('this computer is not signed in');
+    return { ...literal, review: await reviewLiteral(literal, readFileSync(file, 'utf8'), managedModels(client), join(methodCache(), 'comparison-reviews')) };
+  } catch (error) { return { ...literal, not_shown: [...literal.not_shown, `The model review did not run: ${(error as Error).message}.`] }; }
 }
 
 /**

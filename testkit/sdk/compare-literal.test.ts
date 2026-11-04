@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { cleanDiff, comparisonLiteral, copiedPassages, coreCode, itemWords, labelTable, placedPaths } from '../../packages/sdk/src/compare-literal.js';
+import { cleanDiff, comparisonLiteral, copiedPassages, coreCode, itemWords, labelTable, literalFacts, placedPaths, reviewLiteral, type Literal } from '../../packages/sdk/src/compare-literal.js';
 import { comparisonGaps } from '../../packages/sdk/src/compare.js';
 
 const dirs: string[] = [];
@@ -50,7 +50,8 @@ it('asks the file for who made the expected answers and where a written correcti
   const base: any = { question: 'q', arms: {}, difference: 'd', inputs: ['a'], measure: { name: 'm' }, rule: { margin: 0.1, min_runs: 1 }, runs: 1 };
   expect(comparisonGaps(base)).toEqual([]);
   expect(comparisonGaps({ ...base, expected: { a: 'e.json' } })[0]).toMatch(/labels_by/);
-  expect(comparisonGaps({ ...base, expected: { a: 'e.json' }, about_inputs: { labels_by: 'Two clerks.' }, treatment: { events: [{ correction: 'Fix it.', input: 'a' }], checkpoints: [0, 1] } })[0]).toMatch(/correction 1 come from in source/);
+  expect(comparisonGaps({ ...base, expected: { a: 'e.json' }, about_inputs: { labels_by: 'Two clerks.' } })).toEqual([expect.stringMatching(/measure\.compares_with/)]);
+  expect(comparisonGaps({ ...base, measure: { name: 'm', compares_with: 'labels' }, expected: { a: 'e.json' }, about_inputs: { labels_by: 'Two clerks.' }, treatment: { events: [{ correction: 'Fix it.', input: 'a' }], checkpoints: [0, 1] } })[0]).toMatch(/correction 1 in source: \{kind: person/);
 });
 
 /**
@@ -74,8 +75,8 @@ it('makes the steps, the end-to-end event and the concerns from the files and re
     question: 'Does Method help?', arms: { plain: { project: 'codex', files: 'plain' }, method: { project: 'codex', plugins: ['method'], files: 'method' } }, difference: 'Method',
     inputs: ['inputs/n1.json', 'inputs/n2.json', 'inputs/n3.json', 'inputs/again.json'], teaching: ['teaching/t1.json', 'teaching/t2.json'], deliverable: 'answers.json',
     about_inputs: { noun: 'agreement', description: 'Three new agreements that no correction saw.', names: { 'teaching/t1.json': 'Agreement 1', 'teaching/t2.json': 'Agreement 2' } },
-    measure: { name: 'answers right', code: 'measure.py' }, rule: { margin: 0.05, min_runs: 2, at: 2 }, runs: 1,
-    treatment: { checkpoints: [0, 2], feedback_writers: { review: { code: 'writer.py' } }, events: [{ input: 'teaching/t1.json', feedback: 'review', source: 'From the labels.' }, { input: 'teaching/t2.json', feedback: 'review', source: 'From the labels.' }] },
+    measure: { name: 'answers right', code: 'measure.py', compares_with: 'labels' }, rule: { margin: 0.05, min_runs: 2, at: 2 }, runs: 1,
+    treatment: { checkpoints: [0, 2], feedback_writers: { review: { code: 'writer.py' } }, events: [{ input: 'teaching/t1.json', feedback: 'review', source: { kind: 'person', who: 'the reviewing lawyer', expert: true } }, { input: 'teaching/t2.json', feedback: 'review', source: { kind: 'code', file: 'writer.py' } }] },
     expected: { 'teaching/t1.json': 'expected/t1.json', 'teaching/t2.json': 'expected/t2.json' },
   };
   const project = (files: string, plugins: string[]) => ({ agent: 'codex', plugins, model: 'gpt-x', effort: null, web: false, deliverable: 'answers.json', message: 'Answer these about {{document}}:\n1. Is it secret?\n2. May it be shared?', first_message: null, start: join(root, files) });
@@ -108,7 +109,11 @@ it('makes the steps, the end-to-end event and the concerns from the files and re
   const kinds = literal.concerns.map(c => c.kind);
   expect(kinds).toEqual(expect.arrayContaining(['claim', 'labels_by', 'corrections_by_code', 'overlap', 'worse_item', 'start_read', 'copies']));
   expect(literal.concerns.find(c => c.kind === 'worse_item')!.text).toContain('These corrections ask for different answers.');
-  expect(literal.concerns.find(c => c.kind === 'claim')!.text).toContain('1 measured agreement has the same text as a teaching agreement');
+  // The source of event 1 names a person while the feedback writer is code: a stated mismatch. Event 2's source agrees.
+  expect(literal.concerns.filter(c => c.kind === 'claim').map(c => c.text)).toEqual(['The file says who writes the words of event 1: “Written by the reviewing lawyer, the expert, in their own words.” But the feedback writer review writes them, and it is code (writer.py).']);
+  expect(literal.concerns.find(c => c.kind === 'labels_by')!.text).toBe('The file does not say who made the right answers. The main measure, “answers right”, compares each answer with them. The feedback writers read them to write the corrections.');
+  expect(literal.steps[5]!.sentence).toContain('(a) answers right (main): no description; measure.py; it compares each answer with the right answers.');
+  expect(literal.review).toBeNull();
   expect(literal.not_shown).toEqual([]);
 });
 
@@ -128,4 +133,53 @@ it('says which parts do not apply when the measure prints no items and nothing r
   const ran = await comparisonLiteral(doc, root, plan, null, { treated: null, runs: [], grades: [{ arm: 'a', input: 'inputs/a.json', checkpoint: null, repeat: 0, printed: { score: '{"score": 1}' } }] });
   expect(ran.per_item).toBeNull();
   expect(ran.not_shown[0]).toMatch(/does not print its items/);
+});
+
+/** A record with the facts that the page computes, for the model review. */
+const recordWith = (concerns: string[]): Literal => ({ from: 'design', paragraph: 'Two arms work on the same NDAs.', steps: [{ n: 6, title: 'Measures', sentence: '(a) answers that match the lawyers (main): code.', used: true, artifacts: [] }],
+  one_event: null, concerns: concerns.map(text => ({ kind: 'labels_by', text, evidence: [] })), per_item: null, counted: {}, baselines: [], usage: {}, not_shown: [], review: null });
+/** A hosted model that answers with the findings given, and counts its requests. */
+const fakeModels = (findings: Array<{ claim: string; fact: string; why: string }>) => {
+  const sent: any[] = [];
+  return { sent, model: async () => 'test/model', request: async (body: any) => { sent.push(body); return { model: 'test/model', choices: [{ message: { content: JSON.stringify({ findings }) } }] }; } };
+};
+
+it('the model review keeps a finding only when its claim is in the file and its fact is in the facts, word for word, and runs once for the same file and facts', async () => {
+  const cache = temp();
+  const file = 'measure:\n  name: answers that match the lawyers\n  compares_with: labels\nabout_inputs:\n  labels_by: Two crowd workers and one researcher; no lawyer.\n';
+  const literal = recordWith(['Who made the right answers, in the file\'s words: “Two crowd workers and one researcher; no lawyer.” The main measure, “answers that match the lawyers”, compares each answer with them.']);
+  const models = fakeModels([
+    { claim: '“answers that match the lawyers”', fact: 'Two crowd workers and one researcher; no lawyer.', why: 'The measure is named for lawyers, and no lawyer made its labels.' },
+    { claim: 'every answer is checked by a partner', fact: 'Two arms work on the same NDAs.', why: 'Not in the file.' },
+    { claim: 'answers that match the lawyers', fact: 'A lawyer made every label.', why: 'Not in the facts.' },
+  ]);
+  const review = await reviewLiteral(literal, file, models, cache);
+  expect(review).toEqual({ model: 'test/model', findings: [{ claim: 'answers that match the lawyers', fact: 'Two crowd workers and one researcher; no lawyer.', why: 'The measure is named for lawyers, and no lawyer made its labels.' }] });
+  // The request holds the whole file and the facts that the page computed.
+  expect(models.sent[0].messages[1].content).toContain(file);
+  expect(models.sent[0].messages[1].content).toContain(literalFacts(literal));
+  expect(await reviewLiteral(literal, file, models, cache)).toEqual(review);
+  expect(models.sent).toHaveLength(1);
+  // A changed file is reviewed again.
+  await reviewLiteral(literal, `${file}# changed\n`, models, cache);
+  expect(models.sent).toHaveLength(2);
+});
+
+it('states what the main measure compares with from the file\'s fields, not from its name', async () => {
+  const root = temp();
+  write(root, 'inputs/a.json', { x: 1 });
+  write(root, 'expected/a.json', { labels: { 1: 'yes' } });
+  write(root, 'start/AGENTS.md', 'Hello.');
+  const project = { agent: 'claude', plugins: [], model: 'm', effort: null, web: false, deliverable: 'out.md', message: 'Do {{x}}.', first_message: null, start: join(root, 'start') };
+  const plan: any = { file: join(root, 'c.compare'), folder: join(root, '.compare/c'), arms: [{ name: 'a', label: 'A', project }, { name: 'b', label: 'B', project }], inputs: [{ id: 'inputs/a.json' }], events: [], checkpoints: null, redesign: null, user_files: [], learners: 2, rule: { margin: 0.1, min_runs: 1 }, names: {}, measures: [{ name: 'm', main: true, person: 'Good?' }] };
+  const base: any = { question: 'q', arms: { a: { project: 'claude', files: 'start' }, b: { project: 'claude', files: 'start' } }, difference: 'd', inputs: ['inputs/a.json'], rule: plan.rule, runs: 2 };
+  // The NDA comparison: the measure is named for lawyers, and the file says annotators made the labels.
+  const nda = await comparisonLiteral({ ...base, measure: { name: 'answers that match the lawyers', code: 'm.py', compares_with: 'labels' }, expected: { 'inputs/a.json': 'expected/a.json' },
+    about_inputs: { labels_by: 'ContractNLI\'s annotators: one researcher and two Mechanical Turk workers; no lawyer.' } }, root, { ...plan, measures: [{ name: 'answers that match the lawyers', main: true, code: { path: join(root, 'm.py') } }] }, null, null);
+  expect(nda.concerns.find(c => c.kind === 'labels_by')!.text).toBe('Who made the right answers, in the file\'s words: “ContractNLI\'s annotators: one researcher and two Mechanical Turk workers; no lawyer.” The main measure, “answers that match the lawyers”, compares each answer with them.');
+  // A measure with no labels: no statement about labels, and no claim.
+  const shipped = await comparisonLiteral({ ...base, measure: { name: 'orders shipped', code: 'm.py', compares_with: 'nothing' } }, root, { ...plan, measures: [{ name: 'orders shipped', main: true, code: { path: join(root, 'm.py') } }] }, null, null);
+  expect(shipped.concerns.filter(c => ['claim', 'labels_by'].includes(c.kind))).toEqual([]);
+  const review = await reviewLiteral(shipped, 'measure:\n  name: orders shipped\n', fakeModels([]), temp());
+  expect(review.findings).toEqual([]);
 });
