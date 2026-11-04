@@ -285,7 +285,7 @@ it('removes a chat\'s folder while a process that just ended still writes files 
   expect(existsSync(root)).toBe(false);
 }, 20_000);
 
-it('a comparison keeps its copy of the Method plugin when an update changes only the plugin\'s version number, so the arm is the same arm; changed skills make a new copy', () => {
+it('a comparison keeps its copy of the Method plugin when an update changes only the plugin\'s version number, so the arm is the same arm; changed skills make a new copy only before the trial starts', () => {
   const folder = mkdtempSync(join(tmpdir(), 'method-plugin-copy-'));
   try {
     const copy = comparisonPlugin(folder), manifest = join(copy, '.claude-plugin', 'plugin.json');
@@ -300,6 +300,11 @@ it('a comparison keeps its copy of the Method plugin when an update changes only
     comparisonPlugin(folder);
     expect(readFileSync(skill, 'utf8')).not.toBe('An older skill.');
     expect(JSON.parse(readFileSync(manifest, 'utf8')).version).toBe(installed.version);
+    // After the trial starts, the copy stays as it is, so the arm's treatment and runs are not done again.
+    writeFileSync(join(folder, 'trial-approval.json'), '{}');
+    writeFileSync(skill, 'The skill that the trial ran with.');
+    comparisonPlugin(folder);
+    expect(readFileSync(skill, 'utf8')).toBe('The skill that the trial ran with.');
   } finally { rmSync(folder, { recursive: true, force: true }); }
 });
 

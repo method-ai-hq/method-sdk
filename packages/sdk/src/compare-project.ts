@@ -58,12 +58,14 @@ export function methodPluginFolder() {
 /**
  * The Method plugin that a comparison's project arms have: a copy in the comparison's folder (method-plugin), made from
  * this installation's plugin. An update of the method CLI that changes only the plugin's version number keeps the copy,
- * so the arm stays the same arm and nothing that it received or ran is done again; a plugin whose skills or hooks
- * changed is a new arm.
+ * so the arm stays the same arm and nothing that it received or ran is done again. Before the trial starts, a plugin
+ * whose skills or hooks changed is a new arm. After the trial starts (trial-approval.json), the copy stays: a new copy
+ * would be a new arm, and every treatment event and run of the arm would be done again.
  */
 export function comparisonPlugin(folder: string) {
   const copy = join(folder, 'method-plugin'), installed = methodPluginFolder();
-  if (!existsSync(copy) || pluginContent(copy) !== pluginContent(installed)) { removeTree(copy); cpSync(installed, copy, { recursive: true }); }
+  const started = existsSync(join(folder, 'trial-approval.json'));
+  if (!existsSync(copy) || (!started && pluginContent(copy) !== pluginContent(installed))) { removeTree(copy); cpSync(installed, copy, { recursive: true }); }
   return copy;
 }
 /** A plugin's files without the version number in its plugin.json. */
