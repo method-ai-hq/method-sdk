@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import {
   PLAIN_PROMPT, RIGHT_WORDS, builderPrompt, cellFolders, checkedAll, deliverableOf, expectedValue, feedbackWriting, inputRoom, inputValue,
-  measureStdin, outputText, projectMessage, runScript, shuffled, taskPrompt, type Comparison,
+  filedText, measureStdin, outputText, projectMessage, runScript, shuffled, taskPrompt, type Comparison,
 } from './compare.js';
 import { RIGHT_MESSAGE, copyTree, placeInput } from './compare-project.js';
 import { readDocument } from './authoring.js';
@@ -263,7 +263,7 @@ export function trialExamples(plan: any, runs: any[], grades: any[], treated: an
       const how = arm.project ? 'message 2 of the same chat' : arm.plain ? 'correction.md of the session that edits its instructions' : event.text === 'right' ? 'method judge RUN right' : 'method judge RUN wrong --note';
       out.push({ id: `correction-${slug(arm.name)}`, replaces: 'correction', arm: arm.name, title: `${arm.label}: the correction it received in the trial`,
         caption: `Copy 1, event ${event.index}, on ${name(event.input)}: what it handed in, and the words it got back (${how}).`,
-        blocks: [...(typeof event.output === 'string' ? [{ name: `What it handed in${plan.events?.[event.index - 1]?.input?.deliverable ? ` (${basename(plan.events[event.index - 1].input.deliverable)})` : ''}`, text: cut(event.output) }] : []),
+        blocks: [...(typeof event.output === 'string' ? [{ name: `What it handed in${plan.events?.[event.index - 1]?.input?.deliverable ? ` (${basename(plan.events[event.index - 1].input.deliverable)})` : ''}`, text: cut(filedText(event.output, event.output_file)) }] : []),
           { name: 'The words it received', text: event.text === 'right' ? '(no words: the run is judged right)' : cut(event.text) }] });
     }
     const own = runs.filter(r => r.arm === arm.name && r.repeat === 0);

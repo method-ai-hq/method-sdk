@@ -1226,14 +1226,17 @@ const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => 
  * not_run: the training run failed. not_given: an earlier event of the learner is missing. given: a new input.
  */
 export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'not_run' | 'not_given' | 'given';
-/** What a correction changed: Method's summary of its fix, and the diff of the Method's files or of the plain agent's instructions. */
-export type ChangeRecord = { summary?: string; diff: string };
+/**
+ * What a correction changed: Method's summary of its fix, and the diff of the Method's files or of the plain agent's
+ * instructions. A long diff is kept whole in a file (file), with its first part in diff and its length in chars.
+ */
+export type ChangeRecord = { summary?: string; diff: string; file?: string; chars?: number };
 /** Whether an outcome changed the agent: Method's fix applied a tested change, or the builder edited the instructions. */
 export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited';
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
   question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
-type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; reason?: string; detail?: string; change?: ChangeRecord; did?: Did;
+type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; output_file?: string; reason?: string; detail?: string; change?: ChangeRecord; did?: Did;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
 /** Treatment of one learner: what each event did, what is missing, and the frozen copy of the learner at each checkpoint it reached. */
 type LearnerTreatment = { learner: number; events: EventRecord[]; missing: Array<{ index: number; reason: string; detail?: string; after?: number }>; snapshots: Record<string, Snapshot>; redesigns?: RedesignRecord[] };
@@ -1265,7 +1268,7 @@ type ArmTreatment = { arm: string; planned: number; learners: LearnerTreatment[]
  * method judge RUN right and the builder reads that the work is right; the event is received as was_right. Each
  * delivery keeps the words the arm received (text).
  */
-type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null; change?: ChangeRecord };
+type Delivered = { received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; output_file?: string; reason?: string; detail?: string; run_id?: string; judgment_id?: string; tokens?: number | null; change?: ChangeRecord };
 type Built = { received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; reason?: string; detail?: string; instructions?: string; tokens?: number | null; change?: ChangeRecord; did?: Did };
 export const delivery = {
   async deliver(event: any, learner: { dir: string; file: string }, cacheDir: string, workDir: string, before?: Delivered, settings: { web: boolean; folders?: Record<string, string> } = { web: false }): Promise<Delivered> {
@@ -1309,7 +1312,7 @@ async function deliverIn(env: NodeJS.ProcessEnv, event: any, learner: { dir: str
       await command(['__fix', file, '--judgment', before.judgment_id], env);
       earlier = await waitForFix(before.run_id, before.judgment_id, env, file);
     }
-    if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return { ...earlier, ...(before.text ? { text: before.text } : {}), ...(before.output !== undefined ? { output: before.output } : {}) };
+    if (earlier.outcome !== 'stopped' && earlier.outcome !== 'could_not_test') return { ...earlier, ...(before.text ? { text: before.text } : {}), ...(before.output !== undefined ? { output: before.output } : {}), ...(before.output_file ? { output_file: before.output_file } : {}) };
     // A correction given again is a new judgment of a new run: the old judgment's case does not stay as a second one.
     removeTree(join(learner.dir, 'cases', correctionCaseId(before.judgment_id)));
   }
@@ -1607,6 +1610,28 @@ async function freezeProject(arm: any, learner: { project: string; cache: string
 
 /** Copy a folder without its run records. */
 const copyFolder = (from: string, to: string) => { removeTree(to); cpSync(from, to, { recursive: true, filter: path => !['.method-runs', 'node_modules'].includes(basename(path)) }); };
+/**
+ * A learner's record keeps the long values of an event (a change's diff, the file that the arm handed in) in files in
+ * the learner's folder (values/KEY/), and keeps their first part and the file's path: a project chat can change a
+ * thousand files, and every step that gives the treatment returns each record, under the run's output size limit.
+ */
+const INLINE_CHARS = 2000;
+function filedValues(base: string, record: any) {
+  const dir = join(base, 'values', String(record.key).slice(0, 16));
+  const file = (name: string, text: string) => {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, name), text, { mode: 0o600 });
+    return join(dir, name);
+  };
+  const out = { ...record };
+  if (typeof record.change?.diff === 'string' && !record.change.file && record.change.diff.length > INLINE_CHARS)
+    out.change = { ...record.change, diff: short(record.change.diff, INLINE_CHARS), file: file('change.diff', record.change.diff), chars: record.change.diff.length };
+  if (typeof record.output === 'string' && !record.output_file && record.output.length > INLINE_CHARS)
+    Object.assign(out, { output: short(record.output, INLINE_CHARS), output_file: file('output.txt', record.output) });
+  return out;
+}
+/** The whole text of a value that a record keeps in a file, or its first part when the file is gone. */
+export const filedText = (text: string, path?: string) => { if (path) try { return readFileSync(path, 'utf8'); } catch { /* the first part */ } return text; };
 const readRecords = (file: string) => {
   const records = new Map<string, any>();
   try { for (const line of readFileSync(file, 'utf8').split('\n').filter(Boolean)) { const r = JSON.parse(line); records.set(r.key, r); } } catch { /* nothing yet */ }
@@ -1706,13 +1731,14 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
       // The same judgment with the same outcome again (a fix that still waits for an answer) is already in the record.
       const same = before && !result.received && 'judgment_id' in result && result.judgment_id && result.judgment_id === before.judgment_id && result.outcome === before.outcome;
       if (!same) {
-        const record = { key, index: event.index, kind: event.kind, input: event.input.id, learner, text_sha256: event.text ? sha(event.text) : null, ...result, tokens: result.tokens ?? null, duration_ms: Date.now() - started, at: new Date().toISOString() };
+        const record = filedValues(base, { key, index: event.index, kind: event.kind, input: event.input.id, learner, text_sha256: event.text ? sha(event.text) : null, ...result, tokens: result.tokens ?? null, duration_ms: Date.now() - started, at: new Date().toISOString() });
         writeFileSync(recordFile, JSON.stringify(record) + '\n', { flag: 'a', mode: 0o600 });
         records.set(key, record);
       }
     }
-    const record = records.get(key);
-    done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(typeof record.text === 'string' ? { text: record.text } : {}), ...(typeof record.output === 'string' ? { output: record.output } : {}), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
+    // A record written before its long values went to files: the step's output keeps their first part and the files.
+    const record = filedValues(base, records.get(key));
+    done.push({ key, index: record.index, kind: record.kind, input: record.input, learner, received: record.received, outcome: record.outcome ?? (record.received ? 'fixed' : 'stopped'), ...(typeof record.text === 'string' ? { text: record.text } : {}), ...(typeof record.output === 'string' ? { output: record.output } : {}), ...(record.output_file ? { output_file: record.output_file } : {}), ...(record.reason ? { reason: record.reason } : {}), ...(record.detail ? { detail: record.detail } : {}),
       ...(record.change ? { change: record.change } : {}), ...(record.did ? { did: record.did } : {}), ...(record.run_id ? { run_id: record.run_id } : {}), ...(record.judgment_id ? { judgment_id: record.judgment_id } : {}), tokens: record.tokens ?? null, duration_ms: record.duration_ms ?? 0, at: record.at });
     if (!record.received) { missing.push({ index: event.index, reason: record.reason ?? 'not received', ...(record.detail ? { detail: record.detail } : {}) }); stopped = true; continue; }
     if (arm.plain && typeof record.instructions === 'string') instructions = record.instructions;
@@ -1954,7 +1980,7 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
 }
 /** The outcomes that the account shows; a correction that ended otherwise is named in its line's missing. */
 const accountOutcomes = new Set<CorrectionOutcome>(['fixed', 'no_change_needed', 'no_fix_found', 'could_not_test', 'edited', 'not_edited', 'was_right', 'no_feedback']);
-/** The most of one change's diff that the page shows; the learner's record and method changes keep it whole. */
+/** The most of one change's diff that the page shows; the file of the learner's record keeps it whole. */
 const CHANGE_DIFF_CHARS = 2000;
 /** What each arm received, as the account takes it: each correction with {index, input, text, outcome, learner, change?}. */
 function accountReceived(received: Record<string, ReturnType<typeof receivedOf>>) {

@@ -613,6 +613,37 @@ it('says what happened to each correction for each learner; could not test and a
   expect(result.text).toContain('Each arm received its full treatment: checked by Method: no.');
 });
 
+it('keeps a treatment with large event outputs far under the run output limit: long diffs and handed-in files go to files', async () => {
+  const { file } = fixture({ teaching: ['inputs/three.json'], rule: { margin: 0.1, min_runs: 1, at: 4 }, treatment: { events: [1, 2, 3, 4].map(i => ({ correction: `Correction ${i}.`, input: 'inputs/three.json' })), checkpoints: [0, 4] } });
+  // Each fix changes thousands of lines (as a project chat that records a case does), and each arm hands in a long memo.
+  const diff = (index: number) => `--- recording.json\n+++ recording.json\n${`+line of fix ${index}\n`.repeat(400_000)}`;
+  delivery.deliver = async (event: any) => ({ received: true, outcome: 'fixed', output: `memo ${event.index} `.repeat(3_000), change: { summary: `Fix ${event.index}.`, diff: diff(event.index) } });
+  const comparison = await stagePlan(file);
+  const LIMIT = 16_777_216;
+  const trial = await compareStage('trial_treat', { comparison });
+  expect(JSON.stringify(trial).length).toBeLessThan(LIMIT / 100);
+  const full = await compareStage('treat', { comparison, go: true });
+  expect(JSON.stringify(full).length).toBeLessThan(LIMIT / 100);
+  const event = JSON.parse(full.treatment as string)[0].learners[0].events[3];
+  // The output keeps the first part and the file; the file keeps the whole value.
+  expect(event.change.diff.length).toBeLessThanOrEqual(2000);
+  expect(event.change.chars).toBe(diff(4).length);
+  expect(readFileSync(event.change.file, 'utf8')).toBe(diff(4));
+  expect(readFileSync(event.output_file, 'utf8')).toBe('memo 4 '.repeat(3_000));
+  // The learner's record keeps the files too, so it stays small.
+  const record = join(event.change.file, '..', '..', '..', 'treatment.jsonl');
+  expect(readFileSync(record, 'utf8').length).toBeLessThan(100_000);
+  // A record written with its long values inline (an earlier version) gives the same short output, and nothing is given again.
+  writeFileSync(record, readFileSync(record, 'utf8').split('\n').filter(Boolean).map(line => {
+    const r = JSON.parse(line);
+    return JSON.stringify(r.change ? { ...r, change: { summary: r.change.summary, diff: diff(r.index) }, output: `memo ${r.index} `.repeat(3_000), output_file: undefined } : r);
+  }).join('\n') + '\n');
+  delivery.deliver = async () => { throw Error('given again'); };
+  const again = await compareStage('treat', { comparison, go: true });
+  expect(JSON.stringify(again).length).toBeLessThan(LIMIT / 100);
+  expect(JSON.parse(again.treatment as string)[0].learners[0].events.map((e: any) => e.outcome)).toEqual(['fixed', 'fixed', 'fixed', 'fixed']);
+});
+
 /**
  * A stand-in for the method CLI that a Method learner's correction uses: run completes a saved training run, judge
  * starts judgment jdg_N, and wait answers from outcomes.json: the outcome of that judgment, else the default.
