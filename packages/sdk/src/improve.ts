@@ -49,7 +49,7 @@ export async function learnerModel(document: any): Promise<LearnerModel> {
 }
 
 /** The Method's judgments: the account's, with the notes and answers that stay on this computer for a device Method. */
-async function methodJudgments(client: MethodClient, file: string, methodId: string, waitMs?: number) {
+export async function methodJudgments(client: MethodClient, file: string, methodId: string, waitMs?: number) {
   const { judgments } = await client.request<{ judgments: AccountJudgment[] }>(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments`, 'GET', undefined, true,
     waitMs ? { signal: AbortSignal.timeout(waitMs), stallMs: waitMs } : {});
   const local = new Map(localJudgments(file).map(j => [j.id, j] as [string, LocalJudgment]));
@@ -281,7 +281,7 @@ function endedFix(file: string, judgmentId: string) {
 const fileMethodId = (file: string) => { const id = (readDocument(file) as any).id; return typeof id === 'string' && methodIdPattern.test(id) ? id : undefined; };
 
 /** Take the Method's lock: a file with this process ID. A lock whose process has stopped is taken over. */
-function takeLock(path: string) {
+export function takeLock(path: string) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < 2; attempt++) {
     try { writeFileSync(path, JSON.stringify({ pid: process.pid }), { flag: 'wx', mode: 0o600 }); return true; }

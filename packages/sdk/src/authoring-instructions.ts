@@ -65,6 +65,29 @@ export const justWorksRules = `# A Method that just works
 - **Each correction becomes a check** (a case) that fails on the wrong run and passes on a right one, and every earlier check keeps passing.
 `;
 
+/**
+ * How to design a Method from the problem, not from the code or the prompt that it replaces. From the Promex invoice
+ * Method: its rewrite from the problem held back wrong entries that a step-for-step copy of the old pipeline posted.
+ */
+export const designRules = `# Design from the problem
+
+Design the Method from the decision it makes, not from the code, prompt or Method that it replaces. Do this when you build a Method, and again when its corrections pile up as rules added to one prompt.
+
+1. **Start from the decision.** Write down what one input is, what one answer is, and what decides the answer. Keep old code only for the rules that encode a person's rule book.
+2. **Exact things in code or data.** A rule with one right answer is a \`run\` step with a data file.
+3. **A model step only for judgement.**
+4. **The step that decides sees the source.** Give it the document, the page or the record itself, not only fields extracted from it: an extraction loses what its schema did not ask for.
+5. **Code gathers the evidence; the model weighs it.** A \`run\` step finds what the decision needs (the same entity in the history first, then the same kind of item from any entity, with counts and dates) and passes it to the deciding step.
+6. **Code does not decide what needs judgement.** A fixed resolver that sends every conflict to review becomes one piece of evidence for the deciding step.
+7. **One task per prompt.** Split a prompt that answers several questions or that classifies and extracts; each step that applies the person's rules gets all of them.
+8. **A check needs an outside signal.** A second call with another framing that sees the source ("find any part of this answer that the source does not state"), or code that checks against data. A model that rereads its own answer is not a check. The check reports; it does not change the answer.
+9. **A gate routes.** Code combines the checks into "use it" or "a person checks it", with the reasons.
+10. **Agreement of different framings, not repeats.** Two runs of one prompt agree on the same wrong answer.
+11. **Confidence is a probability or an agreement**, never a stated "high".
+12. **Labelled examples for a fuzzy convention.** When the right answer follows a convention that rules state badly, give the deciding step similar past cases with their right answers, found by code, in place of more rules.
+13. **Measure a change on inputs you set aside first.** Choose them before you read any failure. Count a confident wrong answer as worse than an honest "a person checks it", and compare two versions on the same inputs.
+`;
+
 /** How to write the prompt inside a call, agent, or classify step. */
 export const promptRules = `# Write each prompt
 
@@ -178,7 +201,7 @@ export const watchRules = `# Watch it
 export const afterRules = `# After it works
 
 - **Put it in an app:** \`method connect APP_FOLDER\` publishes it and prints the code to add.
-- **Record each reaction:** after you show a result, run \`method judge RUN_ID wrong --note "THEIR WORDS"\` (with \`--corrected FILE\` when they gave the right result) when the user corrects it or asks to change the Method because of it, and \`method judge RUN_ID right\` when they use or approve it. Do not ask them to confirm it, and do not edit the Method yourself for the same correction. A wrong judgment returns at once and tests a fix in the background with the user's own Claude Code or Codex. Run \`method wait\` for the result and tell the user its line. After a fix, show the tested output that \`method wait\` prints; never run a Method that sends or changes things again just to show it. When it prints a question, show it to the user word for word, never answer it yourself, and send their words with \`method answer JUDGMENT_ID "THEIR WORDS"\`. \`method learned FILE\` lists what the agent learned from corrections; \`method undo\` restores the Method as it was before Method's last change. When the user corrects work they will give you again and no Method does it yet, build a Method from that work, run it on the same input, and judge that run. Tell the user what was kept and where; never say a correction is recorded or applies from now on unless a judgment, a learned rule, or a file saved it.
+- **Record each reaction:** after you show a result, run \`method judge RUN_ID wrong --note "THEIR WORDS"\` (with \`--corrected FILE\` when they gave the right result) when the user corrects it or asks to change the Method because of it, and \`method judge RUN_ID right\` when they use or approve it. Do not ask them to confirm it, and do not edit the Method yourself for the same correction. A wrong judgment returns at once and tests a fix in the background with the user's own Claude Code or Codex. Run \`method wait\` for the result and tell the user its line. After a fix, show the tested output that \`method wait\` prints; never run a Method that sends or changes things again just to show it. When it prints a question, show it to the user word for word, never answer it yourself, and send their words with \`method answer JUDGMENT_ID "THEIR WORDS"\`. When many corrections have piled up as rules added to one prompt, run \`method redesign FILE\`: it rewrites the Method from the problem (see Design from the problem) and keeps every earlier correction. \`method learned FILE\` lists what the agent learned from corrections; \`method undo\` restores the Method as it was before Method's last change. When the user corrects work they will give you again and no Method does it yet, build a Method from that work, run it on the same input, and judge that run. Tell the user what was kept and where; never say a correction is recorded or applies from now on unless a judgment, a learned rule, or a file saved it.
 - **Explain the scripts:** \`method explain FILE\` writes a card for each script step.
 `;
 

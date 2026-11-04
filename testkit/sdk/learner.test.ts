@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createCase } from '@withmethod/runtime/cases.js';
 import { changedUserText, learnCorrection, learnerAgent, learnerMethod, learnerPrompt, nextWritten, paragraphs, readWritten, textPlaces, type LearnerCorrection } from '../../packages/sdk/src/learner.js';
@@ -382,6 +383,22 @@ it('the person\'s words: every paragraph of the prompts, the goal and the .md an
   const later = new Map(after); later.set('steps.a.do.prompt', 'One.\n\nMine, better.');
   expect(changedUserText(after, later, written)).toEqual([{ place: 'steps.a.do.prompt', paragraph: 'Two.' }]);
   expect(changedUserText(after, later, written, 'May I remove "Two."?')).toEqual([]);
+});
+
+it('a paragraph of the person\'s that moves, unchanged, to another step or file is kept, and stays theirs there', () => {
+  const none = { format: 'method-written/1' as const, places: {} };
+  const before = new Map([['steps.answer.do.prompt', 'Answer each question.\n\nQuote the NDA word for word.'], ['file:questions.md', 'Q1.\n\nQ2.']]);
+  // The prompt is split into two steps, and a question moves to a file of its own.
+  const after = new Map([['steps.read.do.prompt', 'Find the sentences.\n\nQuote the NDA word for word.'], ['steps.decide.do.prompt', 'Answer each question.'], ['file:questions.md', 'Q1.'], ['file:q2.md', 'Q2.']]);
+  expect(changedUserText(before, after, none)).toEqual([]);
+  const written = nextWritten(before, after, none);
+  expect(written.places).toEqual({ 'steps.read.do.prompt': [createHash('sha256').update('Find the sentences.').digest('hex')] });
+  // Moved, it is still the person's: a later change that drops it is refused.
+  const later = new Map(after); later.set('steps.read.do.prompt', 'Find the sentences.');
+  expect(changedUserText(after, later, written)).toEqual([{ place: 'steps.read.do.prompt', paragraph: 'Quote the NDA word for word.' }]);
+  // A changed word is not a move.
+  const reworded = new Map(after); reworded.set('steps.decide.do.prompt', 'Answer every question.');
+  expect(changedUserText(before, reworded, none)).toEqual([{ place: 'steps.answer.do.prompt', paragraph: 'Answer each question.' }]);
 });
 
 it('the session runs on the agent, model and effort that it is given, with the file and shell tools', () => {

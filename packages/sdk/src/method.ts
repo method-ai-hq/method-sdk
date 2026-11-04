@@ -204,6 +204,7 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   if (args[0] === 'wait' && (!args[1] || /^jdg_|^--/.test(args[1]))) return (await import('./fix-outcomes.js')).waitCommand(args.slice(1));
   if (args[0] === 'learned') return (await import('./learned.js')).learnedCommand(args.slice(1), clientFactory);
   if (args[0] === 'undo') return (await import('./undo.js')).undoCommand(args.slice(1), clientFactory);
+  if (args[0] === 'redesign') return (await import('./redesign.js')).redesignCommand(args.slice(1), clientFactory);
   if (args[0] === '__fix' || args[0] === '__watch') {
     const p = parseArgs({ args: args.slice(1), allowPositionals: true, options: { server: { type: 'string' }, judgment: { type: 'string', multiple: true } } });
     const client = clientFactory(p.values.server ?? DEFAULT_SERVER), file = authoringPath(p.positionals[0]!);

@@ -31,6 +31,24 @@ When a run fails, read failure.headline and failure.next, change what they name,
 - **Keep the user's words word for word.** Their rules and instructions stay as they wrote them; add your own text beside them, and ask before you change theirs.
 - **Each correction becomes a check** (a case) that fails on the wrong run and passes on a right one, and every earlier check keeps passing.
 
+# Design from the problem
+
+Design the Method from the decision it makes, not from the code, prompt or Method that it replaces. Do this when you build a Method, and again when its corrections pile up as rules added to one prompt.
+
+1. **Start from the decision.** Write down what one input is, what one answer is, and what decides the answer. Keep old code only for the rules that encode a person's rule book.
+2. **Exact things in code or data.** A rule with one right answer is a `run` step with a data file.
+3. **A model step only for judgement.**
+4. **The step that decides sees the source.** Give it the document, the page or the record itself, not only fields extracted from it: an extraction loses what its schema did not ask for.
+5. **Code gathers the evidence; the model weighs it.** A `run` step finds what the decision needs (the same entity in the history first, then the same kind of item from any entity, with counts and dates) and passes it to the deciding step.
+6. **Code does not decide what needs judgement.** A fixed resolver that sends every conflict to review becomes one piece of evidence for the deciding step.
+7. **One task per prompt.** Split a prompt that answers several questions or that classifies and extracts; each step that applies the person's rules gets all of them.
+8. **A check needs an outside signal.** A second call with another framing that sees the source ("find any part of this answer that the source does not state"), or code that checks against data. A model that rereads its own answer is not a check. The check reports; it does not change the answer.
+9. **A gate routes.** Code combines the checks into "use it" or "a person checks it", with the reasons.
+10. **Agreement of different framings, not repeats.** Two runs of one prompt agree on the same wrong answer.
+11. **Confidence is a probability or an agreement**, never a stated "high".
+12. **Labelled examples for a fuzzy convention.** When the right answer follows a convention that rules state badly, give the deciding step similar past cases with their right answers, found by code, in place of more rules.
+13. **Measure a change on inputs you set aside first.** Choose them before you read any failure. Count a confident wrong answer as worse than an honest "a person checks it", and compare two versions on the same inputs.
+
 # Write each prompt
 
 - **One task per prompt.** If a prompt says "then" or has several jobs, make several steps. Split the tasks, not the user's rules: every step that applies them receives all of them, word for word.
@@ -141,7 +159,7 @@ method run tickets.method --inputs inputs.json   # reuses read, urgency and join
 # After it works
 
 - **Put it in an app:** `method connect APP_FOLDER` publishes it and prints the code to add.
-- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it, and do not edit the Method yourself for the same correction. A wrong judgment returns at once and tests a fix in the background with the user's own Claude Code or Codex. Run `method wait` for the result and tell the user its line. After a fix, show the tested output that `method wait` prints; never run a Method that sends or changes things again just to show it. When it prints a question, show it to the user word for word, never answer it yourself, and send their words with `method answer JUDGMENT_ID "THEIR WORDS"`. `method learned FILE` lists what the agent learned from corrections; `method undo` restores the Method as it was before Method's last change. When the user corrects work they will give you again and no Method does it yet, build a Method from that work, run it on the same input, and judge that run. Tell the user what was kept and where; never say a correction is recorded or applies from now on unless a judgment, a learned rule, or a file saved it.
+- **Record each reaction:** after you show a result, run `method judge RUN_ID wrong --note "THEIR WORDS"` (with `--corrected FILE` when they gave the right result) when the user corrects it or asks to change the Method because of it, and `method judge RUN_ID right` when they use or approve it. Do not ask them to confirm it, and do not edit the Method yourself for the same correction. A wrong judgment returns at once and tests a fix in the background with the user's own Claude Code or Codex. Run `method wait` for the result and tell the user its line. After a fix, show the tested output that `method wait` prints; never run a Method that sends or changes things again just to show it. When it prints a question, show it to the user word for word, never answer it yourself, and send their words with `method answer JUDGMENT_ID "THEIR WORDS"`. When many corrections have piled up as rules added to one prompt, run `method redesign FILE`: it rewrites the Method from the problem (see Design from the problem) and keeps every earlier correction. `method learned FILE` lists what the agent learned from corrections; `method undo` restores the Method as it was before Method's last change. When the user corrects work they will give you again and no Method does it yet, build a Method from that work, run it on the same input, and judge that run. Tell the user what was kept and where; never say a correction is recorded or applies from now on unless a judgment, a learned rule, or a file saved it.
 - **Explain the scripts:** `method explain FILE` writes a card for each script step.
 
 # Field reference
@@ -1409,6 +1427,31 @@ Example:
 ```sh
 method learned nda.method
 method learned nda.method --remove 2
+```
+
+## redesign
+
+Rewrite a Method from the problem, keeping every earlier correction.
+
+Usage:
+
+```sh
+method redesign FILE [--json]
+```
+
+Arguments and defaults:
+One agent session on your own Claude Code or Codex (the model of the Method's own agent steps) reads the guide, the Method, every correction with its run, and the Method's saved checks, writes the design first, and may replace, split, add or remove any step, prompt, script or data file. The change is applied only when every saved check that passed still passes, the user's own words stay word for word (a paragraph may move, unchanged, to another step or file), and the Method is valid. It waits while a fix of the Method runs on this computer. method undo restores the Method as it was.
+
+Result and changes:
+One line: what the agent does differently now, or that the Method is unchanged and why. --json prints {outcome, line, changed}.
+
+Errors:
+A Method file that cannot be read; the agent's usage limit.
+
+Example:
+
+```sh
+method redesign nda.method
 ```
 
 ## undo

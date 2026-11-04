@@ -78,8 +78,9 @@ export function learnerMethod(model: LearnerModel, timeoutMs: number) {
 // options, ask text and check prompt, and each .md and .txt file in the Method's folder. Only the paragraphs that
 // Method's learner wrote itself are not: it records them, by place, in .method/written.json, so a later fix may change
 // them. A paragraph that a person edits afterwards has another hash, so it is theirs again. learned.json is Method's.
-// The learner may add text anywhere; it changes or removes a paragraph of the person's only when the person answered
-// a question of this correction that quotes it.
+// The learner may add text anywhere, and move a paragraph of the person's, unchanged, to any other place (another
+// step's prompt, or another .md or .txt file), so it can split and rebuild steps. It changes or removes one only when
+// the person answered a question of this correction that quotes it.
 
 /** The record of the paragraphs that Method's learner wrote, by place. */
 export const writtenFile = (folder: string) => join(folder, '.method', 'written.json');
@@ -134,16 +135,27 @@ export function placeName(place: string) {
 /** Whether a question quotes a paragraph: it holds the paragraph, or its first 80 characters for a longer one. */
 const quotes = (question: string, paragraph: string) => normalize(question).toLowerCase().includes(paragraph.slice(0, 80).toLowerCase());
 
+/** The person's paragraphs of a Method: every paragraph of each place that Method's learner did not write there. */
+function personParagraphs(places: Map<string, string>, written: Written) {
+  const found = new Set<string>();
+  for (const [place, text] of places) {
+    const mine = new Set(written.places[place] ?? []);
+    for (const paragraph of paragraphs(text)) if (!mine.has(hashOf(paragraph))) found.add(paragraph);
+  }
+  return found;
+}
+
 /**
  * The person's paragraphs that a change removed or changed, by place. before and after are the text places of the
  * Method as it was and as it is now; written is what Method's learner wrote; approved is the question of this
- * correction that the person answered (its quoted paragraphs may change).
+ * correction that the person answered (its quoted paragraphs may change). A paragraph that is still in any place, word
+ * for word, is kept: it may move to another step or file.
  */
 export function changedUserText(before: Map<string, string>, after: Map<string, string>, written: Written, approved?: string | null) {
   const changed: { place: string; paragraph: string }[] = [];
+  const now = new Set([...after.values()].flatMap(paragraphs));
   for (const [place, text] of before) {
     const mine = new Set(written.places[place] ?? []);
-    const now = new Set(paragraphs(after.get(place) ?? ''));
     for (const paragraph of paragraphs(text)) {
       if (mine.has(hashOf(paragraph)) || now.has(paragraph)) continue;
       if (approved && quotes(approved, paragraph)) continue;
@@ -153,12 +165,15 @@ export function changedUserText(before: Map<string, string>, after: Map<string, 
   return changed;
 }
 
-/** The record of what Method's learner wrote after a change: what it wrote before and still stands, and every new paragraph. */
+/**
+ * The record of what Method's learner wrote after a change: every paragraph that is not the person's. A paragraph of
+ * the person's stays theirs in the place it moved to.
+ */
 export function nextWritten(before: Map<string, string>, after: Map<string, string>, written: Written): Written {
+  const theirs = personParagraphs(before, written);
   const places: Record<string, string[]> = {};
   for (const [place, text] of after) {
-    const old = new Set(paragraphs(before.get(place) ?? '')), mine = new Set(written.places[place] ?? []);
-    const hashes = [...new Set(paragraphs(text).filter(p => !old.has(p) || mine.has(hashOf(p))).map(hashOf))];
+    const hashes = [...new Set(paragraphs(text).filter(p => !theirs.has(p)).map(hashOf))];
     if (hashes.length) places[place] = hashes;
   }
   return { format: 'method-written/1', places };
@@ -167,7 +182,7 @@ export function nextWritten(before: Map<string, string>, after: Map<string, stri
 // ---------- The private copy ----------
 
 /** Copy the Method folder without run records, secrets or Method's private files; link its dependencies. */
-function copyMethod(source: string, target: string) {
+export function copyMethod(source: string, target: string) {
   let files = 0, bytes = 0;
   const skip = (name: string) => ['.git', '__pycache__', '.method-runs', '.method', '.fix'].includes(name) || name.startsWith('.env');
   const walk = (dir: string) => {
@@ -222,7 +237,7 @@ const runName = (k: number, n: number) => n === 1 ? 'run' : `run-${k}`;
 const correctedName = (k: number, n: number) => n === 1 ? 'corrected.txt' : `corrected-${k}.txt`;
 
 /** What a reader needs from a run: its inputs, outputs, result, transcripts and files, in .fix/NAME.md. */
-async function writeRun(room: string, correction: LearnerCorrection, name: string) {
+export async function writeRun(room: string, correction: Pick<LearnerCorrection, 'run_dir'>, name: string) {
   const fix = join(room, '.fix');
   // The run as it is: its folder for method case new, and what a reader needs from it.
   cpSync(correction.run_dir, join(fix, name), { recursive: true, verbatimSymlinks: true });
@@ -297,7 +312,7 @@ Read these first:
 - ${file}, the files it names, learned.json (rules learned from earlier corrections) and cases/ (the checks of earlier corrections).
 
 Then:
-1. Write the check of ${one ? 'this correction' : 'each correction'}: method case new ${file} --run ${one ? '.fix/run' : 'ITS RUN'} --id ${one ? id : 'ITS CHECK ID'} --note "THE PERSON'S WORDS" --rubric "ONE PLAIN SENTENCE THAT A RIGHT RESULT MEETS" (repeat --rubric; or --expect FILE, for example with a predicate script for an exact rule, a form or an action). It must fail on ${one ? 'this run' : 'its run'} and pass on a right result. Check only what the correction asks for.
+1. Write the check of ${one ? 'this correction' : 'each correction'}: method case new ${file} --run ${one ? '.fix/run' : 'ITS RUN'} --id ${one ? id : 'ITS CHECK ID'} --note "THE PERSON'S WORDS" --rubric "ONE PLAIN SENTENCE THAT A RIGHT RESULT MEETS" (repeat --rubric; or --expect FILE, for example with a predicate script for an exact rule, a form or an action). It must fail on ${one ? 'this run' : 'its run'} and pass on a right result. Check what the correction asks for, and keep what it left: when the person names some parts of a result as wrong (some answers of several, some lines or fields), they read the rest and left it, so the check also requires each part that they did not correct to stay as it is in this run (a predicate script with --expect does this exactly). Leave a part out only when the correction says that it was not checked.
 2. Find the cause and change the Method. You may change anything: a prompt, a learned rule in learned.json, a new run step with a data file, a check, a split of a step that does too much, examples. Put exact rules, values, dates and lists in code or data; use a model step only for judgement; one task per prompt; add a check on an output that matters.
 3. Run method validate ${file} and ${one ? `method test ${file} --case ${id}` : `method test ${file} --case ID for each new check`}. You need not test the earlier checks: when you finish, Method tests every earlier check itself, and gives you any that your change breaks.
 4. Write .fix/result.json, ${one ? `one of:
@@ -306,7 +321,7 @@ Then:
    Write for the person about their work: no names of steps, files, checks or Method's parts.
 
 When you finish, Method checks your work, and gives you the exact failure when it does not pass:
-- The person's own words stay word for word. Every paragraph of the goal and the prompts in ${file}, and of the .md and .txt files in this folder, was written by the person, except the paragraphs in .fix/method-text.md. Add text before, after or between their paragraphs as you need. To change or remove one of their paragraphs, ask first: give outcome question, and quote the paragraph in the question.
+- The person's own words stay word for word. Every paragraph of the goal and the prompts in ${file}, and of the .md and .txt files in this folder, was written by the person, except the paragraphs in .fix/method-text.md. Add text before, after or between their paragraphs as you need. You may move a paragraph of theirs, unchanged, to another prompt or another .md or .txt file, for example to split a step. To change or remove one of their paragraphs, ask first: give outcome question, and quote the paragraph in the question.
 - The new check fails on the Method as it was, and passes on your version (3 runs in 3 when a model step runs live).
 - Every earlier check that passed before still passes. Change no file in cases/ except your new check${one ? '' : 's'}.
 - method validate ${file} gives no errors.
@@ -377,7 +392,7 @@ export const LATER_AFTER_MS = 180_000;
 const RUNS_AT_ONCE = 12;
 
 /** The earlier checks that a change broke, as failures for the agent and the people whose checks they are. */
-function broken(rows: any[], casesDir: string, correction: LearnerCorrection | undefined) {
+export function broken(rows: any[], casesDir: string, correction: LearnerCorrection | undefined) {
   const problems: string[] = [], others: { by: string; note: string }[] = [];
   for (const row of rows) {
     const broke = row.verdict === 'regression' || (row.verdict === 'unverifiable' && row.baseline?.status !== 'unverifiable');
