@@ -1738,15 +1738,26 @@ async function treatLearner(plan: Plan, arm: any, learner: number, events: any[]
   return { learner, events: done, missing, snapshots, ...(redesigns.length ? { redesigns } : {}) };
 }
 
-/** The fix outcome records in a Method cache (fixes/METHOD/outcomes/JUDGMENT.json), by path, with their times. */
+/**
+ * The fix outcome records in a Method cache (fixes/METHOD/outcomes/JUDGMENT.json), by path, each with the hash of its
+ * content (without whether method wait showed it). Not their times: the copy of a chat's cache back to the learner's
+ * cache gives every file a new time, so a time would make every earlier fix look new.
+ */
 function fixRecords(cache: string) {
-  const found = new Map<string, number>();
+  const found = new Map<string, string>();
   let methods: string[] = [];
   try { methods = readdirSync(join(cache, 'fixes')); } catch { return found; }
   for (const id of methods) {
     let names: string[] = [];
     try { names = readdirSync(join(cache, 'fixes', id, 'outcomes')).filter(n => /^jdg_.*\.json$/.test(n)); } catch { continue; }
-    for (const name of names) { const path = join(cache, 'fixes', id, 'outcomes', name); try { found.set(path, statSync(path).mtimeMs); } catch { /* gone */ } }
+    for (const name of names) {
+      const path = join(cache, 'fixes', id, 'outcomes', name);
+      let text: string;
+      try { text = readFileSync(path, 'utf8'); } catch { continue; }
+      let content = text;
+      try { const { shown: _shown, ...rest } = JSON.parse(text); content = JSON.stringify(rest); } catch { /* the text itself */ }
+      found.set(path, createHash('sha256').update(content).digest('hex'));
+    }
   }
   return found;
 }
@@ -1754,7 +1765,7 @@ function fixRecords(cache: string) {
  * The fixes that ended in a chat with Fixed whose change the project does not keep: the fixed file is not in the
  * project's desk, or no file of the project changed. Each as "JUDGMENT (FILE)".
  */
-function lostFixes(cache: string, before: Map<string, number>, desk: string, did: Did) {
+function lostFixes(cache: string, before: Map<string, string>, desk: string, did: Did) {
   const lost: string[] = [];
   for (const [path, at] of fixRecords(cache)) {
     if (before.get(path) === at) continue;
@@ -1768,7 +1779,7 @@ function lostFixes(cache: string, before: Map<string, number>, desk: string, did
   return lost;
 }
 /** The tokens of the fixes that ended in a chat: each outcome written or changed since before, or null when one has no count. */
-function fixTokens(cache: string, before: Map<string, number>) {
+function fixTokens(cache: string, before: Map<string, string>) {
   let total = 0;
   for (const [path, at] of fixRecords(cache)) {
     if (before.get(path) === at) continue;

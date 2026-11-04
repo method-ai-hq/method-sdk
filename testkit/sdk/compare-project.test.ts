@@ -88,6 +88,11 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   const task = /task (\\d+)\\. Save your answer as (\\S+)\\./.exec(prompt);
   if (task) fs.writeFileSync(path.join(cwd, task[2]), String(Number(task[1]) + known.split('\\n').filter(l => l.includes('add one')).length));
   else if (prompt.startsWith('Which rules')) { result = known || 'None yet.'; fs.mkdirSync(path.dirname(memory), { recursive: true }); fs.appendFileSync(memory, 'I was asked about my rules.\\n'); }
+  else if (fs.existsSync(${JSON.stringify(join(root, 'no-fix-found'))}) && argv.includes('--resume') && hasMethod && fs.existsSync(path.join(process.env.METHOD_CACHE_DIR, 'fixes'))) {
+    // After the first fix, a correction that Method finds no fix for: the chat runs method judge and changes nothing.
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'method judge run_2 wrong --note "' + prompt.slice(0, 20) + '"' } }] } });
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'No fix found yet.' }] } });
+  }
   else if (argv.includes('--resume')) {
     if (!prompt.startsWith("That's right")) { fs.mkdirSync(path.dirname(notes), { recursive: true }); fs.appendFileSync(notes, prompt + '\\n'); }
     if (hasMethod) {
@@ -500,4 +505,18 @@ it('a fix that said Fixed but whose change the project does not keep stops the e
   expect(learner.missing[0].detail).toContain(join(elsewhere, 'review.method'));
   // Its start stays, so a rerun gives the event again from the same state.
   expect(existsSync(join(methodLearner(comparison), 'events', '2', 'start', 'project'))).toBe(true);
+}, 600_000);
+
+it('a correction with no fix after an earlier Fixed counts as not edited: only the fixes that this chat ended are checked, though the copy back gives every fix record a new time', async () => {
+  const { root, file } = redesignFixture();
+  writeFileSync(join(root, 'no-fix-found'), '');
+  const compiled = await compileComparison(file);
+  const comparison = JSON.parse(readFileSync(compiled.inputs, 'utf8')).comparison as string;
+  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  const learner = treated.find((t: any) => t.arm === 'method').learners[0];
+  expect(learner.events.map((e: any) => [e.index, e.outcome, e.received])).toEqual([[1, 'edited', true], [2, 'not_edited', true]]);
+  expect(learner.missing).toEqual([]);
+  // A rerun gives nothing again.
+  const again = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  expect(again.find((t: any) => t.arm === 'method').learners[0].events.map((e: any) => e.outcome)).toEqual(['edited', 'not_edited']);
 }, 600_000);
