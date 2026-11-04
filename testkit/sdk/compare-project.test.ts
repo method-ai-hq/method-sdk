@@ -91,9 +91,22 @@ process.stdin.on('data', d => prompt += d).on('end', () => {
   else if (argv.includes('--resume')) {
     if (!prompt.startsWith("That's right")) { fs.mkdirSync(path.dirname(notes), { recursive: true }); fs.appendFileSync(notes, prompt + '\\n'); }
     if (hasMethod) {
-      if (!fs.existsSync(path.join(cwd, 'review.method'))) fs.writeFileSync(path.join(cwd, 'review.method'), JSON.stringify({ format: 'method/3.4', id: 'wf_' + 'b'.repeat(32), name: 'Review' }) + '\\n');
+      if (!fs.existsSync(path.join(cwd, 'review.method'))) fs.writeFileSync(path.join(cwd, 'review.method'), JSON.stringify({ format: 'method/3.4', id: 'wf_' + 'b'.repeat(32), name: 'Review', steps: {} }) + '\\n');
       out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'method judge run_1 wrong --note "' + prompt.slice(0, 20) + '"' } }] } });
       out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'b1', content: 'ok' }] } });
+      // With fixes on, the fix works as Method's does: it changes the Method's home file (the file that claimed the
+      // Method first, or that a redesign claimed), saves a check beside it, and records Fixed in the Method cache.
+      if (fs.existsSync(${JSON.stringify(join(root, 'fixes-on'))}) && !prompt.startsWith("That's right")) {
+        const cache = process.env.METHOD_CACHE_DIR, homeFile = path.join(cache, 'homes', 'review.json');
+        if (!fs.existsSync(homeFile)) { fs.mkdirSync(path.dirname(homeFile), { recursive: true }); fs.writeFileSync(homeFile, JSON.stringify({ path: path.join(cwd, 'review.method') })); }
+        const home = JSON.parse(fs.readFileSync(homeFile, 'utf8')).path, outcomes = path.join(cache, 'fixes', 'wf_' + 'b'.repeat(32), 'outcomes');
+        fs.mkdirSync(outcomes, { recursive: true });
+        const n = fs.readdirSync(outcomes).length + 1, judgment = 'jdg_' + String(n).repeat(32);
+        fs.mkdirSync(path.join(path.dirname(home), 'cases', 'correction-' + n), { recursive: true });
+        fs.writeFileSync(path.join(path.dirname(home), 'cases', 'correction-' + n, 'case.json'), JSON.stringify({ note: prompt }));
+        fs.writeFileSync(path.join(outcomes, judgment + '.json'), JSON.stringify({ judgment, file: home, status: 'done', outcome: { id: judgment, outcome: 'fixed', tokens: 7 } }));
+        result = 'Fixed.';
+      }
     }
   }
   out({ type: 'result', subtype: 'success', is_error: false, result, usage: { input_tokens: 100, output_tokens: 20 } });
@@ -415,4 +428,76 @@ it('a Codex project chat is codex exec in the project folder, resumed by its thr
   for (const cell of cells) runs.push(JSON.parse((await compareStage('cell', { cell: JSON.stringify(cell) })).full_run as string));
   expect(runs.map(r => [r.checkpoint, r.result])).toEqual([[0, '1'], [0, '2'], [2, '2'], [2, '3']]);
   expect(runs[0].models).toEqual(['gpt-6.1-sol']);
+}, 600_000);
+
+/**
+ * A stand-in for the method CLI's redesign on PATH: `method redesign FILE --json` claims FILE as the Method's home in
+ * its Method cache (as method redesign saves the file), or the path in ROOT/redesign-home when that file exists.
+ */
+function methodStub(root: string) {
+  writeFileSync(join(root, 'bin', 'method'), `#!/usr/bin/env node
+const fs = require('fs'), path = require('path');
+const [command, file] = process.argv.slice(2);
+if (command !== 'redesign') process.exit(1);
+fs.appendFileSync(${JSON.stringify(join(root, 'redesigns.jsonl'))}, JSON.stringify({ file }) + '\\n');
+const other = ${JSON.stringify(join(root, 'redesign-home'))};
+const home = fs.existsSync(other) ? fs.readFileSync(other, 'utf8') : file;
+fs.mkdirSync(path.join(process.env.METHOD_CACHE_DIR, 'homes'), { recursive: true });
+fs.writeFileSync(path.join(process.env.METHOD_CACHE_DIR, 'homes', 'review.json'), JSON.stringify({ path: home }));
+console.log(JSON.stringify({ line: 'Redesigned review.method.', tokens: 3 }));
+`, { mode: 0o700 });
+}
+/** The fixture with fixed corrections and a redesign after the first, and fixes that change the Method's home. */
+function redesignFixture() {
+  const { root, file } = fixture();
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  const { 'teaching/t1.json': _t1, 'teaching/t2.json': _t2, ...expected } = doc.expected;
+  writeFileSync(file, JSON.stringify({ ...doc, expected, treatment: { checkpoints: [0, 2], redesign: [1],
+    events: [{ correction: 'It needs to be 6 because we add one.', input: 'teaching/t1.json' }, { correction: 'It needs to be 7 because we add one.', input: 'teaching/t2.json' }] } }));
+  writeFileSync(join(root, 'fixes-on'), '');
+  const calls = claudeStub(root);
+  methodStub(root);
+  return { root, file, calls };
+}
+const methodLearner = (comparison: string) => {
+  const plan = JSON.parse(comparison);
+  const arm = join(plan.folder, 'arms', 'method');
+  return join(arm, readdirSync(arm).find(d => d.startsWith('treatment-'))!, 'learner-1');
+};
+
+it('a fix after a redesign is kept in the project, as before the redesign: the redesign runs in the project\'s desk, where the chats run the Method', async () => {
+  const { root, file, calls } = redesignFixture();
+  const compiled = await compileComparison(file);
+  const comparison = JSON.parse(readFileSync(compiled.inputs, 'utf8')).comparison as string;
+  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  const learner = treated.find((t: any) => t.arm === 'method').learners[0];
+  expect(learner.redesigns.map((r: any) => [r.at_event, r.received, r.line])).toEqual([[1, true, 'Redesigned review.method.']]);
+  // The redesign changed the file that the chats work on, not the comparison's copy of the project.
+  const [redesigned] = lines(join(root, 'redesigns.jsonl'));
+  const chat = calls().find(c => c.hasMethod)!;
+  expect(redesigned.file).toBe(join(chat.cwd, 'review.method'));
+  expect(learner.events.map((e: any) => [e.index, e.outcome])).toEqual([[1, 'edited'], [2, 'edited']]);
+  expect(learner.events[1].change.summary).toContain('cases/correction-2/case.json');
+  // Both checks are in the project that the comparison keeps, and in its checkpoint.
+  const project = join(methodLearner(comparison), 'project');
+  expect(readdirSync(join(project, 'cases')).sort()).toEqual(['correction-1', 'correction-2']);
+  expect(JSON.parse(readFileSync(join(project, 'cases', 'correction-2', 'case.json'), 'utf8')).note).toBe('It needs to be 7 because we add one.');
+  expect(existsSync(join(methodLearner(comparison), 'after-2', 'project', 'cases', 'correction-2'))).toBe(true);
+}, 600_000);
+
+it('a fix that said Fixed but whose change the project does not keep stops the event as a product error, not as "not edited"', async () => {
+  const { root, file } = redesignFixture();
+  const compiled = await compileComparison(file);
+  const comparison = JSON.parse(readFileSync(compiled.inputs, 'utf8')).comparison as string;
+  // The Method's home goes outside the project's desk at the redesign, as it did when the redesign ran on the comparison's copy.
+  const elsewhere = join(root, 'elsewhere');
+  mkdirSync(elsewhere);
+  writeFileSync(join(root, 'redesign-home'), join(elsewhere, 'review.method'));
+  const treated = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
+  const learner = treated.find((t: any) => t.arm === 'method').learners[0];
+  expect(learner.events.map((e: any) => [e.index, e.outcome, e.received])).toEqual([[1, 'edited', true], [2, 'stopped', false]]);
+  expect(learner.missing[0]).toMatchObject({ index: 2, reason: 'a product error: Method said Fixed, but the project does not keep the change' });
+  expect(learner.missing[0].detail).toContain(join(elsewhere, 'review.method'));
+  // Its start stays, so a rerun gives the event again from the same state.
+  expect(existsSync(join(methodLearner(comparison), 'events', '2', 'start', 'project'))).toBe(true);
 }, 600_000);

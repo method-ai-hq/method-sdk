@@ -145,6 +145,21 @@ export function projectDesk(project: string) {
   return join(root, createHash('sha256').update(resolve(project)).digest('hex').slice(0, 16), 'project');
 }
 /**
+ * Put a project in its desk to work on it: the project, and its Method cache beside it (so no path names the
+ * comparison's folder). Every Method command of the project runs here (its chats and its redesign), so a Method's
+ * home is the desk's file, and a fix writes where keep() copies from. keep() copies the desk back to the project and
+ * the cache; remove() removes the desk.
+ */
+export function openDesk(project: string, cache: string | null) {
+  const desk = projectDesk(project);
+  copyTree(project, desk);
+  const deskCache = cache ? join(dirname(desk), 'cache') : null;
+  if (cache && deskCache) copyTree(cache, deskCache);
+  const keep = () => { copyTree(desk, project); if (cache && deskCache) copyTree(deskCache, cache); };
+  return { desk, cache: deskCache, keep, remove: () => removeTree(dirname(desk)) };
+}
+
+/**
  * Open one chat in a project folder. Each send is one message of the same chat (the first starts it, the next resume
  * it). close() waits for every Method fix that the chat started to end, puts Claude Code's memory back, and removes the
  * room. artifacts: where each message keeps its prompt, events and transcript (session/attempt-N), as a Method session
@@ -165,12 +180,7 @@ async function openClaudeChat(project: string, settings: ChatSettings, artifacts
   // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the account's cloud plugins and skills are not synced into the room.
   const env: NodeJS.ProcessEnv = { ...room.env, PATH: pathWithoutMethod(process.env.PATH ?? '', room.root), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' };
   // The chat works in the project's desk; after each message the desk is copied back to the project.
-  const desk = projectDesk(project);
-  copyTree(project, desk);
-  // A project with the Method plugin: its Method cache is beside the desk, so no path in the chat names the comparison's folder.
-  const deskCache = settings.method ? join(dirname(desk), 'cache') : null;
-  if (settings.method && deskCache) copyTree(settings.method.cache, deskCache);
-  const keep = () => { copyTree(desk, project); if (settings.method && deskCache) copyTree(deskCache, settings.method.cache); };
+  const { desk, cache: deskCache, keep, remove } = openDesk(project, settings.method?.cache ?? null);
   // The memory folder of this project (by its path, and by its real path when they differ).
   let real = desk;
   try { real = realpathSync(desk); } catch { /* the path itself */ }
@@ -247,7 +257,7 @@ async function openClaudeChat(project: string, settings: ChatSettings, artifacts
           .filter(dir => existsSync(dir) && ![own, ...memoryFolders].some(o => o && resolve(o) === resolve(dir)) && Object.keys(projectFiles(dir)).length) : [];
         for (const dir of others) cpSync(dir, memory, { recursive: true, force: false, errorOnExist: false });
       }
-    } finally { chmodSync(room.root, 0o700); await room.remove(); removeTree(dirname(desk)); }
+    } finally { chmodSync(room.root, 0o700); await room.remove(); remove(); }
   };
   return { send, close };
 }
@@ -278,11 +288,7 @@ async function openCodexChat(project: string, settings: ChatSettings, artifacts:
       ...(settings.web ? [] : ['web_search = "disabled"']),
       '', '[features]', 'apps = false', 'remote_plugin = false', 'plugin_discovery_prefetch = false', ''].join('\n'), { mode: 0o600 });
     if (memory && existsSync(memory)) for (const name of codexMemory) if (existsSync(join(memory, name))) cpSync(join(memory, name), join(home, name), { recursive: true });
-    const desk = projectDesk(project);
-    copyTree(project, desk);
-    const deskCache = settings.method ? join(dirname(desk), 'cache') : null;
-    if (settings.method && deskCache) copyTree(settings.method.cache, deskCache);
-    const keep = () => { copyTree(desk, project); if (settings.method && deskCache) copyTree(deskCache, settings.method.cache); };
+    const { desk, cache: deskCache, keep, remove } = openDesk(project, settings.method?.cache ?? null);
     const hooks: string[] = [];
     if (settings.plugins.includes('method')) {
       const m = settings.method;
@@ -351,7 +357,7 @@ async function openCodexChat(project: string, settings: ChatSettings, artifacts:
           removeTree(join(memory, name));
           if (existsSync(join(home, name))) cpSync(join(home, name), join(memory, name), { recursive: true });
         }
-      } finally { chmodSync(room.root, 0o700); await room.remove(); removeTree(dirname(desk)); }
+      } finally { chmodSync(room.root, 0o700); await room.remove(); remove(); }
     };
     return { send, close };
   } catch (error) { chmodSync(room.root, 0o700); await room.remove(); throw error; }

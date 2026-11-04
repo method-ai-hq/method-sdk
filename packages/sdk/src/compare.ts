@@ -29,7 +29,7 @@ import { ensureLocalServer, registerLocalRun } from './local-server.js';
 import { correctionCaseId } from './improve.js';
 import { FIX_LIMIT_MS, paragraphs, textPlaces, writtenFile } from './learner.js';
 import { textDiff } from './text-diff.js';
-import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
+import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, didSummary, ownMethodIds, fillMessage, handedIn as handedInFile, keptSomething, comparisonPlugin, openChat, openDesk, projectDesk, placeInput, projectDiff, projectFiles, projectPlugins, whatItDid, type ChatSettings, type Did, type ProjectPlugin } from './compare-project.js';
 import { cliBin } from './prepare.js';
 import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
 
@@ -1580,6 +1580,11 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
     }
   } finally { await chat.close(); }
   const did = whatItDid(before, projectFiles(learner.project), turns.flatMap(t => t.entries), event.input.deliverable, { before: memoryBefore, after: projectFiles(learner.memory) });
+  // A fix that said Fixed changed the project's file in its desk; when the project does not keep its change, the
+  // comparison is wrong, not the agent: the event stops (its start stays, so a rerun gives it again).
+  const lost = lostFixes(learner.cache, fixesBefore, projectDesk(learner.project), did);
+  if (lost.length) return { received: false, outcome: 'stopped', reason: 'a product error: Method said Fixed, but the project does not keep the change',
+    detail: `The fix of ${lost.join(', ')} said Fixed, but its change is not in the project that the comparison keeps. Nothing after this event is given.` };
   const diff = projectDiff(join(start, 'project'), learner.project, did, { before: join(start, 'memory'), after: learner.memory }, project.agent);
   removeTree(start);
   // A chat's tokens and the tokens of each Method fix that it started (its sessions and test runs).
@@ -1745,6 +1750,23 @@ function fixRecords(cache: string) {
   }
   return found;
 }
+/**
+ * The fixes that ended in a chat with Fixed whose change the project does not keep: the fixed file is not in the
+ * project's desk, or no file of the project changed. Each as "JUDGMENT (FILE)".
+ */
+function lostFixes(cache: string, before: Map<string, number>, desk: string, did: Did) {
+  const lost: string[] = [];
+  for (const [path, at] of fixRecords(cache)) {
+    if (before.get(path) === at) continue;
+    let record: any;
+    try { record = JSON.parse(readFileSync(path, 'utf8')); } catch { continue; }
+    if (record?.outcome?.outcome !== 'fixed') continue;
+    const file = typeof record.file === 'string' ? resolve(record.file) : null;
+    if (!file || !file.startsWith(desk + sep) || !(did.added.length + did.changed.length + did.removed.length))
+      lost.push(`${record.judgment ?? basename(path, '.json')} (${file ?? 'no file named'})`);
+  }
+  return lost;
+}
 /** The tokens of the fixes that ended in a chat: each outcome written or changed since before, or null when one has no count. */
 function fixTokens(cache: string, before: Map<string, number>) {
   let total = 0;
@@ -1802,23 +1824,28 @@ function writerOwnsStart(dir: string, userFiles: string[]) {
  */
 async function redesignSession(plan: Plan, arm: any, learner: { method: { dir: string; file: string; cache: string } | null; project: { project: string; cache: string; memory: string } | null }, workDir: string): Promise<{ received: boolean; line: string; did?: Did; tokens?: number | null }> {
   mkdirSync(workDir, { recursive: true, mode: 0o700 });
-  const files = learner.method ? [join(learner.method.dir, learner.method.file)] : arm.project?.plugins?.includes('method') ? methodFiles(learner.project!.project) : null;
-  if (files) {
-    if (!files.length) return { received: true, line: 'there is no Method in the project to redesign.' };
-    const lines: string[] = [];
-    let tokens: number | null = 0;
-    for (const file of files) {
-      const room = await armRoom(file, learner.method?.cache ?? learner.project!.cache, true);
-      try {
-        const done = await command(['redesign', file, '--json'], room.env);
-        writeFileSync(join(workDir, `${basename(file)}.log`), `${done.stdout}\n${done.stderr}`, { mode: 0o600 });
-        let out: any;
-        try { out = JSON.parse(done.stdout); } catch { return { received: false, line: `method redesign ${basename(file)} failed: ${done.stderr.trim().split('\n').at(-1) ?? ''}` }; }
-        lines.push(out.line);
-        tokens = typeof out.tokens === 'number' && tokens !== null ? tokens + out.tokens : null;
-      } finally { await room.remove(); }
-    }
-    return { received: true, line: lines.join(' '), tokens };
+  if (learner.method || arm.project?.plugins?.includes('method')) {
+    // A project's Methods are redesigned in its desk, where its chats run them: the Method's home stays the desk's
+    // file, so the fixes of later chats change the file that the project keeps.
+    const desk = learner.method ? null : openDesk(learner.project!.project, learner.project!.cache);
+    try {
+      const files = desk ? methodFiles(desk.desk) : [join(learner.method!.dir, learner.method!.file)];
+      if (!files.length) return { received: true, line: 'there is no Method in the project to redesign.' };
+      const lines: string[] = [];
+      let tokens: number | null = 0;
+      for (const file of files) {
+        const room = await armRoom(file, desk?.cache ?? learner.method!.cache, true);
+        try {
+          const done = await command(['redesign', file, '--json'], room.env);
+          writeFileSync(join(workDir, `${basename(file)}.log`), `${done.stdout}\n${done.stderr}`, { mode: 0o600 });
+          let out: any;
+          try { out = JSON.parse(done.stdout); } catch { return { received: false, line: `method redesign ${basename(file)} failed: ${done.stderr.trim().split('\n').at(-1) ?? ''}` }; }
+          lines.push(out.line);
+          tokens = typeof out.tokens === 'number' && tokens !== null ? tokens + out.tokens : null;
+        } finally { await room.remove(); }
+      }
+      return { received: true, line: lines.join(' '), tokens };
+    } finally { if (desk) { desk.keep(); desk.remove(); } }
   }
   const project = learner.project!;
   const before = projectFiles(project.project), memoryBefore = projectFiles(project.memory);
