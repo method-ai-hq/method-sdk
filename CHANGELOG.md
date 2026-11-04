@@ -1,3 +1,10 @@
+# 0.33.1
+
+Use runtime 0.18.2.
+
+- **A comparison keeps the fixes that come after a redesign.** A project arm with the Method plugin ran `method redesign` on the comparison's own copy of the project, so that copy became the Method's home. The fixes of later chats changed that copy, and the end of each chat put the chat's folder back over it: each later correction counted as "not edited". The redesign now runs in the project's own folder, where its chats run the Method, so a fix after a redesign is kept as a fix before it.
+- **A fix that says Fixed but whose change the project does not keep stops the event as a product error.** The event is not counted as "not edited"; it stops with the reason and the judgment, and its starting state stays so that a rerun gives it again.
+
 # 0.33.0
 
 Use runtime 0.18.2.
