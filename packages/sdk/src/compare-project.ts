@@ -447,13 +447,25 @@ export function ownMethodIds(project: string) {
   walk(project);
 }
 
-/** Wait until no Method fix in a Method cache still runs (its lock names a live process), for at most MESSAGE_LIMIT_MS. */
+/**
+ * Wait until no Method fix in a Method cache still runs, for at most MESSAGE_LIMIT_MS: no lock names a live process, and
+ * no correction is still being fixed by a live process (method judge marks it before the fix takes its lock), so the
+ * next task runs the fixed Method.
+ */
 export async function waitForFixes(cache: string) {
   const deadline = Date.now() + MESSAGE_LIMIT_MS;
+  const alive = (path: string, working = false) => {
+    try { const value = JSON.parse(readFileSync(path, 'utf8')); if (working && value.status !== 'working') return false; process.kill(value.pid, 0); return true; } catch { return false; }
+  };
   const running = () => {
     let names: string[];
     try { names = readdirSync(join(cache, 'fixes')); } catch { return false; }
-    return names.some(name => { try { process.kill(JSON.parse(readFileSync(join(cache, 'fixes', name, 'lock'), 'utf8')).pid, 0); return true; } catch { return false; } });
+    return names.some(name => {
+      if (alive(join(cache, 'fixes', name, 'lock'))) return true;
+      let records: string[] = [];
+      try { records = readdirSync(join(cache, 'fixes', name, 'outcomes')).filter(file => file.endsWith('.json')); } catch { /* no outcomes */ }
+      return records.some(file => alive(join(cache, 'fixes', name, 'outcomes', file), true));
+    });
   };
   while (running()) {
     if (Date.now() > deadline) throw Error('A Method fix that the chat started did not end within 2 hours.');

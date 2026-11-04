@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, openSync, closeSync, readFileSync, realpathSync,
 import { spawn } from 'node:child_process';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { methodIssues } from '@withmethod/runtime/document.js';
 import { isModelId } from '@withmethod/runtime/semantics.js';
 import { parseDocumentValue } from '../../workflow-language/src/validate.js';
@@ -14,6 +14,7 @@ import { authoringPath } from './authoring.js';
 import { changedSteps, checkTargets, checks, checksDir, evaluateTarget, modelIssues, runChecks, shownChecks, type Issue, type Target } from './model-checks.js';
 import { packageFileNames } from './method-files.js';
 import { MethodClient } from './method-client.js';
+import { newestRunOf } from './local-judgments.js';
 
 /** A .env file holds secret values: issue checks never read it. */
 export const refused = (path: string) => /^\.env(\.|$)/.test(basename(path));
@@ -61,6 +62,46 @@ export function privacyIssues(method: any, privateIds: Set<string>): Issue[] {
   }));
 }
 
+/** The code of the warning about one large input that several model steps received. */
+export const SHARED_INPUT = 'shared_large_input';
+/** The characters of one input from which it counts as large: about 25,000 tokens. */
+const LARGE_INPUT_CHARS = 100_000;
+const modelKinds = new Set(['call', 'agent', 'session']);
+/**
+ * The same large input given to two or more model steps in the newest run of this Method on this computer: one
+ * warning on each step after the first that received it. Only a step that still binds the input as it did in that run
+ * is named. Undefined when no run of the file is here: the check cannot run.
+ */
+export function sharedInputIssues(file: string, method: any): Issue[] | undefined {
+  const run = newestRunOf(file);
+  if (!run) return undefined;
+  let ran: any, events: any[];
+  try {
+    ran = JSON.parse(readFileSync(join(run.dir, 'method.json'), 'utf8'));
+    events = readFileSync(join(run.dir, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+  } catch { return undefined; }
+  const found = new Map<string, { ref: string; chars: number; steps: string[] }>();
+  for (const event of events) {
+    if (event.event !== 'step.started') continue;
+    const then = ran.steps?.[event.step], now = method.steps?.[event.step];
+    if (!modelKinds.has(then?.do?.kind) || !now || !modelKinds.has(now.do?.kind)) continue;
+    for (const [alias, ref] of Object.entries<any>(then.in ?? {})) {
+      if (now.in?.[alias] !== ref) continue;
+      const value = event.inputs?.[alias], text = typeof value === 'string' ? value : JSON.stringify(value ?? null);
+      if (text.length < LARGE_INPUT_CHARS) continue;
+      const key = createHash('sha256').update(text).digest('hex'), entry = found.get(key) ?? { ref: String(ref), chars: text.length, steps: [] };
+      if (!entry.steps.includes(event.step)) entry.steps.push(event.step);
+      found.set(key, entry);
+    }
+  }
+  const named = (steps: string[]) => steps.length === 2 ? steps.join(' and ') : `${steps.slice(0, -1).join(', ')} and ${steps.at(-1)}`;
+  return [...found.values()].filter(entry => entry.steps.length > 1).flatMap(entry => entry.steps.slice(1).map(step => ({
+    code: SHARED_INPUT, level: 'warning' as const, step,
+    message: `Steps ${named(entry.steps)} each received the same input ${entry.ref} (about ${(Math.round(entry.chars / 4000) * 1000).toLocaleString("en-US")} tokens) in the newest run. A model step receives all its inputs again on every model request in the step.`,
+    fix: 'Give each model step only the evidence it needs: let a run step find the passages that it cites, checks or changes, and give the complete documents to one model step at most (Design from the problem, in method authoring).',
+  })));
+}
+
 export type IssueReport = { issues: Issue[]; changed?: Set<string>; pending: number; notChecked: string[]; invalid?: boolean };
 /**
  * All issues of a Method file. With changed, model checks run for the steps whose text changed since the last
@@ -95,10 +136,12 @@ export async function collectIssues(file: string, options: { phase?: 'validate' 
   // Shadow checks and checks without an answer give no accept_unused note.
   const notChecked = [...Object.keys(checks).filter(code => !shownChecks.includes(code) || targets.some(target => target.check === code && !computed.has(`${code} ${target.step}`))),
     ...(list ? [] : ['model_not_private'])];
+  const shared = sharedInputIssues(path, method);
+  if (!shared) notChecked.push(SHARED_INPUT);
   const issues = methodIssues(text, {
     secretValues: deviceSecretValues(declared), availableSecrets: Object.keys(resolveSecrets(declared)), phase: 'validate',
     files: folderBytes(path, packageFileNames(dirname(path), method)),
-    issues: [...modelIssues(results), ...(list ? privacyIssues(method, new Set(list.models.map(model => model.id))) : [])],
+    issues: [...modelIssues(results), ...(list ? privacyIssues(method, new Set(list.models.map(model => model.id))) : []), ...(shared ?? [])],
     notChecked,
   } as any) as Issue[];
   return { issues, ...(changed ? { changed } : {}), pending: provider ? pending.length : 0, notChecked };
@@ -140,7 +183,8 @@ export function shownIssues(report: IssueReport, flags: { notes?: boolean; all?:
   const open = report.issues.filter(issue => issue.accepted === undefined);
   const errors = open.filter(issue => issue.level === 'error');
   const warnings = open.filter(issue => issue.level === 'warning');
-  const fresh = flags.all || !report.changed ? warnings : warnings.filter(issue => !issue.step || report.changed!.has(issue.step));
+  // A warning from the newest run is shown whether or not its step changed.
+  const fresh = flags.all || !report.changed ? warnings : warnings.filter(issue => !issue.step || report.changed!.has(issue.step) || issue.code === SHARED_INPUT);
   const listed = fresh;
   const notes = open.filter(issue => issue.level === 'note');
   const hidden = warnings.length - listed.length;

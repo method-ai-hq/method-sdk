@@ -36,7 +36,7 @@ const clip = (text: string, max: number) => text.length > max ? `${text.slice(0,
 
 /** The prompt of the redesign session. The same text for every Method: it names no task. */
 export function redesignPrompt(file: string) {
-  return `You are given a Method (a workflow of steps) in this folder, in the file ${file}, Method's guide in .fix/guide.md, and what the people who use it said, in .fix/corrections.md, with each corrected run in .fix/. Rewrite the Method from the problem, as a careful person who builds Methods would: first write in .fix/design.md what one input in and one answer out are, what decides each answer, where an answer usually goes wrong (use the corrections, their runs and the checks in cases/ only), and which step catches each kind of error. Then change the Method to that design. You may replace, split, add or remove any step, prompt, script or data file. Keep the model of the model steps.
+  return `You are given a Method (a workflow of steps) in this folder, in the file ${file}, Method's guide in .fix/guide.md, and what the people who use it said, in .fix/corrections.md, with each corrected run in .fix/. Rewrite the Method from the problem, as a careful person who builds Methods would: first write in .fix/design.md what one input in and one answer out are, what decides each answer, where an answer usually goes wrong (use the corrections, their runs and the checks in cases/ only), which step catches each kind of error, and which evidence each model step receives (Design from the problem in the guide: code finds the passages that a step needs; no more than one step reads every document). Then change the Method to that design. You may replace, split, add or remove any step, prompt, script or data file. Keep the model of the model steps.
 
 Keep the person's own words word for word: every paragraph of the goal and the prompts in ${file}, and of the .md and .txt files in this folder, except the paragraphs in .fix/method-text.md. You may move one of their paragraphs, unchanged, to another prompt or another .md or .txt file, and you may pass a file of theirs whole to every step that applies it; do not reword, shorten or drop one.
 
@@ -47,7 +47,7 @@ Then write .fix/result.json, one of:
    {"outcome": "no_change_needed", "detail": "WHY, IN PLAIN WORDS FOR THE PERSON"}: the Method already follows this design.
 Write for the person about their work: no names of steps, files, checks or Method's parts.
 
-When you finish, Method checks your work, and gives you the exact failure when it does not pass: the person's words are kept, method validate ${file} gives no errors, and every check in cases/ that passed before still passes (3 runs in 3 when a model step runs live).`;
+When you finish, Method checks your work, and gives you the exact failure when it does not pass: the person's words are kept, method validate ${file} gives no errors, and every check in cases/ that passed before still passes.`;
 }
 
 /** Write what the session reads in .fix/: the guide, every correction with its run, and the paragraphs Method wrote. */

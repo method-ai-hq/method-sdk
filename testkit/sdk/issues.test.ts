@@ -4,7 +4,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { methodMain } from '../../packages/sdk/src/method.js';
 import { checkKey, checkTargets, checksDir, modelIssues, runChecks, stepText } from '../../packages/sdk/src/model-checks.js';
-import { collectIssues, formatIssue, privacyIssues, publishIssues, shownIssues, hostedModelUses } from '../../packages/sdk/src/method-issues.js';
+import { collectIssues, formatIssue, privacyIssues, publishIssues, shownIssues, hostedModelUses, sharedInputIssues } from '../../packages/sdk/src/method-issues.js';
 import { privateModels } from '../../packages/sdk/src/hosted-models.js';
 import { MethodClient } from '../../packages/sdk/src/method-client.js';
 import YAML from 'yaml';
@@ -228,3 +228,32 @@ it('a folder that cannot be converted stays as it was', async () => {
   expect(snapshot()).toEqual(before);
 });
 
+
+it('validate warns when two model steps received the same large input in the newest run, and only then', () => {
+  const cache = mkdtempSync(join(tmpdir(), 'method-cache-')); dirs.push(cache);
+  vi.stubEnv('METHOD_CACHE_DIR', cache);
+  const steps = (auditIn: Record<string, string>) => ({ read: { do: { kind: 'run' } }, draft: { in: { sources: 'sources' }, do: { kind: 'call' } }, audit: { in: auditIn, do: { kind: 'call' } }, check: { in: { sources: 'sources' }, do: { kind: 'run' } } });
+  const { file } = folder();
+  const ran = (size: number) => {
+    const dir = join(cache, 'runs', `run-${size}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'method.json'), JSON.stringify({ steps: steps({ sources: 'sources', memo: 'memo' }) }));
+    writeFileSync(join(dir, 'method-file.json'), JSON.stringify({ path: file }));
+    const sources = 'x'.repeat(size);
+    writeFileSync(join(dir, 'events.jsonl'), [{ event: 'run.started', at: '2026-11-04T10:00:00Z' }, { event: 'step.started', step: 'draft', iteration: 0, inputs: { sources } },
+      { event: 'step.started', step: 'audit', iteration: 0, inputs: { sources, memo: 'm' } }, { event: 'step.started', step: 'check', iteration: 0, inputs: { sources } }].map(e => JSON.stringify(e)).join('\n') + '\n');
+    return dir;
+  };
+  // No run here: the check cannot run.
+  expect(sharedInputIssues(file, { steps: steps({ sources: 'sources' }) })).toBeUndefined();
+  // Two model steps got the same 760,000 characters: a warning on the second one. A run step that reads it is not counted.
+  const big = ran(760_000);
+  expect(sharedInputIssues(file, { steps: steps({ sources: 'sources', memo: 'memo' }) })).toEqual([expect.objectContaining({ code: 'shared_large_input', level: 'warning', step: 'audit',
+    message: 'Steps draft and audit each received the same input sources (about 190,000 tokens) in the newest run. A model step receives all its inputs again on every model request in the step.' })]);
+  // After a change, the audit step reads only what code found: the newest run no longer names it.
+  expect(sharedInputIssues(file, { steps: steps({ cited: 'cited', memo: 'memo' }) })).toEqual([]);
+  // A short document given to both steps is not a warning.
+  rmSync(big, { recursive: true });
+  ran(20_000);
+  expect(sharedInputIssues(file, { steps: steps({ sources: 'sources', memo: 'memo' }) })).toEqual([]);
+});

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { compareStage, compileComparison, decide, readComparison } from '../../packages/sdk/src/compare.js';
-import { comparisonPlugin, didSummary, methodCommands, whatItDid } from '../../packages/sdk/src/compare-project.js';
+import { comparisonPlugin, didSummary, methodCommands, waitForFixes, whatItDid } from '../../packages/sdk/src/compare-project.js';
 import { comparisonRunArgs } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
@@ -537,3 +537,21 @@ it('a correction with no fix after an earlier Fixed counts as not edited: only t
   const again = JSON.parse((await compareStage('treat', { comparison, go: true })).treatment as string);
   expect(again.find((t: any) => t.arm === 'method').learners[0].events.map((e: any) => e.outcome)).toEqual(['edited', 'not_edited']);
 }, 600_000);
+
+it('a chat ends only when the fix that its judgment started has ended, also before the fix takes its lock', async () => {
+  const { spawn } = await import('node:child_process');
+  const cache = mkdtempSync(join(tmpdir(), 'method-fixes-'));
+  try {
+    // method judge marked the correction as being fixed by a process that has not taken the Method's lock yet.
+    const fix = spawn('sleep', ['1']);
+    const outcomes = join(cache, 'fixes', 'wf_' + 'a'.repeat(32), 'outcomes');
+    mkdirSync(outcomes, { recursive: true });
+    writeFileSync(join(outcomes, 'jdg_1.json'), JSON.stringify({ status: 'working', pid: fix.pid }));
+    // A record of a fix that ended does not hold the chat.
+    writeFileSync(join(outcomes, 'jdg_0.json'), JSON.stringify({ status: 'done', pid: process.pid }));
+    const started = Date.now();
+    await waitForFixes(cache);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+    expect(fix.exitCode).toBe(0);
+  } finally { rmSync(cache, { recursive: true, force: true }); }
+});
