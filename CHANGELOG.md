@@ -1,3 +1,11 @@
+# 0.31.0
+
+Use runtime 0.18.1.
+
+- **A correction reaches the fix.** When the person sends a message in a project where a Method ran, the Method plugin tells the agent the newest run and to record a correction or approval of it with `method judge` before anything else (Claude Code and Codex).
+- **`method judge` judges the run the correction is about.** A wrong judgment of a run that is not the newest run of its Method file on this computer is refused, and the error names the newest run; `--earlier` judges the earlier run on purpose.
+- **A fix asks only to change the person's own words.** For a short or unclear correction it makes the change that the correction's words support, and keeps what the correction left, in place of a question that may wait for an answer.
+
 # 0.30.0
 
 Use runtime 0.18.1.
