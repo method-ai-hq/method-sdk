@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createCase } from '@withmethod/runtime/cases.js';
-import { changedUserText, learnCorrection, learnerAgent, learnerMethod, learnerPrompt, nextWritten, paragraphs, readWritten, textPlaces, type LearnerCorrection } from '../../packages/sdk/src/learner.js';
+import { RELATED, SAMPLE, changedUserText, chooseEarlier, learnCorrection, learnerAgent, learnerMethod, learnerPrompt, nextWritten, paragraphs, readWritten, textPlaces, type LearnerCorrection } from '../../packages/sdk/src/learner.js';
 import { backgroundFix, correctionCaseId, fixCorrections } from '../../packages/sdk/src/improve.js';
 import { runCases } from '../../packages/sdk/src/quality.js';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
@@ -125,11 +125,15 @@ it('a stub learner adds a run step with a data file: the gate tests it for real,
   expect(learned.diff).toContain('+++ legal.json');
   expect(learned.diff).toContain('+["non-compete"]');
   expect(learned.diff).not.toContain('cases/');
-  // One session: it read the brief in its room, with the run, the earlier corrections and the guide.
+  // One session with a direct prompt: the person's words, the run that got them, and the guide as a file to read when needed.
   expect(prompts).toHaveLength(1);
-  expect(prompts[0]).toBe(learnerPrompt('reply.method', [CASE]));
+  expect(prompts[0]).toBe(learnerPrompt('reply.method', [correction(badRun)], [CASE], []));
+  expect(prompts[0]).toMatch(/^Improve this Method based on this correction: "Non-competes go to Legal\."\nThe run that got it: \.fix\/run /);
+  expect(prompts[0]).toContain("Method's guide is in .fix/guide.md: read the parts that you need.");
+  // No rule that the gate enforces is in the prompt.
+  for (const rule of ['word for word', '80 or more', '3 runs in 3', 'every input', 'Every earlier check']) expect(prompts[0]).not.toContain(rule);
+  expect(prompts[0].length).toBeLessThan(1500);
   const brief = join(root, 'work', 'room', '.fix');
-  expect(readFileSync(join(brief, 'correction.md'), 'utf8')).toContain('Ryan wrote (2026-10-28):\n\nNon-competes go to Legal.');
   expect(readFileSync(join(brief, 'run.md'), 'utf8')).toContain('Thanks. We accept the non-compete clause.');
   expect(readFileSync(join(brief, 'guide.md'), 'utf8')).toContain('# A Method that just works');
   expect(existsSync(join(brief, 'run', 'events.jsonl'))).toBe(true);
@@ -184,12 +188,9 @@ it('refuses a change to the person\'s own words with the exact failure; the next
   });
   const learned = await learn(file, correction(badRun), root);
   expect(prompts).toHaveLength(2);
-  expect(prompts[1]).toContain('This is try 2 of 3.');
-  // A later try reads its notes and the failure, not the brief and the guide again.
-  expect(prompts[0]).toContain('Read these first:');
-  expect(prompts[1]).not.toContain('Read these first:');
-  expect(prompts[1]).toContain('Read only .fix/notes.md, .fix/correction.md, reply.method');
-  expect(prompts[1]).toContain('do not read .fix/guide.md whole again, and do not run method authoring');
+  // A later try gets one short message with the failure, before the same direct instruction.
+  expect(prompts[1]).toMatch(/^Your earlier try is in this folder\. Method checked it, and it did not pass:\n/);
+  expect(prompts[1].endsWith(prompts[0])).toBe(true);
   expect(prompts[1]).toContain('You changed the person\'s own words in the file guide.md: "Pawsome accepts standard clauses.". Put the paragraph back word for word.');
   expect(learned.outcome).toMatchObject({ outcome: 'fixed' });
   expect(learned.tries).toBe(2);
@@ -431,8 +432,7 @@ it('the learner tests only its new check; Method tests the new check first, and 
   // A check that still fails on the change: no earlier check runs.
   const prompts = stub(async dir => { await room.check(dir, 'Thanks. The non-compete clause goes to Legal today.'); await codeStep(dir); }, async dir => { rmSync(join(dir, 'cases', CASE), { recursive: true }); await codeStep(dir); });
   await learnCorrection(file, [correction(badRun)], { earlier: [], caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: spy });
-  expect(prompts[0]).toContain(`method test reply.method --case ${CASE}. The checks of earlier corrections are not in this folder: when you finish, Method tests every earlier check itself`);
-  expect(prompts[0]).not.toMatch(/method test reply\.method\. Every check/);
+  expect(prompts[0]).toContain(`Test it with method test reply.method --case ${CASE}.`);
   expect(calls[0]).toMatchObject({ ids: [CASE], newIds: [CASE], gate: true });
   // The failed new check went back to the agent before any earlier check ran; its next try passed, and then the earlier one ran once.
   expect(calls.map(c => c.ids)).toEqual([[CASE], [CASE], ['correction-term']]);
@@ -444,7 +444,7 @@ it('two corrections that wait together go to one session, and one change fixes b
   const { file, badRun, termRun } = await project(root);
   const other = 'jdg_' + 'b'.repeat(32), otherCase = correctionCaseId(other);
   const prompts = stub(async (dir, prompt) => {
-    expect(prompt).toContain('People corrected 2 of its runs');
+    expect(prompt).toContain('Improve this Method based on these 2 corrections, with one change.');
     for (const [k, id] of [CASE, otherCase].entries()) await createCase({ methodFile: join(dir, 'reply.method'), runDir: join(dir, '.fix', `run-${k + 1}`), id, note: 'Non-competes go to Legal.', expect: [{ kind: 'equals', ref: 'outputs.reply', value: 'Thanks. The non-compete clause goes to Legal.' }] } as any);
     await codeStep(dir);
     room.result(dir, { outcomes: { [CASE]: { outcome: 'fixed', summary: 'Replies now send non-compete clauses to Legal.' }, [otherCase]: { outcome: 'fixed', summary: 'Replies now send non-compete clauses to Legal.' } } });
@@ -452,7 +452,8 @@ it('two corrections that wait together go to one session, and one change fixes b
   const learned = await learnCorrection(file, [correction(badRun), correction(badRun, { id: other, noted_by: 'Gráinne' })], { earlier: [], caseIds: [CASE, otherCase], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
   expect(prompts).toHaveLength(1);
   expect(learned.outcomes.map(o => [o.id, o.outcome])).toEqual([[JUDGMENT, 'fixed'], [other, 'fixed']]);
-  expect(readFileSync(join(root, 'work', 'room', '.fix', 'correction.md'), 'utf8')).toContain(`Its run is .fix/run-2 (.fix/run-2.md). Its check has the ID ${otherCase}.`);
+  expect(prompts[0]).toContain(`Correction 2: "Non-competes go to Legal."\nThe run that got it: .fix/run-2 (its inputs, step outputs and result are in .fix/run-2.md).`);
+  expect(prompts[0]).toContain(`--id ${otherCase}`);
   expect(JSON.parse(readFileSync(join(root, 'work', 'room', 'cases', otherCase, 'case.json'), 'utf8'))).toMatchObject({ author: 'Gráinne', source: { run_dir: badRun } });
   expect(termRun).toBeTruthy();
   // A batch that does not pass its gate is split: each half is fixed again on its own.
@@ -473,12 +474,12 @@ it('the loop splits waiting corrections that found no change together, and fixes
   });
   await backgroundFix(client, file, [JUDGMENT, other], { runCases: runCases as any });
   expect(prompts).toHaveLength(3);
-  expect(prompts[0]).toContain('People corrected 2 of its runs');
-  expect(prompts[1]).toContain('A person corrected one of its runs');
+  expect(prompts[0]).toContain('Improve this Method based on these 2 corrections');
+  expect(prompts[1]).toContain('Improve this Method based on this correction:');
   expect(client.outcomes.map((o: any) => [o.id, o.outcome])).toEqual([[JUDGMENT, 'fixed'], [other, 'no_change_needed']]);
 }, 60_000);
 
-it('a fix reads only what its correction needs: the same brief at 1 and at 12 earlier checks, which Method tests itself', async () => {
+it('a fix reads only what its correction needs: the same files at 1 and at 12 earlier checks, one prompt line per earlier correction, and Method tests the related checks and a sample', async () => {
   const brief = async (earlierChecks: number) => {
     const root = setup();
     const { file, termRun, badRun } = await project(root);
@@ -488,25 +489,24 @@ it('a fix reads only what its correction needs: the same brief at 1 and at 12 ea
       const { readdirSync, statSync } = await import('node:fs');
       // What the session can read: every file of its room except the corrected run's own folder.
       const size = (path: string): number => statSync(path).isDirectory() ? readdirSync(path).filter(n => !['run', 'node_modules'].includes(n)).reduce((t, n) => t + size(join(path, n)), 0) : statSync(path).size;
-      seen = { cases: existsSync(join(dir, 'cases')) ? readdirSync(join(dir, 'cases')) : [], bytes: size(dir) - size(join(dir, '.fix', 'corrections.md')) };
+      seen = { cases: existsSync(join(dir, 'cases')) ? readdirSync(join(dir, 'cases')) : [], bytes: size(dir) };
       await codeStep(dir);
     });
     const earlier = Array.from({ length: earlierChecks }, (_, i) => ({ id: 'jdg_' + String(i).repeat(32).slice(0, 32), note: 'Accept the term clause.', noted_by: 'Gráinne', created_at: '2026-10-27T10:00:00Z', outcome: 'fixed' }));
     const learned = await learnCorrection(file, [correction(badRun)], { earlier, caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: runCases as any });
-    return { seen: seen!, prompt: prompts[0]!, outcome: learned.outcomes[0]!, corrections: readFileSync(join(root, 'work', 'room', '.fix', 'corrections.md'), 'utf8') };
+    return { seen: seen!, prompt: prompts[0]!, outcome: learned.outcomes[0]! };
   };
   const one = await brief(1), twelve = await brief(12);
   // The session had only its new check, and the same files, whatever the number of earlier checks.
   expect(one.seen.cases).toEqual([]);
   expect(twelve.seen.cases).toEqual([]);
   expect(twelve.seen.bytes).toBe(one.seen.bytes);
-  expect(twelve.prompt).toBe(one.prompt);
-  expect(one.prompt).not.toContain('cases/ (the checks of earlier corrections)');
-  // Each earlier correction is one short entry; the gate still tested every earlier check.
-  expect(twelve.corrections).toContain('Their checks are not in this folder.');
-  expect(twelve.corrections.length - one.corrections.length).toBeLessThan(11 * 200);
+  // Each earlier correction is one line of the prompt, with its words.
+  expect(twelve.prompt.split('\n').filter(l => /^\d+\. "Accept the term clause\." \(fixed\)$/.test(l))).toHaveLength(12);
+  expect(twelve.prompt.length - one.prompt.length).toBeLessThanOrEqual(11 * '12. "Accept the term clause." (fixed)\n'.length);
+  // The change touched the step that every earlier check needs: the 3 most related and 3 more at random are tested.
   expect(one.outcome).toMatchObject({ outcome: 'fixed', tested: { earlier: 1 } });
-  expect(twelve.outcome).toMatchObject({ outcome: 'fixed', tested: { earlier: 12 } });
+  expect(twelve.outcome).toMatchObject({ outcome: 'fixed', tested: { earlier: RELATED + SAMPLE } });
 }, 120_000);
 
 it('the brief has the guide of a fix, not the whole manual, and a long step output is cut with the whole value in a file', async () => {
@@ -610,9 +610,8 @@ it('a change that copies the text of the corrected input is refused as a rule fo
   expect(prompts[1]).toMatch(new RegExp(`rules\\.json copies text of the input of the check ${CASE} \\("shall obtain the written approval of the discloser.*"\\)\\. A rule that applies to one input only is refused`));
   expect(learned.outcome).toMatchObject({ outcome: 'fixed', summary: 'Sharing that needs written approval is now a no.' });
   expect(learned.changed).not.toContain('rules.json');
-  // The learner is told what a general fix is.
-  expect(prompts[0]).toContain('a rule that applies to one input only is refused');
-  expect(prompts[0]).toContain('--every-input');
+  // The learner learns the rule from the failure, not from the prompt.
+  expect(prompts[0]).not.toContain('one input');
 });
 
 it('leave-one-out: a rule for every input must hold on an earlier check\'s input that the change was not taught on', async () => {
@@ -635,4 +634,69 @@ it('leave-one-out: a rule for every input must hold on an earlier check\'s input
   // The copies of the earlier checks are gone; the real check is as it was.
   expect(existsSync(join(root, 'work', 'held-out'))).toBe(false);
   expect(JSON.parse(readFileSync(join(root, 'work', 'room', 'cases', 'correction-return', 'case.json'), 'utf8')).expect).toHaveLength(1);
+}, 60_000);
+
+// ---------- Sampled earlier checks and the full check ----------
+
+it('a fix tests the earlier checks that its change touched, most related first (more touched steps, then shared corrected parts), and 3 more at random', async () => {
+  const root = setup();
+  const casesDir = join(root, 'cases');
+  const make = (id: string, created: string, parts: string[] = []) => {
+    mkdirSync(join(casesDir, id), { recursive: true });
+    writeFileSync(join(casesDir, id, 'case.json'), JSON.stringify({ id, created, expect: parts.length ? [{ kind: 'parts', ref: 'outputs.answers', key: 'n', corrected: Object.fromEntries(parts.map(p => [p, { answer: 'no' }])), kept: {} }] : [] }));
+  };
+  make('new', '2026-11-04', ['6']);
+  const ids = Array.from({ length: 10 }, (_, i) => `c${i}`);
+  ids.forEach((id, i) => make(id, `2026-11-0${i % 3 + 1}T0${i}`, i === 7 ? ['6'] : i === 8 ? ['2'] : []));
+  // c9 touches two steps; c7 shares the corrected question 6; c8 is the newest of the rest; c0 and c1 were not touched, so they cannot break.
+  const touched = async () => Object.fromEntries(ids.map(id => [id, id === 'c9' ? ['read', 'answer'] : ['c0', 'c1'].includes(id) ? [] : ['answer']]));
+  const chosen = await chooseEarlier(ids, { roomFile: 'x', baseFile: 'y', casesDir, fixed: ['new'], plan: { touched, random: () => 0 } });
+  expect(chosen.slice(0, RELATED)).toEqual(['c9', 'c7', 'c8']);
+  expect(chosen).toHaveLength(RELATED + SAMPLE);
+  expect(chosen).not.toContain('c0'); expect(chosen).not.toContain('c1');
+  // A repair, and few checks: every one.
+  expect(await chooseEarlier(ids, { roomFile: 'x', baseFile: 'y', casesDir, fixed: ['new'], plan: { all: true } })).toEqual(ids);
+  expect(await chooseEarlier(ids.slice(0, RELATED + SAMPLE), { roomFile: 'x', baseFile: 'y', casesDir, fixed: ['new'], plan: { touched } })).toEqual(ids.slice(0, RELATED + SAMPLE));
+});
+
+it('the full check finds an earlier check that a later change broke, and gives it to the learner in its own words; the repair is tested on every earlier check', async () => {
+  const root = setup();
+  const { folder, file } = await project(root);
+  // A later change (not tested on this check) broke Gráinne's term check.
+  writeFileSync(join(folder, 'write.mjs'), `import{readFileSync}from'node:fs';const{clause}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({reply:\`Thanks. We refuse the \${clause} clause.\`}));\n`);
+  const calls: any[] = [];
+  const spy = (async (f: string, flags: any, options: any) => { calls.push(options); return runCases(f, flags, options); }) as any;
+  const prompts = stub(async dir => {
+    room.write(dir, 'write.mjs', `import{readFileSync}from'node:fs';const{clause}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({reply:\`Thanks. We accept the \${clause} clause.\`}));\n`);
+    room.result(dir, { outcome: 'fixed', summary: 'Standard clauses are accepted again.' });
+  });
+  const { fullCheck, readChecks } = await import('../../packages/sdk/src/improve.js');
+  const client = fakeClient([]);
+  const checked = await fullCheck(client, file, METHOD_ID, { runCases: spy });
+  expect(checked).toMatchObject({ checked: 1, broke: ['correction-term'], repaired: ['correction-term'], still: [] });
+  expect(checked.line).toBe('Checked every earlier correction (1). A later change had broken "Accept the term clause."; Method fixed it again.');
+  expect(prompts[0]).toMatch(/^Improve this Method based on this correction: "Accept the term clause\."\n/);
+  expect(prompts[0]).toContain('This correction held before, and a later change broke it. Its check is cases/correction-term: make it pass again, and do not change it.');
+  expect(readFileSync(join(folder, 'write.mjs'), 'utf8')).toContain('We accept');
+  // The check stays Gráinne's, unchanged.
+  expect(JSON.parse(readFileSync(join(folder, 'cases', 'correction-term', 'case.json'), 'utf8'))).toMatchObject({ author: 'Gráinne', note: 'Accept the term clause.' });
+  expect(readChecks(file)).toMatchObject({ fixes: 0, broken: [] });
+  // A second full check finds nothing.
+  stub(() => { throw Error('no session'); });
+  expect((await fullCheck(client, file, METHOD_ID, { runCases: runCases as any })).line).toBe('Checked every earlier correction (1): each one still holds.');
+}, 60_000);
+
+it('every 5 applied fixes the loop runs the full check, and the next method run prints what it found', async () => {
+  const root = setup();
+  const { file } = await project(root);
+  const { FULL_EVERY, readChecks } = await import('../../packages/sdk/src/improve.js');
+  const { unshownLines } = await import('../../packages/sdk/src/fix-outcomes.js');
+  const { mkdirSync: mk } = await import('node:fs');
+  mk(join(root, 'project', '.method'), { recursive: true });
+  writeFileSync(join(root, 'project', '.method', 'checks.json'), JSON.stringify({ format: 'method-checks/1', fixes: FULL_EVERY - 1, broken: [], redesigned_at: 0 }));
+  const client = fakeClient([{ id: JUDGMENT, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: '2026-10-28T10:00:00Z', pending: true, noted_by: 'Ryan' }]);
+  stub(codeStep);
+  await backgroundFix(client, file, [JUDGMENT], { runCases: runCases as any });
+  expect(readChecks(file)).toMatchObject({ fixes: 0, broken: [] });
+  expect(unshownLines(METHOD_ID)).toContain('Checked every earlier correction (2): each one still holds.');
 }, 60_000);

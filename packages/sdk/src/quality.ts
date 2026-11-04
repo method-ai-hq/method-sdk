@@ -192,6 +192,12 @@ export async function runCases(file: string, flags: { workspace?: string }, opti
   return report;
 }
 
+/** The steps that a change from baseline to file touched, for each check (the runtime's step keys, with this Method's config). */
+export async function touchedSteps(file: string, baseline: string, options: { casesDir: string; ids: string[] }): Promise<Record<string, string[]>> {
+  const { touchedSteps: touched } = await import('@withmethod/runtime/cases.js');
+  return touched(file, baseline, (await preparedConfig(file, {}, { judge: false })).config, options);
+}
+
 export async function testCommand(args: string[]) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: { case: { type: "string", multiple: true }, new: { type: "string", multiple: true }, baseline: { type: "string" }, cases: { type: "string" }, workspace: { type: "string" }, once: { type: "boolean" },
     runs: { type: "string" }, "min-pass": { type: "string" }, live: { type: "string", multiple: true }, "no-judge-cache": { type: "boolean" }, "keep-dir": { type: "string" } } });
