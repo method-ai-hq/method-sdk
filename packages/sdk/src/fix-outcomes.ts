@@ -16,7 +16,7 @@ export type StoredOutcome = {
   judgment: string; method_id: string; file: string; status: 'working' | 'done' | 'stopped';
   started_at: string; pid?: number | undefined; finished_at?: string; outcome?: CorrectionOutcome; error?: string; log?: string; shown: boolean;
   /** A record that is not about one correction: a fix that stopped holding. */
-  kind?: 'came_back'; line?: string;
+  kind?: 'came_back' | 'full_check' | 'redesign'; line?: string;
 };
 
 export const fixFolder = (methodId: string) => join(methodCache(), 'fixes', methodId);
@@ -82,7 +82,7 @@ export function saveError(methodId: string, file: string, id: string, error: str
   write({ judgment: id, method_id: methodId, file: resolve(file), status: 'stopped', started_at: before?.started_at ?? new Date().toISOString(), finished_at: new Date().toISOString(), error, ...(log ? { log } : {}), shown: false });
 }
 /** A line that is not about one correction: a fix that came back. */
-export function saveNotice(methodId: string, file: string, kind: 'came_back', line: string) {
+export function saveNotice(methodId: string, file: string, kind: 'came_back' | 'full_check' | 'redesign', line: string) {
   const id = `${kind}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   write({ judgment: id, method_id: methodId, file: resolve(file), status: 'done', kind, line, started_at: new Date().toISOString(), finished_at: new Date().toISOString(), shown: false });
 }

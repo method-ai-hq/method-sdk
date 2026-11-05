@@ -20,16 +20,52 @@ import { FIX_LIMIT_MS, MAX_TRIES, broken, changeLookups, reportTokens, sessionTo
   type CaseRunner, type LearnerModel, type Written } from './learner.js';
 
 // Method's redesign. One agent session (the learner's agent, on the model of the Method's own agent steps) rewrites a
-// Method from the problem, as Ryan did with the Promex invoice Method: it reads the guide (with "Design from the
-// problem"), the Method, every correction with its run, and every saved check, writes the design first, and may
-// replace, split, add or remove any step, prompt, script or data file. The gate is the learner's: every saved check
-// that passed still passes, the person's own words stay word for word (a paragraph may move, unchanged), and the Method
-// is valid. A passed change is applied with an undo record and saved as a new version. No check is added: the saved
-// checks are the person's corrections.
+// Method A from the problem into B, as Ryan did with the Promex invoice Method: it reads the guide (with "Design from the
+// problem"), the Method, the corrections with their runs, and the saved checks that it may see, writes the design first,
+// and may replace, split, add or remove any step, prompt, script or data file. The saved checks are numbered oldest
+// first: the session sees the odd ones (with their corrections); the even ones are held back, and it never sees, writes
+// or edits them. Its gate is the learner's on the checks that it sees: each one that passed still passes, the person's
+// own words stay word for word (a paragraph may move, unchanged), and the Method is valid. Then code runs A and B once
+// on the input of each held-back check, with every model step live, and counts the held-back checks that each passes
+// and the tokens and time that each used. B is kept when it passes more held-back checks than A, or as many with no
+// more than KEEP_TOKENS times A's tokens; otherwise A stays, and the redesign is recorded as tried and discarded with
+// both counts. A kept B is applied with an undo record and saved as a new version. No check is added: the saved checks
+// are the person's corrections. A Method with fewer than 2 saved checks has nothing to hold back: no session runs.
 
 /** A correction that the redesign reads: the person's words, what happened to it, and its run when it is here. */
 export type RedesignCorrection = { id: string; note: string | null; noted_by?: string | null; created_at?: string; outcome?: string | null; detail?: string | null; answer?: string | null; run_dir?: string | undefined };
-export type Redesigned = { outcome: 'redesigned' | 'no_change_needed' | 'no_redesign_found'; summary?: string; detail?: string; room?: string; base?: string; changed: string[]; diff: string; written?: Written; tries: number; log: string; checks: number; tokens: number };
+/** What one version did on the held-back checks: how many passed, and the tokens and seconds of its runs. */
+export type HeldBackRun = { passed: number; tokens: number; seconds: number };
+/** The held-back test of a redesign: the number of held-back checks, and what A (the Method as it was) and B (the redesign) did on them. */
+export type HeldBack = { checks: number; a: HeldBackRun; b: HeldBackRun };
+export type Redesigned = { outcome: 'redesigned' | 'discarded' | 'no_change_needed' | 'no_redesign_found' | 'not_tried'; summary?: string; detail?: string; room?: string; base?: string; changed: string[]; diff: string; written?: Written; tries: number; log: string; checks: number; tokens: number; held_back?: HeldBack };
+
+/** B is kept with as many held-back checks passed as A when it uses no more than this many times A's tokens. */
+export const KEEP_TOKENS = 1.2;
+/** Whether the redesign B is kept over A, from their held-back counts. */
+export const keepRedesign = (held: HeldBack) => held.b.passed > held.a.passed || (held.b.passed === held.a.passed && held.b.tokens <= KEEP_TOKENS * held.a.tokens);
+
+/** The saved checks of a Method, numbered oldest first from 1: the redesign sees the odd ones; the even ones are held back. */
+export async function splitChecks(file: string, casesDir: string) {
+  const { listCases } = await import('@withmethod/runtime/cases.js');
+  const ids = (await listCases(file, casesDir)).filter((c: any) => c.status === 'active')
+    .sort((a: any, b: any) => String(a.created ?? '').localeCompare(String(b.created ?? '')) || a.id.localeCompare(b.id)).map((c: any) => c.id as string);
+  return { seen: ids.filter((_, i) => i % 2 === 0), held: ids.filter((_, i) => i % 2 === 1) };
+}
+
+const MODEL_KINDS = new Set(['call', 'agent', 'classify', 'session']);
+/**
+ * Run one version once on the input of each held-back check (in casesDir), with every model step live, so that its
+ * tokens are what a run costs, not what a replay serves. Counts the checks that pass, the tokens and the seconds.
+ */
+async function heldBackRun(runCases: CaseRunner, file: string, casesDir: string, ids: string[]): Promise<HeldBackRun> {
+  const document = parseDocumentValue(readFileSync(file, 'utf8')) as any;
+  const live = Object.entries<any>(document.steps ?? {}).filter(([, step]) => MODEL_KINDS.has(step?.do?.kind)).map(([id]) => id);
+  const report = await runCases(file, {}, { casesDir, ids, once: true, ...(live.length ? { live } : {}) } as any);
+  const rows = (report.cases ?? []) as any[];
+  return { passed: rows.filter(r => r.candidate?.status === 'pass').length, tokens: reportTokens(report),
+    seconds: Math.round(rows.reduce((sum, r) => sum + (r.candidate?.attempts ?? []).reduce((s: number, a: any) => s + (Number(a?.duration_ms) || 0), 0), 0) / 1000) };
+}
 
 const hashOf = (text: string) => createHash('sha256').update(text).digest('hex');
 const day = (at?: string | null) => at ? at.slice(0, 10) : 'date unknown';
@@ -52,13 +88,14 @@ When you finish, Method checks your work, and gives you the exact failure when i
 }
 
 /** Write what the session reads in .fix/: the guide, every correction with its run, and the paragraphs Method wrote. */
-async function writeBrief(room: string, name: string, corrections: RedesignCorrection[], written: Written) {
+async function writeBrief(room: string, name: string, corrections: RedesignCorrection[], written: Written, held: string[]) {
   const fix = join(room, '.fix');
   mkdirSync(fix, { recursive: true, mode: 0o700 });
   writeFileSync(join(fix, 'guide.md'), `${authoringGuide('all')}\n`);
   const lines: string[] = ['# The corrections of this Method, oldest first', ''];
   let k = 0;
-  for (const c of corrections) {
+  // A correction whose check is held back is held back too: its words and its run.
+  for (const c of corrections.filter(c => !held.includes(`correction-${c.id.replace(/^jdg_/, '').slice(0, 12)}`))) {
     k++;
     let run = 'its run is not on this computer';
     if (c.run_dir && existsSync(c.run_dir)) { await writeRun(room, { run_dir: c.run_dir }, `run-${k}`); run = `its run is .fix/run-${k} (.fix/run-${k}.md)`; }
@@ -78,7 +115,7 @@ async function writeBrief(room: string, name: string, corrections: RedesignCorre
 }
 
 /** The gate: the exact failure for the next try, or undefined when the redesign passes. */
-async function gate(file: string, base: string, room: string, written: Written, runCases: CaseRunner): Promise<{ failure: string } | { said: { outcome: 'redesigned' | 'no_change_needed'; summary?: string; detail?: string }; checks: number }> {
+async function gate(file: string, base: string, room: string, written: Written, runCases: CaseRunner, held: string[]): Promise<{ failure: string } | { said: { outcome: 'redesigned' | 'no_change_needed'; summary?: string; detail?: string }; checks: number }> {
   const name = basename(file), baseFile = join(base, name), roomFile = join(room, name);
   let said: any;
   try { said = JSON.parse(readFileSync(join(room, '.fix', 'result.json'), 'utf8')); }
@@ -86,14 +123,14 @@ async function gate(file: string, base: string, room: string, written: Written, 
   if (said?.outcome === 'no_change_needed') return { said: { outcome: 'no_change_needed', ...(typeof said.detail === 'string' && said.detail.trim() ? { detail: said.detail.trim() } : {}) }, checks: 0 };
   if (said?.outcome !== 'redesigned' || typeof said.summary !== 'string' || !said.summary.trim()) return { failure: '.fix/result.json must have outcome redesigned with a summary for the person, or outcome no_change_needed.' };
   const problems: string[] = [];
-  for (const path of changedFiles(base, room).filter(p => p.startsWith('cases/'))) problems.push(`You changed ${path}, a file of a saved check. Put it back as it was.`);
+  for (const path of changedFiles(base, room).filter(p => p.startsWith('cases/') && !held.some(id => p.startsWith(`cases/${id}/`)))) problems.push(`You changed ${path}, a file of a saved check. Put it back as it was.`);
   let document: any;
   try { document = parseDocumentValue(readFileSync(roomFile, 'utf8')); loadWorkflow(methodContent(document)); }
   catch (error) { return { failure: [...problems, `${name} is not a valid Method: ${(error as Error).message}`].join('\n') }; }
   for (const issue of (methodIssues(readFileSync(roomFile, 'utf8')) as any[]).filter(i => i.level === 'error')) problems.push(`method validate: ${issue.step ? `step ${issue.step}: ` : ''}${issue.message}${issue.fix ? ` ${issue.fix}` : ''}`);
   for (const { place, paragraph } of changedUserText(textPlaces(parseDocumentValue(readFileSync(baseFile, 'utf8')), base), textPlaces(document, room), written))
     problems.push(`You changed the person's own words in ${placeName(place)}: "${clip(paragraph, 200)}". Put the paragraph back word for word; you may move it, unchanged, to another prompt or file.`);
-  const lookups = changeLookups(base, room, changedFiles(base, room), checkInputs(join(room, 'cases')), document);
+  const lookups = changeLookups(base, room, changedFiles(base, room).filter(p => !p.startsWith('cases/')), checkInputs(join(room, 'cases')), document);
   if (lookups.length) problems.push(lookupFailure(lookups));
   if (problems.length) return { failure: problems.join('\n') };
   const casesDir = join(room, 'cases');
@@ -119,9 +156,14 @@ export async function redesignMethod(file: string, options: { corrections: Redes
   let tokens = 0;
   const runCases: CaseRunner = async (...args) => { const report = await options.runCases(...args); tokens += reportTokens(report); return report; };
   const done = (outcome: Redesigned['outcome'], tries: number, extra: Partial<Redesigned> = {}): Redesigned => ({ outcome, changed: [], diff: '', tries, log: options.workDir, checks: 0, ...extra, tokens });
-  copyMethod(folder, base); copyMethod(folder, room);
+  copyMethod(folder, base);
+  // Fewer than 2 saved checks: nothing to hold back, so a redesign could not be tested against the Method as it is.
+  const { seen, held } = await splitChecks(join(base, name), join(base, 'cases'));
+  if (!held.length) { removeTree(base); return done('not_tried', 0, { detail: `a redesign is tested on the checks that it does not see, and ${name} has ${seen.length ? 'only 1 saved check' : 'no saved checks'}; it needs at least 2` }); }
+  copyMethod(folder, room);
+  for (const id of held) removeTree(join(room, 'cases', id));
   const written = readWritten(folder);
-  await writeBrief(room, name, options.corrections, written);
+  await writeBrief(room, name, options.corrections, written, held);
   const prompt = redesignPrompt(name);
   let failure = '';
   for (let tries = 1; tries <= MAX_TRIES; tries++) {
@@ -135,12 +177,16 @@ export async function redesignMethod(file: string, options: { corrections: Redes
     tokens += sessionTokens(session.run_dir);
     if (session.status === 'timeout') return done('no_redesign_found', tries, { detail: 'the time for a redesign ran out' });
     if (session.status === 'failed') throw Error(session.message ?? 'The redesign session stopped.');
-    const checked = await gate(file, base, room, written, runCases);
+    const checked = await gate(file, base, room, written, runCases, held);
     if ('said' in checked) {
       if (checked.said.outcome === 'no_change_needed') return done('no_change_needed', tries, checked.said.detail ? { detail: checked.said.detail } : {});
       const changed = changedFiles(base, room).filter(p => !p.startsWith('cases/'));
       const next = nextWritten(textPlaces(parseDocumentValue(readFileSync(join(base, name), 'utf8')), base), textPlaces(parseDocumentValue(readFileSync(join(room, name), 'utf8')), room), written);
-      return done('redesigned', tries, { summary: checked.said.summary!, room, base, changed, diff: changeDiff(base, room, changed), written: next, checks: checked.checks });
+      // A and B, once each, on the inputs of the held-back checks (the checks are base's: the session never had them).
+      const [a, b] = await Promise.all([heldBackRun(runCases, join(base, name), join(base, 'cases'), held), heldBackRun(runCases, join(room, name), join(base, 'cases'), held)]);
+      const held_back: HeldBack = { checks: held.length, a, b };
+      const result = { summary: checked.said.summary!, room, base, changed, diff: changeDiff(base, room, changed), written: next, checks: checked.checks, held_back };
+      return done(keepRedesign(held_back) ? 'redesigned' : 'discarded', tries, result);
     }
     failure = checked.failure;
     writeFileSync(join(tryDir, 'gate.txt'), failure + '\n');
@@ -178,24 +224,34 @@ async function applyRedesign(client: MethodClient, file: string, methodId: strin
 export async function redesignFile(client: MethodClient, file: string, options: { runCases?: CaseRunner; pollMs?: number } = {}): Promise<Redesigned> {
   const document = readDocument(file) as any;
   const methodId = typeof document.id === 'string' && methodIdPattern.test(document.id) ? document.id as string : undefined;
-  const { learnerModel, methodJudgments, takeLock } = await import('./improve.js');
+  const { takeLock } = await import('./improve.js');
   const lock = methodId ? join(fixFolder(methodId), 'lock') : undefined;
   if (lock) while (!takeLock(lock)) await new Promise(wait => setTimeout(wait, options.pollMs ?? 2000));
-  try {
-    const corrections: RedesignCorrection[] = methodId && client.token() ? (await methodJudgments(client, file, methodId)).filter(j => j.verdict === 'wrong').sort((a, b) => a.created_at.localeCompare(b.created_at))
-      .map(j => ({ id: j.id, note: j.note, noted_by: j.noted_by ?? null, created_at: j.created_at, outcome: j.outcome ?? null, detail: j.outcome_detail ?? null, answer: j.answer ?? null, run_dir: j.run_dir })) : [];
-    const runCases = options.runCases ?? ((await import('./quality.js')).runCases as unknown as CaseRunner);
-    const workDir = join(methodId ? fixFolder(methodId) : join(dirname(resolve(file)), '.method'), 'redesign');
-    const result = await redesignMethod(file, { corrections, model: await learnerModel(document), workDir, runCases });
-    if (result.outcome === 'redesigned') await applyRedesign(client, file, methodId, result);
-    for (const dir of [result.room, result.base]) if (dir) removeTree(dir);
-    return result;
-  } finally { if (lock) rmSync(lock, { force: true }); }
+  try { return await redesignHere(client, file, options); } finally { if (lock) rmSync(lock, { force: true }); }
+}
+
+/** Redesign a Method file and apply the change when it is kept. The caller holds the Method's fix lock. */
+export async function redesignHere(client: MethodClient, file: string, options: { runCases?: CaseRunner } = {}): Promise<Redesigned> {
+  const document = readDocument(file) as any;
+  const methodId = typeof document.id === 'string' && methodIdPattern.test(document.id) ? document.id as string : undefined;
+  const { learnerModel, methodJudgments, markRedesigned } = await import('./improve.js');
+  const corrections: RedesignCorrection[] = methodId && client.token() ? (await methodJudgments(client, file, methodId)).filter(j => j.verdict === 'wrong').sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .map(j => ({ id: j.id, note: j.note, noted_by: j.noted_by ?? null, created_at: j.created_at, outcome: j.outcome ?? null, detail: j.outcome_detail ?? null, answer: j.answer ?? null, run_dir: j.run_dir })) : [];
+  const runCases = options.runCases ?? ((await import('./quality.js')).runCases as unknown as CaseRunner);
+  const workDir = join(methodId ? fixFolder(methodId) : join(dirname(resolve(file)), '.method'), 'redesign');
+  const result = await redesignMethod(file, { corrections, model: await learnerModel(document), workDir, runCases });
+  if (result.outcome === 'redesigned') await applyRedesign(client, file, methodId, result);
+  for (const dir of [result.room, result.base]) if (dir) removeTree(dir);
+  if (result.outcome !== 'not_tried') await markRedesigned(file);
+  return result;
 }
 
 /** The line that the person reads. */
 export function redesignLine(name: string, result: Redesigned) {
-  if (result.outcome === 'redesigned') return `Rewrote ${name} from the problem: ${result.summary}${result.checks ? ` Every earlier correction still holds (${result.checks} checked).` : ''}`;
+  const held = result.held_back, counts = held ? ` On ${held.checks} held-back check${held.checks === 1 ? '' : 's'} that the rewrite did not see, the new version passed ${held.b.passed} with ${held.b.tokens} tokens in ${held.b.seconds} s, and the version before passed ${held.a.passed} with ${held.a.tokens} tokens in ${held.a.seconds} s.` : '';
+  if (result.outcome === 'redesigned') return `Rewrote ${name} from the problem: ${result.summary}${result.checks ? ` Every correction that it saw still holds (${result.checks} checked).` : ''}${counts}`;
+  if (result.outcome === 'discarded') return `Redesign tried and discarded: ${name} is unchanged.${counts}`;
+  if (result.outcome === 'not_tried') return `Redesign not tried: ${result.detail}.`;
   if (result.outcome === 'no_change_needed') return `${name} already works this way${result.detail ? `: ${result.detail}` : '.'}`;
   return `${name} is unchanged: ${result.detail ?? 'no new design kept every earlier correction and your own words'}.`;
 }
@@ -208,5 +264,5 @@ export async function redesignCommand(args: string[], clientFactory: (server: st
   process.stderr.write(`Rewriting ${basename(file)} from the problem. This takes a while: the new design is tested against every earlier correction.\n`);
   const result = await redesignFile(clientFactory(values.server ?? DEFAULT_SERVER), file);
   const line = redesignLine(basename(file), result);
-  process.stdout.write(values.json ? JSON.stringify({ outcome: result.outcome, line, changed: result.changed, tokens: result.tokens }, null, 2) + '\n' : line + '\n');
+  process.stdout.write(values.json ? JSON.stringify({ outcome: result.outcome, line, changed: result.changed, tokens: result.tokens, ...(result.held_back ? { held_back: result.held_back } : {}) }, null, 2) + '\n' : line + '\n');
 }

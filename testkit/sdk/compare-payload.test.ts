@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -43,11 +43,12 @@ vi.mock('../../packages/sdk/src/compare-account.js', async original => {
     linkCells: async (_folder: string, cells: any[]) => { sent.cells.push(...cells); for (const cell of cells) sent.linked.add(cell.key); },
     uploadSignedIn: async (text: string) => hash(text), uploadText: async (_folder: string, text: string) => hash(text) };
 });
-const { compareStage, compileComparison, delivery } = await import('../../packages/sdk/src/compare.js');
+const { compareStage, compileComparison, delivery, fullChecking } = await import('../../packages/sdk/src/compare.js');
 
 const roots: string[] = [];
-const deliver = delivery.deliver;
-afterEach(() => { delete process.env.METHOD_ACCOUNT; delivery.deliver = deliver; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+const deliver = delivery.deliver, fullCheck = fullChecking.check;
+beforeEach(() => { fullChecking.check = async () => ({ ok: true, line: '' }); });
+afterEach(() => { delete process.env.METHOD_ACCOUNT; delivery.deliver = deliver; fullChecking.check = fullCheck; for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 it('sends the account the spec with who decided each value, Method\'s rules and the judge, and each trial with what each learner received and the noise', async () => {
   const root = mkdtempSync(join(tmpdir(), 'method-compare-payload-'));

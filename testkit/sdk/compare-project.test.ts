@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { compareStage, compileComparison, decide, readComparison } from '../../packages/sdk/src/compare.js';
+import { compareStage, compileComparison, decide, fullChecking, readComparison } from '../../packages/sdk/src/compare.js';
 import { comparisonPlugin, didSummary, methodCommands, waitForFixes, whatItDid } from '../../packages/sdk/src/compare-project.js';
 import { comparisonRunArgs } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
@@ -10,8 +10,10 @@ import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
 
 const roots: string[] = [];
 const path = process.env.PATH;
-beforeEach(() => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token'; });
+const fullCheck = fullChecking.check;
+beforeEach(() => { process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-token'; fullChecking.check = async () => ({ ok: true, line: '' }); });
 afterEach(() => {
+  fullChecking.check = fullCheck;
   process.env.PATH = path; delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
