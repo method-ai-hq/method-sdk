@@ -507,6 +507,8 @@ export async function waitForFixes(cache: string) {
 
 /** What a chat did with the project: the files it added, changed or removed, the Methods it built or changed, and its method commands. */
 export type Did = { added: string[]; changed: string[]; removed: string[]; methods_built: string[]; methods_changed: string[]; commands: string[]; judged: string[]; skills: string[];
+  /** What each Method fix that the chat started ended with, such as fixed or conflict. */
+  fix_outcomes?: string[];
   /** The files of Claude Code's memory that the chat added, changed or removed. */
   memory: string[] };
 /** Files that say nothing about what the agent kept: run records and caches. */

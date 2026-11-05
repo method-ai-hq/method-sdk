@@ -12,6 +12,7 @@ import { localProposals, saveLocalProposal, writeMethodFile } from './proposals.
 import { changedSteps } from './merge.js';
 import { localJudgments, localMethodFolder, runFolderIndex, type LocalJudgment } from './local-judgments.js';
 import type { CorrectionOutcome } from './fix-lines.js';
+import { conflictQuestion } from './fix-lines.js';
 import { fixFolder, markWorking, saveError, saveNotice, saveOutcome, storedOutcome } from './fix-outcomes.js';
 import { recordChange, restoreSnapshot, saveVersion, snapshot } from './undo.js';
 import { learnCorrection, writtenFile, type CaseRunner, type LearnerModel, type Learned } from './learner.js';
@@ -330,6 +331,8 @@ async function reportOutcomes(client: MethodClient, methodId: string, outcomes: 
     await client.request(`/api/cli/methods/${encodeURIComponent(methodId)}/judgments/outcomes`, 'POST', { outcomes: outcomes.map(o => {
       const detail = o.outcome === 'held' ? [o.by ?? 'Someone', o.detail].filter(Boolean).join(': ') : o.outcome === 'already_changed' ? (o.by ? `${o.by} changed it after this run.` : undefined) : o.summary ?? o.detail;
       return { id: o.id, outcome: o.outcome, ...(o.outcome === 'could_not_test' && o.reason ? { reason: o.reason } : {}), ...(o.outcome === 'question' && o.question ? { question: o.question.slice(0, 1000) } : {}),
+        // The account keeps a conflict as the question it is, so the person's answer (method answer) reaches the next fix.
+        ...(o.outcome === 'conflict' ? { outcome: 'question', question: `${conflictQuestion(o).replace(/^./, c => c.toUpperCase())}`.slice(0, 1000) } : {}),
         ...(detail?.trim() ? { detail: detail.trim().slice(0, 500) } : {}) };
     }) });
     return true;

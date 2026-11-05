@@ -2,7 +2,7 @@
 // step, criterion, judge, version, IDs, paths or run counts). testkit/sdk/fix-lines.test.ts scans these lines.
 
 /** What the fix loop did with one correction. */
-export type OutcomeKind = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'already_changed' | 'retry' | 'elsewhere';
+export type OutcomeKind = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'conflict' | 'held' | 'already_changed' | 'retry' | 'elsewhere';
 export type CouldNotTestReason = 'missing_file' | 'can_send' | 'too_large' | 'no_live_step';
 /** The output that a tested fix gave, so the agent can show it without running the Method again. */
 export type TestedOutput = { result?: unknown; files?: Record<string, string>; held_back?: Array<{ tool: string; args: unknown }> };
@@ -20,7 +20,9 @@ export type CorrectionOutcome = {
   question?: string;
   /** fixed: how often the fix passed on this result, and on how many earlier results it was checked. */
   tested?: { times: number; earlier: number };
-  /** held and already_changed: the other person; held: what they asked for. no_change_needed, no_fix_found, could_not_test: why, in plain words. */
+  /** conflict: the person's earlier correction that this one cannot hold with (its words), and when they gave it. */
+  earlier?: string; earlier_at?: string;
+  /** held and already_changed: the other person; held: what they asked for. conflict: what each of the two corrections wants. no_change_needed, no_fix_found, could_not_test: why, in plain words. */
   by?: string; detail?: string;
   /** missing_file: the file that is gone. For --json only; never in a line. */
   path?: string;
@@ -69,6 +71,7 @@ export function outcomeLine(o: CorrectionOutcome): string {
       return `Could not test a fix safely: ${reason}. I'll keep your note.`;
     }
     case 'question': return `I have one question before I change anything: ${o.question?.trim() ?? ''}`;
+    case 'conflict': return `Not changed: ${conflictQuestion(o)}`;
     case 'held': return `Not changed: ${o.by ?? 'someone else'} wants a different result here${quoted(o.detail)}. Decide with them which one is right.`;
     case 'already_changed': return `Not changed: ${o.by ? `${o.by} changed` : 'someone changed'} this part of the agent after this result, which may already fix it.`;
     case 'retry': return 'Not changed yet: the agent changed while I tested a fix. I\'ll try again on the next run.';
@@ -76,6 +79,11 @@ export function outcomeLine(o: CorrectionOutcome): string {
   }
 }
 
+/** A conflict as the question that the person answers: which of the two corrections holds. */
+export const conflictQuestion = (o: Pick<CorrectionOutcome, 'earlier' | 'earlier_at' | 'detail'>) =>
+  `this correction and your earlier one${o.earlier_at ? ` of ${o.earlier_at}` : ''}${quoted(o.earlier)} cannot both hold${o.detail?.trim() ? `: ${sentence(o.detail)}` : ''}. Which one should hold?`;
+/** The line for the agent after a conflict: nothing waits for the answer; when the person gives one, it goes to the fix. Not for the person. */
+export const conflictNext = (judgmentId: string) => `Nothing waits for an answer. Show this line to the person; when they say which correction should hold, send their words with: method answer ${judgmentId} "THEIR WORDS"`;
 /** The line for the agent after a question: it shows the question and sends the answer. Not for the person. */
 export const answerNext = (judgmentId: string) => `Show this question to the person word for word, and do not answer it yourself. Send their answer with: method answer ${judgmentId} "THEIR WORDS"`;
 

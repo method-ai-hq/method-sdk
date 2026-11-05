@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { methodCache } from './prepare.js';
 import { writePrivateJson } from './files.js';
 import { valueText } from '@withmethod/runtime/rubric.js';
-import { type CorrectionOutcome, answerNext, errorLine, heldBackHeading, outcomeLine, stoppedLine, testedOutputHeading, waitsForComputerLine, workingForLine, workingLine } from './fix-lines.js';
+import { type CorrectionOutcome, answerNext, conflictNext, errorLine, heldBackHeading, outcomeLine, stoppedLine, testedOutputHeading, waitsForComputerLine, workingForLine, workingLine } from './fix-lines.js';
 
 // What a fix in the background did with each correction, kept on this computer:
 // ~/.cache/method/fixes/<methodId>/outcomes/<judgmentId>.json. method judge writes a working record and starts the fix;
@@ -114,6 +114,7 @@ export function recordLines(record: StoredOutcome, options: { brief?: boolean } 
   if (record.status === 'stopped') return [record.error ? errorLine(record.error) : stoppedLine];
   const o = record.outcome!, lines = [outcomeLine(o)];
   if (o.outcome === 'question') lines.push(answerNext(record.judgment));
+  if (o.outcome === 'conflict') lines.push(conflictNext(record.judgment));
   const shown = o.tested_output;
   if (o.outcome === 'fixed' && shown && !options.brief) {
     // Each part once: a file that holds the result (or one value of it) is named, not shown again. A long part is cut,

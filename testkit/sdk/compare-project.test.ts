@@ -195,7 +195,7 @@ it('each event is a new chat in the project folder: the task, then the correctio
   // What each arm did with its corrections, counted for the page.
   const result = decide(JSON.parse(comparison), [], treated);
   expect(result.received.method.lines.map((l: any) => [l.what, l.received, l.planned])).toEqual([['Inputs run', 0, 4], ['Corrections received', 2, 2],
-    ['Corrections after which it saved something in the project or memory', 1, 2], ['Corrections after which it built or changed a Method', 1, 2], ['Corrections it gave to method judge', 2, 2]]);
+    ['Corrections after which it saved something in the project or memory', 1, 2], ['Corrections after which it built or changed a Method', 1, 2], ['Corrections it gave to method judge', 2, 2], ['Corrections that Method found conflict with an earlier correction (left unchanged)', 0, 2]]);
   expect(result.received.plain.lines.map((l: any) => l.what)).not.toContain('Corrections it gave to method judge');
   // A rerun gives nothing again.
   const before = calls().length;

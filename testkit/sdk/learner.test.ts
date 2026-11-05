@@ -241,6 +241,39 @@ it('a change that breaks an earlier check gets the failure, tries again, and end
   expect(outcomeLine(own.outcome)).toBe("No fix found yet: I tried 3 changes, and none fixed this result without breaking another one or your own words. I'll keep your note.");
 }, 60_000);
 
+it('two corrections that cannot both hold: a conflict ends with one question that quotes the earlier correction, and its answer can retire the earlier check', async () => {
+  const root = setup();
+  const { file, badRun } = await project(root);
+  const everyClauseToLegal = async (dir: string) => {
+    await room.check(dir);
+    room.write(dir, 'write.mjs', `import{readFileSync}from'node:fs';const{clause}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({reply:\`Thanks. The \${clause} clause goes to Legal.\`}));\n`);
+    room.result(dir, { outcome: 'fixed', summary: 'Replies now send clauses to Legal.' });
+  };
+  // A conflict before Method saw the change break that check is refused; after the break it ends the fix at once.
+  const prompts = stub(dir => room.result(dir, { outcome: 'conflict', check: 'correction-term', detail: 'This one sends every clause to Legal; that one accepts the term clause.' }),
+    everyClauseToLegal, dir => room.result(dir, { outcome: 'conflict', check: 'correction-term', detail: 'This one sends every clause to Legal; that one accepts the term clause' }));
+  const learned = await learn(file, correction(badRun, { noted_by: 'Gráinne' }), root);
+  expect(prompts).toHaveLength(3);
+  expect(prompts[1]).toContain('Method has not seen a change for this correction break it');
+  expect(prompts[2]).toContain('write outcome conflict with that check\'s ID');
+  expect(learned.outcome).toMatchObject({ outcome: 'conflict', earlier: 'Accept the term clause.', detail: 'This one sends every clause to Legal; that one accepts the term clause' });
+  // One line for the person; the account keeps it as the question that their answer goes to.
+  const line = outcomeLine(learned.outcome);
+  expect(line).toMatch(/^Not changed: this correction and your earlier one of \d{4}-\d\d-\d\d \("Accept the term clause"\) cannot both hold: This one sends every clause to Legal; that one accepts the term clause\. Which one should hold\?$/);
+  const question = `T${line.replace(/^Not changed: t/, '')}`;
+  expect(learned.changed).toEqual([]);
+  // The person chose the new correction: its check retires the earlier one, and the fix passes.
+  const answered = stub(async dir => {
+    await everyClauseToLegal(dir);
+    const made = JSON.parse(readFileSync(join(dir, 'cases', 'correction-term', 'case.json'), 'utf8'));
+    writeFileSync(join(dir, 'cases', 'correction-term', 'case.json'), JSON.stringify({ ...made, status: 'retired', superseded_by: CASE, retired_at: new Date().toISOString(), retired_reason: 'The person chose the newer correction.' }, null, 2));
+  });
+  const chosen = await learn(file, correction(badRun, { noted_by: 'Gráinne', question, answer: 'The new one.' }), root);
+  expect(answered[0]).toContain('The earlier correction in that question is the check cases/correction-term.');
+  expect(chosen.outcome).toMatchObject({ outcome: 'fixed' });
+  expect(chosen.changed).toContain('cases/correction-term/case.json');
+}, 60_000);
+
 it('a check that passes on the Method as it was is refused: it does not show the mistake', async () => {
   const root = setup();
   const { file, badRun } = await project(root);

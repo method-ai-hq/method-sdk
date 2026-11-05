@@ -1330,7 +1330,7 @@ const labelOf = (plan: Plan, arm: string): string => plan.arms.find((a: any) => 
  * was_right: the feedback writer found nothing wrong, and the arm was told its output was right (received).
  * not_run: the training run failed. not_given: an earlier event of the learner is missing. given: a new input.
  */
-export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'not_run' | 'not_given' | 'given';
+export type CorrectionOutcome = 'fixed' | 'no_change_needed' | 'no_fix_found' | 'could_not_test' | 'question' | 'conflict' | 'held' | 'stopped' | 'edited' | 'not_edited' | 'was_right' | 'no_feedback' | 'not_run' | 'not_given' | 'given';
 /**
  * What a correction changed: Method's summary of its fix, and the diff of the Method's files or of the plain agent's
  * instructions. A long diff is kept whole in a file (file), with its first part in diff and its length in chars.
@@ -1339,7 +1339,7 @@ export type ChangeRecord = { summary?: string; diff: string; file?: string; char
 /** Whether an outcome changed the agent: Method's fix applied a tested change, or the builder edited the instructions. */
 export const changedAgent = (outcome: CorrectionOutcome) => outcome === 'fixed' || outcome === 'edited';
 export const outcomeWords: Record<CorrectionOutcome, string> = { fixed: 'fixed', no_change_needed: 'no change needed', no_fix_found: 'no fix found', could_not_test: 'could not test',
-  question: 'the fix asks a question', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
+  question: 'the fix asks a question', conflict: 'conflicts with an earlier correction, unchanged', held: 'held for another correction', stopped: 'stopped', edited: 'edited', not_edited: 'not edited', was_right: 'was right', no_feedback: 'no feedback', not_run: 'the training run failed', not_given: 'not given', given: 'given' };
 /** What one event did for one learner, as the record and the account keep it. text: the words that the learner received (a feedback writer's words differ by learner). */
 type EventRecord = { key: string; index: number; kind: string; input: string; learner: number; received: boolean; outcome: CorrectionOutcome; text?: string; output?: string | null; output_file?: string; reason?: string; detail?: string; change?: ChangeRecord; did?: Did;
   run_id?: string; judgment_id?: string; instructions?: string; tokens: number | null; duration_ms: number; at: string };
@@ -1488,6 +1488,8 @@ export function fixOutcome(outcome: string | undefined): { received: boolean; ou
   if (outcome === 'no_fix_found') return { received: true, outcome: 'no_fix_found' };
   if (outcome === 'could_not_test') return { received: false, outcome: 'could_not_test' };
   if (outcome === 'question') return { received: false, outcome: 'question' };
+  // Two corrections that cannot both hold: the fix ends at once with the Method unchanged, and nothing waits for an answer.
+  if (outcome === 'conflict') return { received: true, outcome: 'conflict' };
   if (outcome === 'held') return { received: false, outcome: 'held' };
   return { received: false, outcome: 'stopped' };
 }
@@ -1685,6 +1687,9 @@ async function projectEvent(event: any, arm: any, learner: { project: string; ca
   const chatTokens = sumTokens(turns.map(t => t.tokens));
   const fixed = fixTokens(learner.cache, fixesBefore, chatStarted);
   const tokens = chatTokens === null || fixed === null ? null : chatTokens + fixed;
+  // What each Method fix that the chat started ended with (a conflict leaves the Method unchanged).
+  const fixOutcomes = chatFixes(learner.cache, fixesBefore, chatStarted).map(r => r?.outcome?.outcome).filter((o): o is string => typeof o === 'string');
+  if (fixOutcomes.length) did.fix_outcomes = fixOutcomes;
   if (event.kind !== 'correction') return { received: true, outcome: 'given', did, tokens };
   const outcome: CorrectionOutcome = none !== null ? 'no_feedback' : keptSomething(did) ? 'edited' : right ? 'was_right' : 'not_edited';
   return { received: true, outcome, text: none ?? text ?? '', output: keptOutput(output), did, tokens, change: { summary: didSummary(did, project.agent), diff } };
@@ -2124,6 +2129,7 @@ function receivedOf(arm: string, runs: any[], planned: number, t: ArmTreatment |
     if (project.plugins.includes('method')) {
       lines.push({ what: 'Corrections after which it built or changed a Method', received: chats.filter(d => d.methods_built.length + d.methods_changed.length > 0).length, planned: chats.length, missing: [] });
       lines.push({ what: 'Corrections it gave to method judge', received: chats.filter(d => d.judged.length > 0).length, planned: chats.length, missing: [] });
+      lines.push({ what: 'Corrections that Method found conflict with an earlier correction (left unchanged)', received: chats.filter(d => d.fix_outcomes?.includes('conflict')).length, planned: chats.length, missing: [] });
     }
   }
   const list = (t?.learners ?? []).flatMap(l => l.events.filter(e => e.kind === 'correction').map(e => {
