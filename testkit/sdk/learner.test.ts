@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { createCase } from '@withmethod/runtime/cases.js';
-import { RELATED, SAMPLE, changedUserText, chooseEarlier, learnCorrection, learnerAgent, learnerMethod, learnerPrompt, nextWritten, paragraphs, readWritten, textPlaces, type LearnerCorrection } from '../../packages/sdk/src/learner.js';
+import { RELATED, SAMPLE, changedUserText, chooseEarlier, unconfirmedChecks, learnCorrection, learnerAgent, learnerMethod, learnerPrompt, nextWritten, paragraphs, readWritten, textPlaces, type LearnerCorrection } from '../../packages/sdk/src/learner.js';
 import { backgroundFix, correctionCaseId, fixCorrections } from '../../packages/sdk/src/improve.js';
 import { runCases } from '../../packages/sdk/src/quality.js';
 import { runCurrentMethod } from '../../packages/sdk/src/current-runtime.js';
@@ -132,7 +132,8 @@ it('a stub learner adds a run step with a data file: the gate tests it for real,
   expect(prompts[0]).toContain("Method's guide is in .fix/guide.md: read the parts that you need.");
   // No rule that the gate enforces is in the prompt.
   for (const rule of ['word for word', '80 or more', '3 runs in 3', 'every input', 'Every earlier check']) expect(prompts[0]).not.toContain(rule);
-  expect(prompts[0].length).toBeLessThan(1500);
+  expect(prompts[0]).toMatch(/Save its check: '[^'\n]+\/cli\/[a-f0-9]+\/method' case new reply.method/);
+  expect(prompts[0].length).toBeLessThan(1900);
   const brief = join(root, 'work', 'room', '.fix');
   expect(readFileSync(join(brief, 'run.md'), 'utf8')).toContain('Thanks. We accept the non-compete clause.');
   expect(readFileSync(join(brief, 'guide.md'), 'utf8')).toContain('# A Method that just works');
@@ -229,7 +230,7 @@ it('a change that breaks an earlier check gets the failure, tries again, and end
   expect(prompts[1]).toContain('Your change breaks the check correction-term, from Gráinne\'s correction ("Accept the term clause")');
   // The first try did not have the earlier check; the next tries have the one that broke, to read and test it.
   expect(had).toEqual([false, true, true]);
-  expect(prompts[1]).toContain('This check is now in cases/ for your next try: cases/correction-term. Read it, and test it with method test --case ID.');
+  expect(prompts[1]).toContain('This check is now in cases/ for your next try: cases/correction-term. Read it; Method tests your next change.');
   expect(learned.outcome).toEqual({ id: JUDGMENT, outcome: 'held', by: 'Gráinne', detail: 'Accept the term clause.' });
   expect(learned.changed).toEqual([]);
   // The exact failures stay in the work folder.
@@ -457,7 +458,7 @@ it('a diff shows each changed line with 2 lines around it', () => {
 
 // ---------- A faster fix ----------
 
-it('the learner tests only its new check; Method tests the new check first, and the earlier ones only when it passes', async () => {
+it('the learner leaves model test runs to the gate; it tests the new check first and earlier ones only when it passes', async () => {
   const root = setup();
   const { file, badRun } = await project(root);
   const calls: any[] = [];
@@ -465,7 +466,8 @@ it('the learner tests only its new check; Method tests the new check first, and 
   // A check that still fails on the change: no earlier check runs.
   const prompts = stub(async dir => { await room.check(dir, 'Thanks. The non-compete clause goes to Legal today.'); await codeStep(dir); }, async dir => { rmSync(join(dir, 'cases', CASE), { recursive: true }); await codeStep(dir); });
   await learnCorrection(file, [correction(badRun)], { earlier: [], caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'), runCases: spy });
-  expect(prompts[0]).toContain(`Test it with method test reply.method --case ${CASE}.`);
+  expect(prompts[0]).toContain('Leave model test runs to that independent gate');
+  expect(prompts[0]).not.toContain(`Test it with method test reply.method --case ${CASE}.`);
   expect(calls[0]).toMatchObject({ ids: [CASE], newIds: [CASE], gate: true });
   // The failed new check went back to the agent before any earlier check ran; its next try passed, and then the earlier one ran once.
   expect(calls.map(c => c.ids)).toEqual([[CASE], [CASE], ['correction-term']]);
@@ -671,7 +673,7 @@ it('leave-one-out: a rule for every input must hold on an earlier check\'s input
 
 // ---------- Sampled earlier checks and the full check ----------
 
-it('a fix tests the earlier checks that its change touched, most related first (more touched steps, then shared corrected parts), and 3 more at random', async () => {
+it('a fix tests shared parts first, then other touched checks and a random sample', async () => {
   const root = setup();
   const casesDir = join(root, 'cases');
   const make = (id: string, created: string, parts: string[] = []) => {
@@ -684,12 +686,51 @@ it('a fix tests the earlier checks that its change touched, most related first (
   // c9 touches two steps; c7 shares the corrected question 6; c8 is the newest of the rest; c0 and c1 were not touched, so they cannot break.
   const touched = async () => Object.fromEntries(ids.map(id => [id, id === 'c9' ? ['read', 'answer'] : ['c0', 'c1'].includes(id) ? [] : ['answer']]));
   const chosen = await chooseEarlier(ids, { roomFile: 'x', baseFile: 'y', casesDir, fixed: ['new'], plan: { touched, random: () => 0 } });
-  expect(chosen.slice(0, RELATED)).toEqual(['c9', 'c7', 'c8']);
-  expect(chosen).toHaveLength(RELATED + SAMPLE);
+  expect(chosen.slice(0, RELATED)).toEqual(['c7', 'c9', 'c8']);
+  expect(chosen).toHaveLength(1 + RELATED + SAMPLE);
   expect(chosen).not.toContain('c0'); expect(chosen).not.toContain('c1');
   // A repair, and few checks: every one.
   expect(await chooseEarlier(ids, { roomFile: 'x', baseFile: 'y', casesDir, fixed: ['new'], plan: { all: true } })).toEqual(ids);
   expect(await chooseEarlier(ids.slice(0, RELATED + SAMPLE), { roomFile: 'x', baseFile: 'y', casesDir, fixed: ['new'], plan: { touched } })).toEqual(ids.slice(0, RELATED + SAMPLE));
+});
+
+it('a changed answer is tested against every touched case that kept that answer right, even beyond the sample limit', async () => {
+  const root = setup(), casesDir = join(root, 'cases');
+  const make = (id: string, expect: unknown[]) => {
+    mkdirSync(join(casesDir, id), { recursive: true });
+    writeFileSync(join(casesDir, id, 'case.json'), JSON.stringify({ id, created: '2026-11-05', expect }));
+  };
+  make('new', [{ kind: 'parts', ref: 'outputs.answers', key: 'question', corrected: { '11': { answer: 'not mentioned' } } }]);
+  const ids = Array.from({ length: 12 }, (_, i) => `c${i}`);
+  for (const id of ids) make(id, [{ kind: 'parts', ref: 'outputs.answers', key: 'question', corrected: { '1': { answer: 'yes' } }, kept: { '11': { answer: 'yes' } } }]);
+  make('other-output', [{ kind: 'parts', ref: 'outputs.other', key: 'question', corrected: { '11': { answer: 'yes' } } }]);
+  const chosen = await chooseEarlier([...ids, 'other-output'], { roomFile: 'x', baseFile: 'y', casesDir, fixed: ['new'],
+    plan: { touched: async () => Object.fromEntries([...ids, 'other-output'].map(id => [id, ['answer']])), random: () => 0 } });
+  expect(chosen.slice(0, ids.length).sort()).toEqual([...ids].sort());
+  expect(chosen.at(-1)).toBe('other-output');
+});
+
+it.each(['unverifiable', 'not_run', 'missing', 'duplicate'])('a learner cannot accept an improvement when an earlier check is %s', async verdict => {
+  const root = setup(), { file, badRun } = await project(root);
+  stub(async dir => {
+    await room.check(dir);
+    room.write(dir, 'write.mjs', `import{readFileSync}from'node:fs';const{clause}=JSON.parse(readFileSync(0,'utf8'));console.log(JSON.stringify({reply:clause==='non-compete'?'Thanks. The non-compete clause goes to Legal.':\`Thanks. We accept the \${clause} clause.\`}));\n`);
+    room.result(dir, { outcome: 'fixed', summary: 'Non-competes go to Legal.' });
+  });
+  const result = await learnCorrection(file, [correction(badRun)], { earlier: [], caseIds: [CASE], model: { agent: 'claude' }, workDir: join(root, 'work'),
+    runCases: async (f, flags, options) => {
+      if (options.ids?.includes('correction-term')) return { cases: verdict === 'missing' ? [] : verdict === 'duplicate'
+        ? [{ id: 'correction-term', verdict: 'pass' }, { id: 'correction-term', verdict: 'pass' }]
+        : [{ id: 'correction-term', verdict, baseline: { status: 'unverifiable' } }] };
+      return runCases(f, flags, options);
+    } });
+  expect(result.outcomes[0]?.outcome).not.toBe('fixed');
+  expect(readFileSync(join(root, 'work', 'tries', '1', 'gate.txt'), 'utf8')).toContain('could not be confirmed');
+});
+
+it('completed failures are evidence, but missing results are not', () => {
+  expect(unconfirmedChecks(['a'], [{ id: 'a', verdict: 'fail' }])).toEqual([]);
+  expect(unconfirmedChecks(['a', 'b'], [{ id: 'a', verdict: 'pass' }])).toHaveLength(1);
 });
 
 it('the full check finds an earlier check that a later change broke, and gives it to the learner in its own words; the repair is tested on every earlier check', async () => {
@@ -719,7 +760,23 @@ it('the full check finds an earlier check that a later change broke, and gives i
   expect((await fullCheck(client, file, METHOD_ID, { runCases: runCases as any })).line).toBe('Checked every earlier correction (1): each one still holds.');
 }, 60_000);
 
-it('every 5 applied fixes the loop runs the full check, and the next method run prints what it found', async () => {
+it.each(['unverifiable', 'not_run', 'missing', 'duplicate'])('a full check does not claim that a %s check holds', async verdict => {
+  const root = setup();
+  const { file } = await project(root);
+  const { fullCheck, readChecks } = await import('../../packages/sdk/src/improve.js');
+  const checked = await fullCheck(fakeClient([]), file, METHOD_ID, { runCases: (async (_file, _flags, options) => {
+    expect(options.stopOnFailure).toBe(false);
+    return { cases: verdict === 'missing' ? [] : verdict === 'duplicate'
+      ? [{ id: 'correction-term', verdict: 'pass' }, { id: 'correction-term', verdict: 'fail' }]
+      : [{ id: 'correction-term', verdict }] };
+  }) as any });
+  expect(checked.still).toEqual(['correction-term']);
+  expect(checked.line).toContain('could not be confirmed');
+  expect(checked.line).not.toContain('each one still holds');
+  expect(readChecks(file).broken).toEqual(['correction-term']);
+});
+
+it('the fifth applied change runs the full check before its batch returns, and the next run prints what it found', async () => {
   const root = setup();
   const { file } = await project(root);
   const { FULL_EVERY, readChecks } = await import('../../packages/sdk/src/improve.js');
@@ -729,7 +786,7 @@ it('every 5 applied fixes the loop runs the full check, and the next method run 
   writeFileSync(join(root, 'project', '.method', 'checks.json'), JSON.stringify({ format: 'method-checks/1', fixes: FULL_EVERY - 1, broken: [], redesigned_at: 0 }));
   const client = fakeClient([{ id: JUDGMENT, run_id: 'run_aaaaaaaa-0000-4000-8000-000000000002', step_id: null, verdict: 'wrong', note: 'Non-competes go to Legal.', corrected: null, source: 'agent', created_at: '2026-10-28T10:00:00Z', pending: true, noted_by: 'Ryan' }]);
   stub(codeStep);
-  await backgroundFix(client, file, [JUDGMENT], { runCases: runCases as any });
+  await fixCorrections(client, file, { runCases: runCases as any });
   expect(readChecks(file)).toMatchObject({ fixes: 0, broken: [] });
   expect(unshownLines(METHOD_ID)).toContain('Checked every earlier correction (2): each one still holds.');
 }, 60_000);

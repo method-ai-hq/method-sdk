@@ -7,6 +7,7 @@ import { comparisonPlugin, didSummary, methodCommands, waitForFixes, whatItDid }
 import { comparisonRunArgs } from '../../packages/sdk/src/compare.js';
 import { runCurrentFile } from '../../packages/sdk/src/current-runtime.js';
 import { saveAnswer } from '../../packages/sdk/src/local-answer.js';
+import { comparisonBuild, codeHash } from '../../packages/sdk/src/compare-build.js';
 
 const roots: string[] = [];
 const path = process.env.PATH;
@@ -286,6 +287,40 @@ it('removes a chat\'s folder while a process that just ended still writes files 
   try { removeTree(root); } finally { await ended; }
   expect(existsSync(root)).toBe(false);
 }, 20_000);
+
+it('a comparison does not reuse either arm after the Method implementation changes, and refuses an old plan', async () => {
+  const { file } = fixture();
+  const current = comparisonBuild.current;
+  try {
+    comparisonBuild.current = () => 'build-one';
+    const first = await compileComparison(file), same = await compileComparison(file);
+    expect(same.plan.arms.map((arm: any) => arm.hash)).toEqual(first.plan.arms.map((arm: any) => arm.hash));
+    comparisonBuild.current = () => 'build-two';
+    const changed = await compileComparison(file);
+    for (let i = 0; i < changed.plan.arms.length; i++) expect(changed.plan.arms[i].hash).not.toBe(first.plan.arms[i].hash);
+    expect(changed.spec.method_rules).toContainEqual({ part: 'run_rules', text: expect.stringContaining('build-two') });
+    await expect(compareStage('trial_plan', { comparison: JSON.stringify(first.plan) })).rejects.toThrow('Method code changed');
+    await expect(compareStage('cell', { cell: JSON.stringify({ implementation: 'build-one' }) })).rejects.toThrow('Method code changed');
+  } finally { comparisonBuild.current = current; }
+});
+
+it('the comparison build changes with code or runtime edits, but not source maps or type declarations', () => {
+  const root = mkdtempSync(join(tmpdir(), 'method-build-'));
+  roots.push(root);
+  const sdk = join(root, 'sdk'), runtime = join(root, 'runtime');
+  mkdirSync(sdk); mkdirSync(runtime);
+  writeFileSync(join(sdk, 'learner.ts'), 'old rule');
+  writeFileSync(join(runtime, 'runner.js'), 'old runtime');
+  const original = codeHash([sdk, runtime]);
+  writeFileSync(join(sdk, 'learner.d.ts'), 'type changed');
+  writeFileSync(join(sdk, 'learner.js.map'), 'map changed');
+  expect(codeHash([sdk, runtime])).toBe(original);
+  writeFileSync(join(sdk, 'learner.ts'), 'new rule');
+  const learner = codeHash([sdk, runtime]);
+  expect(learner).not.toBe(original);
+  writeFileSync(join(runtime, 'runner.js'), 'new runtime');
+  expect(codeHash([sdk, runtime])).not.toBe(learner);
+});
 
 it('a comparison keeps its copy of the Method plugin when an update changes only the plugin\'s version number, so the arm is the same arm; changed skills make a new copy only before the trial starts', () => {
   const folder = mkdtempSync(join(tmpdir(), 'method-plugin-copy-'));

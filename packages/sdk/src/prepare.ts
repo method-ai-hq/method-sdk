@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, cpSync, openSync, closeSync, symlinkSync, readdirSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, renameSync, cpSync, openSync, closeSync, symlinkSync, readdirSync, lstatSync, statSync } from 'node:fs';
 import { dirname, join, delimiter, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -78,10 +78,18 @@ async function withLock<T>(lock: string, busy: string, work: () => Promise<T>): 
   let fd: number | undefined;
   const until = Date.now() + 600_000;
   while (fd === undefined) {
-    try { fd = openSync(lock, 'wx', 0o600); writeFileSync(fd, String(process.pid)); }
-    catch (e: any) {
+    try {
+      fd = openSync(lock, 'wx', 0o600);
+      // A lock that cannot name its process (a full disk) is not left behind: no other process could ever take it.
+      try { writeFileSync(fd, String(process.pid)); } catch (e) { closeSync(fd); fd = undefined; rmSync(lock, { force: true }); throw e; }
+    } catch (e: any) {
       if (e.code !== 'EEXIST') throw e;
-      try { const pid = Number(readFileSync(lock, 'utf8')); if (pid > 0) process.kill(pid, 0); } catch (e: any) { if (e.code === 'ESRCH') { rmSync(lock, { force: true }); continue; } }
+      try {
+        const pid = Number(readFileSync(lock, 'utf8'));
+        if (pid > 0) process.kill(pid, 0);
+        // A lock with no process in it, older than a few seconds, was left by a write that failed.
+        else if (Date.now() - statSync(lock).mtimeMs > 10_000) { rmSync(lock, { force: true }); continue; }
+      } catch (e: any) { if (e.code === 'ESRCH' || e.code === 'ENOENT') { rmSync(lock, { force: true }); continue; } }
       if (Date.now() > until) throw Error(busy);
       await new Promise(r => setTimeout(r, 300));
     }

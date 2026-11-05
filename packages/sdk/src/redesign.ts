@@ -15,8 +15,9 @@ import { localMethodFolder } from './local-judgments.js';
 import { fixFolder } from './fix-outcomes.js';
 import { recordChange, saveVersion, snapshot } from './undo.js';
 import { authoringGuide } from './method-help.js';
+import { cliBin } from './prepare.js';
 import { checkInputs, lookupFailure } from './generalize.js';
-import { FIX_LIMIT_MS, MAX_TRIES, broken, changeLookups, reportTokens, sessionTokens, changeDiff, changedFiles, changedUserText, copyMethod, learnerAgent, nextWritten, paragraphs, placeName, readWritten, textPlaces, writeRun, writtenFile,
+import { FIX_LIMIT_MS, MAX_TRIES, broken, unconfirmedChecks, changeLookups, reportTokens, sessionTokens, changeDiff, changedFiles, changedUserText, copyMethod, learnerAgent, nextWritten, paragraphs, placeName, readWritten, textPlaces, writeRun, writtenFile,
   type CaseRunner, type LearnerModel, type Written } from './learner.js';
 
 // Method's redesign. One agent session (the learner's agent, on the model of the Method's own agent steps) rewrites a
@@ -27,23 +28,31 @@ import { FIX_LIMIT_MS, MAX_TRIES, broken, changeLookups, reportTokens, sessionTo
 // or edits them. Its gate is the learner's on the checks that it sees: each one that passed still passes, the person's
 // own words stay word for word (a paragraph may move, unchanged), and the Method is valid. Then code runs A and B once
 // on the input of each held-back check, with every model step live, and counts the held-back checks that each passes
-// and the tokens and time that each used. B is kept when it passes more held-back checks than A, or as many with no
-// more than KEEP_TOKENS times A's tokens; otherwise A stays, and the redesign is recorded as tried and discarded with
+// and the tokens and time that each used. B must complete every test and preserve each case A passed. It must also
+// improve accuracy within KEEP_TOKENS times A's tokens or reduce tokens at equal accuracy. Otherwise A stays, with
 // both counts. A kept B is applied with an undo record and saved as a new version. No check is added: the saved checks
 // are the person's corrections. A Method with fewer than 2 saved checks has nothing to hold back: no session runs.
 
 /** A correction that the redesign reads: the person's words, what happened to it, and its run when it is here. */
 export type RedesignCorrection = { id: string; note: string | null; noted_by?: string | null; created_at?: string; outcome?: string | null; detail?: string | null; answer?: string | null; run_dir?: string | undefined };
 /** What one version did on the held-back checks: how many passed, and the tokens and seconds of its runs. */
-export type HeldBackRun = { passed: number; tokens: number; seconds: number };
+export type HeldBackRun = { passed: number; tokens: number; seconds: number; results: Record<string, 'pass' | 'fail' | 'unconfirmed'> };
 /** The held-back test of a redesign: the number of held-back checks, and what A (the Method as it was) and B (the redesign) did on them. */
 export type HeldBack = { checks: number; a: HeldBackRun; b: HeldBackRun };
 export type Redesigned = { outcome: 'redesigned' | 'discarded' | 'no_change_needed' | 'no_redesign_found' | 'not_tried'; summary?: string; detail?: string; room?: string; base?: string; changed: string[]; diff: string; written?: Written; tries: number; log: string; checks: number; tokens: number; held_back?: HeldBack };
 
-/** B is kept with as many held-back checks passed as A when it uses no more than this many times A's tokens. */
+/** Even an accuracy improvement must stay within this cost multiplier. */
 export const KEEP_TOKENS = 1.2;
-/** Whether the redesign B is kept over A, from their held-back counts. */
-export const keepRedesign = (held: HeldBack) => held.b.passed > held.a.passed || (held.b.passed === held.a.passed && held.b.tokens <= KEEP_TOKENS * held.a.tokens);
+/** A measured improvement cannot trade away an earlier passing check or hide a check that did not run. */
+export function keepRedesign(held: HeldBack) {
+  const ids = Object.keys(held.a.results);
+  if (!held.checks || ids.length !== held.checks || Object.keys(held.b.results).length !== held.checks) return false;
+  if (ids.some(id => !['pass', 'fail'].includes(held.a.results[id]!) || !['pass', 'fail'].includes(held.b.results[id]!)
+    || (held.a.results[id] === 'pass' && held.b.results[id] !== 'pass'))) return false;
+  if (![held.a.tokens, held.b.tokens].every(n => Number.isFinite(n) && n >= 0)) return false;
+  const a = ids.filter(id => held.a.results[id] === 'pass').length, b = ids.filter(id => held.b.results[id] === 'pass').length;
+  return b > a ? held.b.tokens <= KEEP_TOKENS * held.a.tokens : b === a && held.b.tokens < held.a.tokens;
+}
 
 /** The saved checks of a Method, numbered oldest first from 1: the redesign sees the odd ones; the even ones are held back. */
 export async function splitChecks(file: string, casesDir: string) {
@@ -63,7 +72,11 @@ async function heldBackRun(runCases: CaseRunner, file: string, casesDir: string,
   const live = Object.entries<any>(document.steps ?? {}).filter(([, step]) => MODEL_KINDS.has(step?.do?.kind)).map(([id]) => id);
   const report = await runCases(file, {}, { casesDir, ids, once: true, ...(live.length ? { live } : {}) } as any);
   const rows = (report.cases ?? []) as any[];
-  return { passed: rows.filter(r => r.candidate?.status === 'pass').length, tokens: reportTokens(report),
+  const results: HeldBackRun['results'] = Object.fromEntries(ids.map(id => {
+    const matches = rows.filter(row => row.id === id), status = matches.length === 1 ? matches[0].candidate?.status : undefined;
+    return [id, status === 'pass' || status === 'fail' ? status : 'unconfirmed'];
+  }));
+  return { passed: Object.values(results).filter(status => status === 'pass').length, results, tokens: reportTokens(report),
     seconds: Math.round(rows.reduce((sum, r) => sum + (r.candidate?.attempts ?? []).reduce((s: number, a: any) => s + (Number(a?.duration_ms) || 0), 0), 0) / 1000) };
 }
 
@@ -73,18 +86,19 @@ const clip = (text: string, max: number) => text.length > max ? `${text.slice(0,
 
 /** The prompt of the redesign session. The same text for every Method: it names no task. */
 export function redesignPrompt(file: string) {
-  return `You are given a Method (a workflow of steps) in this folder, in the file ${file}, Method's guide in .fix/guide.md, and what the people who use it said, in .fix/corrections.md, with each corrected run in .fix/. Rewrite the Method from the problem, as a careful person who builds Methods would: first write in .fix/design.md what one input in and one answer out are, what decides each answer, where an answer usually goes wrong (use the corrections, their runs and the checks in cases/ only), which step catches each kind of error, and which evidence each model step receives (Design from the problem in the guide: code finds the passages that a step needs; no more than one step reads every document). Then change the Method to that design. You may replace, split, add or remove any step, prompt, script or data file. Keep the model of the model steps. The design decides the next input right, not only the corrected ones: write the general rule that each correction's reason gives, never an input's text, its file name or answers for one input. A rule that applies to one input only is refused; replace any rule of that kind that the Method has now with the general rule.
+  const cli = `'${join(cliBin(), 'method').replace(/'/g, `'\\''`)}'`;
+  return `You are given a Method (a workflow of steps) in this folder, in the file ${file}, Method's guide in .fix/guide.md, and what the people who use it said, in .fix/corrections.md, with each corrected run in .fix/. First write in .fix/design.md the observed failure, its cause, and the smallest design change that addresses it. Use only the corrections, their runs and the checks in cases/. Preserve working behavior, the model and the complete source context. Prefer one model call when the task fits in context. Do not split a task into separate agents, add an audit, or select source passages by keywords merely because there are several output fields. Add such a stage only when the observed failure requires it and the validation demonstrates an improvement. You may replace, split, add or remove any step, prompt, script or data file. State the conditions under which a learned rule applies and when it does not. An unexplained label for one example does not justify a rule for every input. Never store a file name or an answer lookup for one input.
 
 Keep the person's own words word for word: every paragraph of the goal and the prompts in ${file}, and of the .md and .txt files in this folder, except the paragraphs in .fix/method-text.md. You may move one of their paragraphs, unchanged, to another prompt or another .md or .txt file, and you may pass a file of theirs whole to every step that applies it; do not reword, shorten or drop one.
 
-Run method validate ${file}, then method test ${file}: every check in cases/ must pass. Change no file in cases/. Run the Method on the input of one corrected run and read the result. Send nothing and change no real service. Do not look for other inputs of this task outside this folder.
+Use ${cli} for every Method command. Run ${cli} validate ${file}. Leave model test runs to Method's independent gate; it tests the change after you write .fix/result.json. Change no file in cases/. Send nothing and change no real service. Do not look for other inputs of this task outside this folder.
 
 Then write .fix/result.json, one of:
    {"outcome": "redesigned", "summary": "ONE PLAIN SENTENCE FOR THE PERSON: what the agent does differently now"}
    {"outcome": "no_change_needed", "detail": "WHY, IN PLAIN WORDS FOR THE PERSON"}: the Method already follows this design.
 Write for the person about their work: no names of steps, files, checks or Method's parts.
 
-When you finish, Method checks your work, and gives you the exact failure when it does not pass: the person's words are kept, no line that you add holds 80 or more letters and digits of the input of only one check or the file name of a check's input, method validate ${file} gives no errors, and every check in cases/ that passed before still passes.`;
+When you finish, Method checks your work, and gives you the exact failure when it does not pass: the person's words are kept, no line that you add holds 80 or more letters and digits of the input of only one check or the file name of a check's input, validation gives no errors, and every check in cases/ that passed before still passes. A separate validation compares both versions on the same saved cases withheld from this rewrite. It must preserve each earlier passing case, complete every test, and improve accuracy within the cost limit or reduce cost at the same accuracy. A tie alone is not an improvement. These are previously taught cases, not proof of performance on new inputs.`;
 }
 
 /** Write what the session reads in .fix/: the guide, every correction with its run, and the paragraphs Method wrote. */
@@ -139,6 +153,8 @@ async function gate(file: string, base: string, room: string, written: Written, 
   const rows: any[] = ids.length ? (await runCases(roomFile, {}, { casesDir, ids, baseline: baseFile, gate: true })).cases ?? [] : [];
   const { problems: broke } = broken(rows, casesDir, undefined);
   if (broke.length) return { failure: broke.join('\n') };
+  const unconfirmed = unconfirmedChecks(ids, rows);
+  if (unconfirmed.length) return { failure: unconfirmed.join('\n') };
   return { said: { outcome: 'redesigned', summary: said.summary.trim() }, checks: rows.filter(r => ['pass', 'fixed'].includes(r.verdict)).length };
 }
 
@@ -172,7 +188,7 @@ export async function redesignMethod(file: string, options: { corrections: Redes
     rmSync(join(room, '.fix', 'result.json'), { force: true });
     const tryDir = join(options.workDir, 'tries', String(tries));
     mkdirSync(tryDir, { recursive: true, mode: 0o700 });
-    const text = tries === 1 ? prompt : `${prompt}\n\nThis is try ${tries} of ${MAX_TRIES}. Your earlier work is still in this folder. Method checked it, and it did not pass:\n${failure}\nFix this, run method test again, and write .fix/result.json again.`;
+    const text = tries === 1 ? prompt : `${prompt}\n\nThis is try ${tries} of ${MAX_TRIES}. Your earlier work is still in this folder. Method checked it, and it did not pass:\n${failure}\nFix this and write .fix/result.json again. Method runs the tests.`;
     const session = await learnerAgent.session({ room, prompt: text, model: options.model, timeoutMs: left, workDir: tryDir });
     tokens += sessionTokens(session.run_dir);
     if (session.status === 'timeout') return done('no_redesign_found', tries, { detail: 'the time for a redesign ran out' });

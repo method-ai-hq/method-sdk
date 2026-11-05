@@ -10,11 +10,12 @@ import type { CorrectionOutcome, CouldNotTestReason, TestedOutput } from './fix-
 import { correctionName } from './fix-lines.js';
 import { textDiff } from './text-diff.js';
 import { addedLines, checkCopies, checkInputs, inputLookups, lookupFailure, type Lookup } from './generalize.js';
+import { cliBin } from './prepare.js';
 
 // Method's learner. A person corrected a run; one agent session (Claude Code, or Codex when that is the Method's agent,
 // on the person's own subscription, on the model and effort of the Method's own agent steps) works in a private copy
-// of the Method's folder, as a person who builds Methods with the Method CLI would: it writes the check of the
-// correction, changes whatever the Method needs, and runs method validate and method test on its new check. The
+// of the Method's folder: it writes the check of the correction and changes whatever the Method needs. Method then
+// runs the independent gate once; the learner does not duplicate those model runs inside its session. The
 // session reads only what this correction needs, so its cost does not grow with the corrections before it: the
 // correction, its run (each step output cut to OUTPUT_CHARS, the whole value in a file), one line for each earlier
 // correction, and the parts of the guide that a fix uses. The checks of earlier corrections are not in its copy; a check
@@ -53,7 +54,7 @@ export type EarlierCorrection = { id: string; note: string | null; noted_by?: st
 /** What the agent's session did: completed, timed out, or failed with a message. */
 export type SessionResult = { status: 'completed' | 'timeout' | 'failed'; final_text?: string; message?: string; run_dir?: string };
 /** Runs cases as method test does (quality.ts runCases); tests replace it. */
-export type CaseRunner = (file: string, flags: Record<string, never>, options: { casesDir?: string; ids?: string[]; baseline?: string; newIds?: string[]; gate?: boolean; once?: boolean }) => Promise<any>;
+export type CaseRunner = (file: string, flags: Record<string, never>, options: { casesDir?: string; ids?: string[]; baseline?: string; newIds?: string[]; gate?: boolean; once?: boolean; stopOnFailure?: boolean; keepDir?: string }) => Promise<any>;
 
 /** The agent session of the learner. Tests replace session with a stub agent that edits the room. */
 export const learnerAgent = {
@@ -322,6 +323,7 @@ const quoted = (text: string | null | undefined, none: string) => text?.trim() ?
  */
 export function learnerPrompt(file: string, corrections: LearnerCorrection[], caseIds: string[], earlier: EarlierCorrection[], failure?: string) {
   const n = corrections.length;
+  const cli = `'${join(cliBin(), 'method').replace(/'/g, `'\\''`)}'`;
   const one = (c: LearnerCorrection, i: number) => {
     const run = runName(i + 1, n), id = caseIds[i]!;
     return [`${n === 1 ? 'Improve this Method based on this correction' : `Correction ${i + 1}`}: ${quoted(c.note, '(the person marked the result wrong, without words)')}`,
@@ -329,8 +331,8 @@ export function learnerPrompt(file: string, corrections: LearnerCorrection[], ca
       ...(c.corrected !== undefined && c.corrected !== null ? [`The result that the person says is right: .fix/${correctedName(i + 1, n)}.`] : []),
       ...(c.answer?.trim() ? [`Asked "${c.question?.trim() ?? ''}", the person answered: ${quoted(c.answer, '')}`] : []),
       ...(c.answer?.trim() && c.conflicts?.length ? [`The earlier correction in that question is the check ${c.conflicts.map(id => `cases/${id}`).join(', ')}. When the person chose this correction over it, write this correction's check with --supersedes ${c.conflicts[0]}: Method then retires the earlier check. When they chose the earlier one, write outcome no_fix_found.`] : []),
-      c.check ? `This correction held before, and a later change broke it. Its check is cases/${id}: make it pass again, and do not change it. Test it with method test ${file} --case ${id}.`
-        : `Save its check: method case new ${file} --run .fix/${run} --id ${id} --note "THE PERSON'S WORDS" and what the correction says. Test it with method test ${file} --case ${id}.`].join('\n');
+      c.check ? `This correction held before, and a later change broke it. Its check is cases/${id}: make it pass again, and do not change it.`
+        : `Save its check: ${cli} case new ${file} --run .fix/${run} --id ${id} --note "THE PERSON'S WORDS" and what the correction says.`].join('\n');
   };
   const outcome = `{"outcome": "fixed", "summary": "WHAT THE AGENT DOES DIFFERENTLY NOW, IN ONE PLAIN SENTENCE FOR THE PERSON"}; or "no_change_needed" with a "detail" when the Method already does what the correction asks (save the check anyway, with --passing-run in place of --run when the run already meets it); "question" with a "question" when only a change of the person's own words would fix it; "conflict" with "check" (the ID of an earlier check that your change broke) and "detail" (one plain sentence: what each of the two corrections wants) when this correction and that earlier one cannot both hold on their inputs, so that only the person can decide; or "no_fix_found" with a "detail" when the cause is outside the Method`;
   return [
@@ -340,7 +342,9 @@ export function learnerPrompt(file: string, corrections: LearnerCorrection[], ca
     `Earlier corrections of this Method, oldest first:${earlier.length ? '' : ' none.'}`,
     ...earlier.map((c, i) => `${i + 1}. ${quoted(c.note, '(no words)')}${c.answer?.trim() ? ` Their answer to a question: ${quoted(c.answer, '')}` : ''} (${c.outcome ?? 'not decided yet'})`),
     '',
-    `The Method is ${file}. Method's guide is in .fix/guide.md: read the parts that you need.`,
+    `The Method is ${file}. Method's guide is in .fix/guide.md: read the parts that you need. Use ${cli} for every Method command in the guide.`,
+    'Method tests your change after .fix/result.json: the new check first, then earlier checks. Leave model test runs to that independent gate. It returns the exact failure for your next try.',
+    'Fix the cause with the smallest change. Preserve model and source context. State when the rule applies and when it does not. Different inputs alone do not prove a conflict.',
     `When you finish, write .fix/result.json: ${n === 1 ? outcome : `{"outcomes": {"CHECK ID": OUTCOME}} with one OUTCOME for each check: ${outcome}`}. Write for the person, about their work.`,
   ].join('\n');
 }
@@ -417,8 +421,16 @@ export function broken(rows: any[], casesDir: string, correction: LearnerCorrect
   }
   const notRun = rows.filter(r => r.verdict === 'not_run').length;
   if (problems.length && notRun) problems.push(`Method stopped testing at ${problems.length === 1 ? 'this failure' : 'these failures'}: ${notRun} other earlier check${notRun === 1 ? '' : 's'} did not run yet.`);
-  if (checks.length) problems.push(`${checks.length === 1 ? 'This check is' : 'These checks are'} now in cases/ for your next try: ${checks.map(id => `cases/${id}`).join(', ')}. Read ${checks.length === 1 ? 'it' : 'them'}, and test ${checks.length === 1 ? 'it' : 'each one'} with method test --case ID. When this correction and an earlier one cannot both hold on their inputs, do not try again: write outcome conflict with that check's ID.`);
+  if (checks.length) problems.push(`${checks.length === 1 ? 'This check is' : 'These checks are'} now in cases/ for your next try: ${checks.map(id => `cases/${id}`).join(', ')}. Read ${checks.length === 1 ? 'it' : 'them'}; Method tests your next change. When this correction and an earlier one cannot both hold on their inputs, do not try again: write outcome conflict with that check's ID.`);
   return { problems, others, checks };
+}
+
+/** A gate must account for every requested check. An omitted or unsafe result is not a pass. */
+export function unconfirmedChecks(ids: string[], rows: any[]) {
+  return ids.filter(id => {
+    const matches = rows.filter(row => row.id === id);
+    return matches.length !== 1 || !['pass', 'fixed', 'fail', 'regression'].includes(matches[0].verdict);
+  }).map(id => `The check ${id} could not be confirmed. The change cannot be accepted until every requested check has a test result.`);
 }
 
 // ---------- A general fix ----------
@@ -480,7 +492,7 @@ export async function heldOut(runCases: CaseRunner, roomFile: string, room: stri
   }
   // The changed Method is its own baseline, so each step that the earlier runs kept is served, not run again.
   const report = await runCases(roomFile, {}, { casesDir: dir, ids: passed.map(p => p.id), baseline: roomFile, gate: true, once: true });
-  const problems: string[] = [];
+  const problems: string[] = unconfirmedChecks(passed.map(p => p.id), report.cases ?? []);
   for (const row of report.cases ?? []) {
     if (row.candidate?.status !== 'fail') continue;
     ids.push(row.id);
@@ -589,6 +601,8 @@ async function gate(ctx: { file: string; base: string; room: string; caseIds: st
   const rows: any[] = earlierIds.length ? (await ctx.runCases(roomFile, {}, { casesDir, ids: earlierIds, baseline: baseFile, gate: true })).cases ?? [] : [];
   const { problems: broke, others, checks } = broken(rows, casesDir, ctx.corrections.length === 1 ? ctx.corrections[0] : undefined);
   if (broke.length) return { pass: false, failure: broke.join('\n'), others, checks };
+  const unconfirmed = unconfirmedChecks(earlierIds, rows);
+  if (unconfirmed.length) return { pass: false, failure: unconfirmed.join('\n') };
   // The new rules for every input hold on the inputs of earlier checks, which the change was not taught on.
   const astrayIds: string[] = [];
   const astray = await heldOut(ctx.runCases, roomFile, room, fixed, rows, astrayIds);
@@ -634,19 +648,21 @@ function retiredFor(basePath: string, roomPath: string, caseIds: string[]) {
 export type Toucher = (file: string, baseline: string, options: { casesDir: string; ids: string[] }) => Promise<Record<string, string[]>>;
 /**
  * Which earlier checks a fix tests. all: every one (a repair of a broken check, and the full check). Sampled (the
- * default): the RELATED checks most related to the change, and SAMPLE more at random. A check is related when the
+ * default): every touched check that covers a newly corrected part, then RELATED other related checks and SAMPLE
+ * more at random. A part that was already right matters as much as one corrected earlier. A check is related when the
  * change touched a step that it needs (the step keys of the two versions differ); a check that the change did not touch
  * serves every step from the outputs that it kept when it last passed, so the change cannot break it. Among related
- * checks, more touched steps come first, then more corrected parts shared with the new check (the same part keys of
- * their parts checks), then the newest. Every FULL_EVERY fixes, and before a comparison's checkpoint, the full check
+ * checks, more parts shared with the new correction come first, then more touched steps, then the newest.
+ * Every FULL_EVERY fixes, and before a comparison's checkpoint, the full check
  * tests every earlier check (improve.ts fullCheck).
  */
 export type EarlierChecks = { all: true } | { all?: false; touched: Toucher; random?: () => number };
 export const RELATED = 3, SAMPLE = 3;
 
-/** The part keys that the parts checks of a check corrected (exact keys from its case.json). */
-function correctedParts(casesDir: string, id: string) {
-  try { return new Set(((JSON.parse(readFileSync(join(casesDir, id, 'case.json'), 'utf8')).expect ?? []) as any[]).filter(e => e?.kind === 'parts').flatMap(e => Object.keys(e.corrected ?? {}))); }
+/** Identify a part within its output and key field, not by a question number shared by unrelated outputs. */
+function checkedParts(casesDir: string, id: string, correctedOnly = false) {
+  try { return new Set(((JSON.parse(readFileSync(join(casesDir, id, 'case.json'), 'utf8')).expect ?? []) as any[]).filter(e => e?.kind === 'parts')
+    .flatMap(e => Object.keys(correctedOnly ? e.corrected ?? {} : { ...e.kept, ...e.corrected }).map(part => JSON.stringify([e.ref, e.key ?? null, part])))); }
   catch { return new Set<string>(); }
 }
 const createdAt = (casesDir: string, id: string) => { try { return String(JSON.parse(readFileSync(join(casesDir, id, 'case.json'), 'utf8')).created ?? ''); } catch { return ''; } };
@@ -655,13 +671,15 @@ export async function chooseEarlier(active: string[], ctx: { roomFile: string; b
   const { plan } = ctx;
   if (plan.all || active.length <= RELATED + SAMPLE) return active;
   const touched = await plan.touched(ctx.roomFile, ctx.baseFile, { casesDir: ctx.casesDir, ids: active });
-  const mine = new Set(ctx.fixed.flatMap(id => [...correctedParts(ctx.casesDir, id)]));
-  const shared = (id: string) => [...correctedParts(ctx.casesDir, id)].filter(part => mine.has(part)).length;
-  const reached = active.filter(id => (touched[id] ?? []).length > 0)
-    .sort((a, b) => touched[b]!.length - touched[a]!.length || shared(b) - shared(a) || createdAt(ctx.casesDir, b).localeCompare(createdAt(ctx.casesDir, a)));
-  const related = reached.slice(0, RELATED), rest = reached.slice(RELATED), random = plan.random ?? Math.random;
+  const mine = new Set(ctx.fixed.flatMap(id => [...checkedParts(ctx.casesDir, id, true)]));
+  const shared = (id: string) => [...checkedParts(ctx.casesDir, id)].filter(part => mine.has(part)).length;
+  // Missing dependency information cannot establish that a check was unaffected.
+  const reached = active.filter(id => touched[id] === undefined || touched[id]!.length > 0)
+    .sort((a, b) => shared(b) - shared(a) || (touched[b]?.length ?? 0) - (touched[a]?.length ?? 0) || createdAt(ctx.casesDir, b).localeCompare(createdAt(ctx.casesDir, a)));
+  const required = reached.filter(id => shared(id) > 0), other = reached.filter(id => shared(id) === 0);
+  const related = other.slice(0, RELATED), rest = other.slice(RELATED), random = plan.random ?? Math.random;
   for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [rest[i], rest[j]] = [rest[j]!, rest[i]!]; }
-  return [...related, ...rest.slice(0, SAMPLE)];
+  return [...required, ...related, ...rest.slice(0, SAMPLE)];
 }
 
 /** The checks in the cases/ folder of a copy, by ID. */

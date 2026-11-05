@@ -130,6 +130,7 @@ export async function fixCorrections(client: MethodClient, file: string, options
     const batches: (typeof ready)[] = ready.length ? [ready] : [];
     while (batches.length) {
       const batch = batches.shift()!;
+      let appliedBatch = false;
       const base = methodContent(readDocument(file)), ids = new Set(batch.map(j => j.id)), newest = batch.at(-1)!.created_at;
       const earlier = all.filter(e => e.verdict === 'wrong' && !ids.has(e.id) && e.created_at <= newest)
         .map(e => ({ id: e.id, note: e.note, noted_by: e.noted_by ?? null, created_at: e.created_at, outcome: outcomes.find(o => o.id === e.id)?.outcome ?? e.outcome ?? null, detail: e.outcome_detail ?? null, answer: e.answer ?? null }));
@@ -140,10 +141,12 @@ export async function fixCorrections(client: MethodClient, file: string, options
       if (learned.outcomes.some(o => o.outcome === 'fixed' || o.outcome === 'no_change_needed')) {
         // The file must be the one the learner started from; a change made meanwhile is not overwritten.
         if (!isDeepStrictEqual(methodContent(readDocument(file)), base)) { decide(batch.map(j => ({ id: j.id, outcome: 'retry' }))); cleanRoom(learned); continue; }
-        if (await applyLearned(client, file, methodId, batch, learned)) { applied++; countFix(file); }
+        if (await applyLearned(client, file, methodId, batch, learned)) { applied++; countFix(file); appliedBatch = true; }
       }
       decide(learned.outcomes);
       cleanRoom(learned);
+      // Check the bound before another batch can apply, even when corrections keep arriving.
+      if (appliedBatch) await afterFixes(client, file, methodId, options);
     }
     await giveBack(outcomes.filter(o => o.outcome === 'retry').map(o => o.id));
     await report(outcomes.filter(o => o.outcome !== 'retry' && o.outcome !== 'elsewhere'));
@@ -287,7 +290,6 @@ export async function fixWaiting(client: MethodClient, file: string, options: { 
       if (!fix) break;
       fixes.push(fix);
     }
-    if (fixes.some(f => f.applied)) await afterFixes(client, file, methodId, options);
     return fixes;
   } finally { rmSync(lock, { force: true }); }
 }
@@ -418,10 +420,16 @@ export async function fullCheck(client: MethodClient, file: string, methodId: st
     removeTree(keepDir);
     // The Method is its own baseline: a check serves the outputs that it kept when it last passed, so only the steps
     // that changed since then run again.
-    const report = await runCases(file, {}, { ids, baseline: file, gate: true, keepDir } as any);
-    const failing = ((report.cases ?? []) as any[]).filter(r => r.verdict === 'fail');
+    const report = await runCases(file, {}, { ids, baseline: file, gate: true, stopOnFailure: false, keepDir });
+    const rows = (report.cases ?? []) as any[];
+    // A missing, duplicate or unsafe check is not evidence that its correction still holds.
+    result.still = ids.filter(id => {
+      const matches = rows.filter(r => r.id === id);
+      return matches.length !== 1 || !['pass', 'fixed', 'fail', 'regression'].includes(matches[0].verdict);
+    });
+    const failing = rows.filter(r => ids.includes(r.id) && !result.still.includes(r.id) && (r.verdict === 'fail' || r.verdict === 'regression'));
     result.broke = failing.map(r => r.id).filter(id => !state.broken.includes(id));
-    result.still = failing.map(r => r.id).filter(id => state.broken.includes(id));
+    result.still.push(...failing.map(r => r.id).filter(id => state.broken.includes(id)));
     for (const id of result.broke) {
       const made = checks.find(c => c.id === id), row = failing.find(r => r.id === id);
       const runDir = row?.candidate?.attempts?.find((a: any) => a.status === 'fail' && a.run_dir)?.run_dir;
@@ -438,7 +446,7 @@ export async function fullCheck(client: MethodClient, file: string, methodId: st
   const note = (id: string) => { const made = checks.find(c => c.id === id); return made?.note ? `"${String(made.note).slice(0, 200)}"` : id; };
   result.line = !result.broke.length && !result.still.length ? `Checked every earlier correction (${ids.length}): each one still holds.`
     : [`Checked every earlier correction (${ids.length}).`, ...result.repaired.map(id => `A later change had broken ${note(id)}; Method fixed it again.`),
-      ...result.still.map(id => `${note(id)} does not hold now, and Method found no change that fixes it without breaking another one.`)].join(' ');
+      ...result.still.map(id => `${note(id)} could not be confirmed by the full check; Method has not shown that it holds.`)].join(' ');
   writeChecks(file, { ...readChecks(file), fixes: 0, broken: result.still });
   return result;
 }

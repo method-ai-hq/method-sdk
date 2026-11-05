@@ -29,7 +29,8 @@ export function removeTree(path: string): void {
     try { if (statSync(path).isDirectory()) writable(path); } catch { /* not there */ }
     try { rmSync(path, { recursive: true, force: true }); return; }
     catch (error: any) {
-      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(error.code) || attempt === 10) throw error;
+      // macOS can report a concurrent directory write as EACCES ("Directory not empty").
+      if (!["ENOTEMPTY", "EBUSY", "EPERM", "EACCES"].includes(error.code) || attempt === 10) throw error;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100 * attempt);
     }
   }

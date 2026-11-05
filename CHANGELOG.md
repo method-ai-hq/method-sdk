@@ -1,3 +1,18 @@
+# 0.40.1
+
+Use runtime 0.20.5.
+
+- Changes preserve every affected saved example of a corrected part, including answers that were already right. They cannot skip those examples because the sample is full. Missing, stopped, duplicate or unsafe test results block acceptance.
+- Comparisons include the executable SDK and runtime code in their cache keys and record the build on the page. A changed learner starts a new comparison version and fresh treatment and measurement runs for both arms. An old plan cannot resume under changed code.
+- Redesign validation compares case identities, not only totals: no previously passing case may regress, every case must run, and the rewrite must improve accuracy within 1.2 times the tokens or reduce tokens at equal accuracy. A tie alone is discarded.
+- The learner and design guide preserve a capable single call and its complete source context. They start with a small cause-based fix, state the limits of a learned rule, and do not add per-field agents, keyword filtering or audits without an observed need.
+- The learner leaves model test runs to the independent gate. It writes the correction check and the change, then receives the gate failure when another try is needed. Its commands name the CLI of the current fix by its full path, so a shell cannot choose an older installed CLI.
+- A full check continues after a failure and accounts for every active check. A missing, stopped or unsafe check stays unconfirmed; the report no longer says that every correction holds. The fifth applied change triggers the full check before another batch can apply, including when corrections keep arriving.
+- A run keeps a bounded copy of each read-only files connection at its start. A late correction uses that copy, even after the working folder holds another document. A missing copy makes the check unverifiable, instead of silently testing a replacement document. The bound is 5,000 files and 100 MB per connection; folders containing the run and folders with symbolic links are not copied.
+- `testkit/slow/fix-cost.ts` measures the live learner and gate on a private snapshot. Each trial starts with a fresh source run on its own input, counts active earlier checks, and reports uncached and cached tokens separately. It sends no account judgments.
+
+The check policy remains: the new correction must pass three live model runs; earlier checks run once on a clear pass and three times on a narrow pass. A fix tests every touched case that checks a newly corrected part (including parts kept right), plus related and random other cases. A full check runs after five applied changes and before a comparison checkpoint. This is a check on saved inputs, not a proof about every future model response. An unconfirmed or unrepaired correction is named in the full-check report.
+
 # 0.40.0
 
 Use runtime 0.20.3.

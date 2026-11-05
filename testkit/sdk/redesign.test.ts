@@ -50,7 +50,7 @@ const stub = (...tries: Array<(dir: string) => void>) => {
 };
 const save = (dir: string, value: unknown) => writeFileSync(join(dir, '.fix', 'result.json'), JSON.stringify(value));
 
-it('a redesign may split steps and move the person\'s words, unchanged, when every saved check still passes', async () => {
+it('a redesign that adds stages without improving accuracy or cost is discarded', async () => {
   const { root, file, run } = await project();
   const prompts = stub(dir => {
     // Two steps: code picks the clause's kind; the words of guide.md move, unchanged, to rules.md.
@@ -71,7 +71,7 @@ it('a redesign may split steps and move the person\'s words, unchanged, when eve
   const corrections = [{ id: 'jdg_' + 'a'.repeat(32), note: 'Accept the term clause.', run_dir: run, created_at: '2026-11-03T10:00:00Z', outcome: 'fixed' },
     { id: 'jdg_perpetual0000000000000000000', note: 'Name the perpetual clause.', run_dir: run, created_at: '2026-11-03T11:00:00Z', outcome: 'fixed' }];
   const result = await redesignMethod(file, { corrections, model: { agent: 'codex' }, workDir: join(root, 'work'), runCases: runCases as any });
-  expect(result.outcome).toBe('redesigned');
+  expect(result.outcome).toBe('discarded');
   expect(result.checks).toBe(1);
   // Check 1 was seen; check 2 and its correction were held back, and A and B ran once on its input: both pass it.
   expect(seen).toEqual(['correction-term']);
@@ -85,7 +85,7 @@ it('a redesign may split steps and move the person\'s words, unchanged, when eve
   expect(prompts[0]).toContain('You may move one of their paragraphs, unchanged');
   expect(readFileSync(join(result.room!, '.fix', 'guide.md'), 'utf8')).toContain('# Design from the problem');
   expect(readFileSync(join(result.room!, '.fix', 'corrections.md'), 'utf8')).toContain('Accept the term clause.');
-  expect(redesignLine('reply.method', result)).toMatch(/^Rewrote reply\.method from the problem: The kind of clause is found first\. Every correction that it saw still holds \(1 checked\)\. On 1 held-back check that the rewrite did not see, the new version passed 1 with 0 tokens in \d+ s, and the version before passed 1 with 0 tokens in \d+ s\.$/);
+  expect(redesignLine('reply.method', result)).toContain('Redesign tried and discarded');
 });
 
 it('a redesign that rewords the person\'s words or breaks a saved check goes back to the agent, and is not applied after 3 tries', async () => {
@@ -124,10 +124,30 @@ it('a redesign needs at least 2 saved checks: with 1 there is nothing to hold ba
   expect(redesignLine('reply.method', result)).toBe('Redesign not tried: a redesign is tested on the checks that it does not see, and reply.method has only 1 saved check; it needs at least 2.');
 });
 
-it('B is kept when it passes more held-back checks, or as many with no more than 1.2 times the tokens', () => {
-  const run = (passed: number, tokens: number) => ({ passed, tokens, seconds: 1 });
-  expect(keepRedesign({ checks: 4, a: run(2, 100), b: run(3, 500) })).toBe(true);
-  expect(keepRedesign({ checks: 4, a: run(3, 100), b: run(3, 120) })).toBe(true);
-  expect(keepRedesign({ checks: 4, a: run(3, 100), b: run(3, 121) })).toBe(false);
-  expect(keepRedesign({ checks: 4, a: run(3, 100), b: run(2, 10) })).toBe(false);
+it('a redesign must preserve each passing case and improve accuracy within the cost limit or reduce cost', () => {
+  const run = (results: Record<string, 'pass' | 'fail' | 'unconfirmed'>, tokens: number) => ({
+    results, passed: Object.values(results).filter(s => s === 'pass').length, tokens, seconds: 1,
+  });
+  const a = run({ a: 'pass', b: 'fail', c: 'pass', d: 'fail' }, 100);
+  expect(keepRedesign({ checks: 4, a, b: run({ a: 'pass', b: 'pass', c: 'pass', d: 'fail' }, 120) })).toBe(true);
+  expect(keepRedesign({ checks: 4, a, b: run({ a: 'pass', b: 'pass', c: 'pass', d: 'fail' }, 500) })).toBe(false);
+  expect(keepRedesign({ checks: 4, a, b: run(a.results, 90) })).toBe(true);
+  expect(keepRedesign({ checks: 4, a, b: run(a.results, 100) })).toBe(false);
+  // A better total cannot hide a regression on a previously passing case.
+  expect(keepRedesign({ checks: 4, a, b: run({ a: 'fail', b: 'pass', c: 'pass', d: 'pass' }, 90) })).toBe(false);
+  expect(keepRedesign({ checks: 4, a, b: run({ a: 'pass', b: 'pass', c: 'pass', d: 'unconfirmed' }, 90) })).toBe(false);
+  expect(keepRedesign({ checks: 4, a, b: run({ a: 'pass', b: 'pass', c: 'pass' }, 90) })).toBe(false);
+  expect(keepRedesign({ checks: 4, a, b: run({ a: 'pass', b: 'pass', c: 'pass', unexpected: 'pass' }, 90) })).toBe(false);
+});
+
+it.each(['missing', 'unverifiable'])('a redesign with a %s held-back result is discarded', async status => {
+  const { root, file } = await project();
+  stub(dir => save(dir, { outcome: 'redesigned', summary: 'A proposed rewrite.' }));
+  const result = await redesignMethod(file, { corrections: [], model: { agent: 'codex' }, workDir: join(root, 'work'),
+    runCases: async (f, flags, options) => {
+      if (options.once) return { cases: status === 'missing' ? [] : options.ids!.map(id => ({ id, candidate: { status } })) };
+      return runCases(f, flags, options);
+    } });
+  expect(result.outcome).toBe('discarded');
+  expect(result.held_back?.b.results).toEqual({ 'correction-perpetual000': 'unconfirmed' });
 });

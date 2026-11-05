@@ -34,6 +34,7 @@ import { RIGHT_MESSAGE, agentName as projectAgentName, projectAgents, copyTree, 
 import { cliBin } from './prepare.js';
 import { comparisonExhibits, trialExamples, type Exhibits } from './compare-exhibits.js';
 import type { HeldBack } from './redesign.js';
+import { assertComparisonBuild, comparisonBuild } from './compare-build.js';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The file
@@ -150,7 +151,7 @@ export const comparisonSchema = z.strictObject({
     checkpoints: z.array(z.number().int().min(0)).min(1).describe('The number of events after which the arms are measured.'),
     seed: z.number().int().optional().describe('Shuffle the events once with this seed: one order, the same for every arm. Without it the events come in the order given.'),
     probe: text.optional().describe('With project arms: a question asked in a new chat in a copy of each project at each checkpoint after the start, such as "Which rules do you follow for these reviews?". The answer is kept, and a code measure gets it as probe.'),
-    redesign: z.array(z.number().int().min(0)).min(1).optional().describe('The numbers of events after which each arm gets one redesign session, the same points for every arm (0: before the first event). A .method arm, and a project arm with the Method plugin, run method redesign on their Methods: one agent session rewrites each Method from the problem, seeing every odd saved check (oldest first) with its correction; the even ones are held back. Method runs the old and the new version once on the held-back inputs and keeps the new one only when it passes more held-back checks, or as many with no more than 1.2 times the tokens; otherwise the redesign is recorded as tried and discarded, with both counts. A Method with fewer than 2 saved checks has nothing to hold back, so its redesign is not tried. A Method also tries a redesign by itself after every 8 new saved checks. A project arm without the plugin gets one chat with the notes message: "Read every correction so far and your notes, and rewrite your notes so that they work on the next task." A checkpoint at the same point measures after the session.'),
+    redesign: z.array(z.number().int().min(0)).min(1).optional().describe('The numbers of events after which each arm gets one redesign session, the same points for every arm (0: before the first event). A .method arm, and a project arm with the Method plugin, run method redesign on their Methods: one agent session rewrites each Method from the problem, seeing every odd saved check (oldest first) with its correction; the even ones are held back. Method runs the old and the new version once on the held-back inputs and keeps the new one only when every test completes, every previously passing case still passes, and it either passes more cases within 1.2 times the tokens or uses fewer tokens at equal accuracy; otherwise the redesign is recorded as tried and discarded, with both counts. A Method with fewer than 2 saved checks has nothing to hold back, so its redesign is not tried. A Method also tries a redesign by itself after every 8 new saved checks. A project arm without the plugin gets one chat with the notes message: "Read every correction so far and your notes, and rewrite your notes so that they work on the next task." A checkpoint at the same point measures after the session.'),
   }).optional().describe('A list of events that each arm gets in order, with checkpoints.'),
   about_inputs: z.strictObject({
     noun: text.optional().describe('What one input is, in one word, such as "task" or "ticket".'),
@@ -694,7 +695,7 @@ export function methodRules(doc: Comparison, settings: { model: ArmModel | null;
   } else add('same_for_both', 'No agent has personal instructions, memory, settings, skills or plugins, and each works on its own copy of the files it reads.');
   if (doc.treatment?.redesign) {
     const points = [...new Set(doc.treatment.redesign)].sort((x, y) => x - y).map(n => n === 0 ? 'before the first event' : `after event ${n}`);
-    add('treatment', `Each arm gets one redesign session at the same points: ${points.join(', ')}. An agent with Method runs method redesign on its Methods: one agent session rewrites each Method from the problem, with the guide's design rules and every second saved check (the 1st, 3rd, 5th, ...) with its correction; the others are held back from it. Method runs the old and the new version once on the inputs of the held-back checks, and keeps the new one only when it passes more of them, or as many with no more than 1.2 times the tokens; otherwise the page says "Redesign tried and discarded" with both counts. An agent without Method gets one chat that says: "${NOTES_MESSAGE}" A checkpoint at the same point measures after the session.`);
+    add('treatment', `Each arm gets one redesign session at the same points: ${points.join(', ')}. An agent with Method runs method redesign on its Methods: one agent session rewrites each Method from the problem, with the guide's design rules and every second saved check (the 1st, 3rd, 5th, ...) with its correction; the others are held back from it. Method runs the old and the new version once on the inputs of the held-back checks, and keeps the new one only when every test completes, every previously passing case still passes, and it either passes more cases within 1.2 times the tokens or uses fewer tokens at equal accuracy; otherwise the page says "Redesign tried and discarded" with both counts. An agent without Method gets one chat that says: "${NOTES_MESSAGE}" A checkpoint at the same point measures after the session.`);
     add('treatment', 'Before each checkpoint, an agent with Method tests every earlier correction of its Methods; one that a later fix broke goes back to its learner as a correction, so a break is found by the next checkpoint at the latest.');
   }
   if (doc.user_files?.length) add('arms', `Only ${doc.user_files.join(', ')} ${doc.user_files.length === 1 ? 'is' : 'are'} the user's own words in the starting folders; every other text of a starting Method was written for the comparison, so a fix may change it.`);
@@ -1071,6 +1072,7 @@ export const feedbackWriting = {
  * Codex arm runs as the runtime's session step, in a room with the files that the Method arms get.
  */
 export async function compileComparison(file: string, options: { strict?: boolean } = {}) {
+  const implementation = comparisonBuild.current();
   const path = authoringPath(file), root = dirname(path);
   const doc = readComparison(path);
   const gaps = comparisonGaps(doc);
@@ -1126,6 +1128,8 @@ export async function compileComparison(file: string, options: { strict?: boolea
     arm.id = readDocument(arm.method).id;
     arm.hash = sha({ ...arm.plain, tools, deliverable: doc.deliverable ?? null, prompt: 'task/1', folders: Object.fromEntries(Object.entries(shared).map(([envName, dir]) => [envName, folderHash(dir)])) });
   }
+  // Reusing a treatment or result from different learner/runtime code would not test this implementation.
+  for (const arm of arms) arm.hash = sha({ arm: arm.hash, implementation });
   // A project arm's runs are runs of a Method of one step, which holds one chat: so each measured chat is a run in the account.
   for (const arm of arms.filter(a => a.project)) {
     const who = projectAgentName(arm.project.agent);
@@ -1190,6 +1194,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
   }
   if (options.strict && shown?.errors.length) throw Error(`${basename(path)} cannot be published. ${shown.errors.join(' ')}`);
   const spec = await accountSpec(doc, root, arms, sourced, checklists, { model: models.shared, judge, device }, uploadSignedIn, shown?.exhibits ?? null);
+  spec.method_rules.push({ part: 'run_rules', text: `Execution build: ${implementation}. Cached results are reused only for this build of the Method code.` });
   // The approval holds for the definition, whether or not the inputs' content went up.
   const digest = sha({ ...spec, inputs: { ...spec.inputs, details: Object.fromEntries(Object.entries(spec.inputs.details).map(([key, d]) => [key, d.name])) } });
   writePrivateJson(join(folder, 'spec.json'), { spec_digest: digest });
@@ -1199,7 +1204,7 @@ export async function compileComparison(file: string, options: { strict?: boolea
   try { const old = JSON.parse(readFileSync(methodPath, 'utf8')).id; if (typeof old === 'string' && methodIdPattern.test(old)) previousId = old; } catch { /* first run */ }
   const account = await saveComparison(folder, id, basename(path).replace(/\.compare$/i, ''), spec, { ...options, ...(previousId ? { methodId: previousId } : {}) });
   const plan = {
-    file: path, folder, question: doc.question, difference: doc.difference, other_differences: doc.other_differences ?? [],
+    file: path, folder, implementation, question: doc.question, difference: doc.difference, other_differences: doc.other_differences ?? [],
     arms, inputs: doc.inputs.map(id => resolveInput(id)),
     events, feedback_hash: feedbackHash,
     checkpoints: doc.treatment ? [...doc.treatment.checkpoints].sort((a, b) => a - b) : null,
@@ -1318,7 +1323,7 @@ type Project = { agent: 'claude' | 'codex'; plugins: ProjectPlugin[]; model: str
   probe: string | null; start_words: string; start: string };
 /** An arm at one point: a Method folder and file, a plain agent, or a copy of a project folder and its Method cache (with its answer to the probe). */
 type Snapshot = { dir: string; file: string; hash: string; cache_dir?: string } | { plain: Plain; hash: string } | { copy: { dir: string; cache: string | null; memory: string | null }; probe: string | null; hash: string };
-type Cell = { key: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; project?: Project; copy?: { dir: string; cache: string | null; memory: string | null }; probe?: string | null; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean; feedback?: string;
+type Cell = { key: string; implementation: string; folder: string; arm: string; dir?: string; file?: string; plain?: Plain; project?: Project; copy?: { dir: string; cache: string | null; memory: string | null }; probe?: string | null; method?: string; hash: string; cache_dir: string; folders: Record<string, string>; web: boolean; feedback?: string;
   input: { id: string; value: unknown; hash: string; room: string | null; deliverable: string | null }; repeat: number; checkpoint: number | null; trial: boolean; treatment_note: string | null };
 const pointLabel = (checkpoint: number | null) => checkpoint === null ? '' : ` after ${plural(checkpoint, 'event')}`;
 /** An arm's name on the page (armLabels), by its key. */
@@ -2234,7 +2239,7 @@ function cells(plan: Plan, treated: ArmTreatment[] | null, stage: 'trial' | 'ful
     const snapshot: Snapshot | undefined = checkpoint === null ? (arm.project ? { copy: { dir: arm.project.start, cache: null, memory: null }, probe: null, hash: arm.hash } : arm.plain ? { plain: arm.plain, hash: arm.hash } : { dir: arm.dir, file: arm.file, hash: arm.hash }) : own?.snapshots[checkpoint];
     if (!snapshot) continue;
     for (const input of inputs) {
-      const cell = { folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain || arm.project ? { method: arm.method } : {}), ...(arm.project ? { project: arm.project } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}), input, repeat: learner, checkpoint,
+      const cell = { implementation: plan.implementation, folder: plan.folder, arm: arm.name, ...snapshot, ...(arm.plain || arm.project ? { method: arm.method } : {}), ...(arm.project ? { project: arm.project } : {}), folders: cellFolders(arm, input), cache_dir: (snapshot as any).cache_dir ?? arm.cache_dir, web: plan.web, ...(plan.feedback_hash ? { feedback: plan.feedback_hash } : {}), input, repeat: learner, checkpoint,
         trial: learner < NOISE_LEARNERS && checkpoint === start, treatment_note: treatmentNote(plan, arm, checkpoint, own) };
       out.push({ key: runKey(cell), ...cell });
     }
@@ -3034,6 +3039,8 @@ async function projectChatStage(request: { project: string; memory: string; deli
 /** `method __compare STAGE`: one stage of a comparison, run by the generated Method's stage script. */
 export async function compareStage(stage: string, bindings: any): Promise<Record<string, unknown>> {
   const plan = bindings.comparison ? JSON.parse(bindings.comparison) : undefined;
+  if (plan) assertComparisonBuild(plan.implementation);
+  if (bindings.cell) assertComparisonBuild(JSON.parse(bindings.cell).implementation);
   // Every stage, its arms and their learners use the account that saved the comparison.
   const saved = plan?.folder ? readAccount(plan.folder) : null;
   if (saved?.account) process.env.METHOD_ACCOUNT = saved.account;

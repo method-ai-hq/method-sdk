@@ -173,7 +173,9 @@ export type CaseRunOptions = { casesDir?: string | undefined; ids?: string[] | u
   runs?: number | undefined; minPass?: number | undefined; live?: string[] | undefined; judgeCache?: boolean | undefined; keepDir?: string | undefined;
   /** The fix's gate: each earlier case runs once unless it passes narrowly, the old version runs only for a failing case,
    * and the test stops at the first break (testSuite gate). */
-  gate?: boolean };
+  gate?: boolean;
+  /** A full check must report every case, including those after a failure. */
+  stopOnFailure?: boolean };
 /**
  * Where the passing case runs of a Method keep the outputs of its model steps, so that a test of a change runs again only
  * the steps that the change touched: one folder per Method (by its ID, else by its folder) in Method's cache.
