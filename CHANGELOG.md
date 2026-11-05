@@ -1,3 +1,27 @@
+# 0.40.0
+
+Use runtime 0.20.3.
+
+A fix costs about as much as a plain correction, and two corrections that cannot both hold end in one line instead of three failed tries.
+
+- **A new Method starts with a call when its input is text.** The guide's first model step is a `call` with the input's text in its prompt when it fits (a document, a message, a record); an `agent` step only when it must search, choose files, run commands or act. Every test of a fix runs the Method, so the step's cost is paid many times per fix: on the NDA Method one run is about 31k uncached tokens and 60 s as a call, against about 0.5M as an agent step that reads the NDA with tools. Its agreement with the annotators on six teaching NDAs, two runs each: 0.814 (call) and 0.804 (agent).
+- **Conflict.** When a change for a correction breaks an earlier check and the learner finds that the two corrections cannot both hold on their inputs, it ends the fix with outcome conflict (only for a check that Method saw the change break). The Method stays as it was. One line quotes the earlier correction: "Not changed: this correction and your earlier one of DATE ("...") cannot both hold: WHAT EACH WANTS. Which one should hold?" Nothing waits for the answer. The account keeps it as a question; when the person answers with method answer, the next fix may retire that earlier check with method case new --supersedes ID, and no other earlier check. The guarantee: every earlier correction holds at each full check, except one that the person retired this way.
+- **Comparisons** count a conflict as a received correction and show "Corrections that Method found conflict with an earlier correction (left unchanged)" for a project arm with the Method plugin.
+
+Measured on the NDA teaching corrections (Codex gpt-6.1-sol, one copy, events 1 to 10; uncached tokens are the learner's sessions and every test run of the fix):
+
+| Earlier checks | 0.38.1 (agent-step Method) | 0.40.0 (call Method) |
+| --- | --- | --- |
+| 0-1 | 486 s; 0.87M uncached; fixed | 233-346 s; 0.18M; fixed in 1 try (2 fixes) |
+| 2 | | 826 s; 0.59M; fixed in 2 tries |
+| 4 | 1,170 s; 3.9M; no fix in 3 tries | |
+| 3-4 | | 51-57 s; 0.03M; a question (2): the label of question 2 contradicts the question's words |
+| 5 | | 863 s; 0.34M; conflict after 2 tries (question 6, third-party sharing) |
+| 6-7 | | 389-976 s; 0.22-0.26M; fixed in 1 try (2 fixes) |
+| 8 | 7,361 s; 10.9M; no fix in 3 tries | 504 s; 0.35M; conflict after 2 tries (question 1, presumed confidential) |
+
+A plain correction (Codex notes) costs about 0.1M tokens and 50-90 s. The gate's test runs now take 1.5-4.5 minutes; the learner's own session is most of the time (2-13 minutes).
+
 # 0.39.0
 
 Use runtime 0.20.3.
