@@ -1,3 +1,25 @@
+# 0.39.0
+
+Use runtime 0.20.3.
+
+A correction reaches Method's learner in the person's words, with a direct prompt. Each fix tests the earlier checks that its change touched and a sample, and a full check of every earlier check runs every 5 fixes. A redesign is kept only when it does better on saved checks that it did not see.
+
+- **The correction is recorded by Method, word for word.** With the Method plugin, each message of the person after a Method ran in the chat goes to Method's classifier: a correction of the newest run is recorded with method judge RUN wrong, with the whole message as the note, and an approval as right. The agent is told what was recorded. method judge stays for an earlier run, or when the classifier cannot run.
+- **A direct learner prompt.** "Improve this Method based on this correction: <words>. The run that got it: ... Earlier corrections: ...". The guide is a file that the learner reads when it needs it. No rule that the gate enforces is in the prompt; a failure comes back as one short message, 3 tries in all.
+- **Sampled earlier checks, and a full check.** A fix tests its new check, then the earlier checks that its change touched (runtime 0.20.3 touchedSteps): the 3 most related (more changed steps, then shared corrected parts, then the newest) and 3 more at random. A check whose steps did not change cannot break. Every 5 applied fixes, and before each comparison checkpoint, every earlier check runs; a check that broke since the last full check goes back to the learner as a correction, and its repair is tested on every earlier check. The guarantee: every earlier correction holds at each full check; a break is found within 5 fixes. A check that the learner cannot repair is named in the next method run.
+- **A tested redesign.** method redesign sees the odd-numbered saved checks; the even ones are held back. The old and the new version run once on the held-back inputs, with every model step live. The new one is kept only when it passes more held-back checks, or as many with no more than 1.2 times the tokens; otherwise "Redesign tried and discarded" with both counts, in the run output and on the comparison page. A Method needs 2 saved checks for a redesign. The fix loop tries one after every 8 new saved checks.
+- **A new Method starts as one agent step** that does the task, with exact code checks. The guide no longer asks for a design first.
+
+Measured on copies of the NDA teaching Method (Codex, one fix each, the same corrections; the new runs shared Codex with a live comparison, so their seconds are high):
+
+| Earlier checks | 0.38.1 | 0.39.0 |
+| --- | --- | --- |
+| 1 | 486 s; 3.93M tokens (0.87M uncached); fixed in 1 try | 1,020 s; 3.33M tokens (0.35M uncached); fixed in 1 try, a general rule in a new step |
+| 4 | 1,170 s; 10.4M tokens (3.9M uncached); no fix in 3 tries | 3,346 s; 16.8M tokens (6.2M uncached); no fix in 3 tries |
+| 8 | 7,361 s; 24.9M tokens (10.9M uncached); no fix in 3 tries | the learner session ran out of time (method test did not end) |
+
+The gate's case runs are most of the cost (22.2M of 24.9M at 8 earlier checks); each earlier check is one full Method run (about 0.5M tokens) when the change touches the answering step. Sampling caps that at 6 runs per fix past 6 earlier checks; it was not measured at 8.
+
 # 0.38.2
 
 Use runtime 0.20.2.
