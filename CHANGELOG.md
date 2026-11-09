@@ -1,6 +1,6 @@
 # 0.40.1
 
-Use runtime 0.20.5.
+Use runtime 0.20.6.
 
 - **Direct providers.** A Method's `models:` can name a provider that the run calls with the operator's own key: `{provider: anthropic | openai, model, key: SECRET}`, where `key` names a declared secret. No request goes through the Method account or OpenRouter, so a Method can run where its keys are (for example inside an app's own worker). `method validate` checks the entry and the secret; a Method whose model steps all use direct providers or local agents needs no account model credit. The privacy of a direct provider (training, retention) is the operator's contract with that provider.
 - Changes preserve every affected saved example of a corrected part, including answers that were already right. They cannot skip those examples because the sample is full. Missing, stopped, duplicate or unsafe test results block acceptance.
