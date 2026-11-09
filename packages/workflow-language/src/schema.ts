@@ -51,9 +51,17 @@ export type CurrentStep = BaseStep & {
   repeat?: { max_iterations: number; until?: string };
   limits?: { timeout_ms?: number; max_agent_turns?: number; max_model_requests?: number };
 };
+/**
+ * What a models name means: a hosted model ID or entry; a local agent ({agent}); or a direct provider ({provider}) that
+ * the run calls with the value of the declared secret `key`, so no request goes through the Method account or OpenRouter.
+ */
+export type ModelEntry = string
+  | { model: string; max_output_tokens?: number; reasoning_effort?: string }
+  | { agent: "codex" | "claude"; model?: string; reasoning_effort?: string }
+  | { provider: "anthropic" | "openai"; model: string; key: string; max_output_tokens?: number; reasoning_effort?: string };
 export type CurrentWorkflow = {
   name: string; goal: string; inputs?: Record<string,z.infer<typeof InputSchema>>; environment?: Record<string,z.infer<typeof EnvironmentSchema>>; result: string | Record<string,string>;
-  format: "method/3.1" | "method/3.2" | "method/3.3" | "method/3.4"; id?: string; models?: Record<string, string | { model: string; max_output_tokens?: number; reasoning_effort?: string }>; run_prompt?: string; run_label?: string; files?: string[];
+  format: "method/3.1" | "method/3.2" | "method/3.3" | "method/3.4"; id?: string; models?: Record<string, ModelEntry>; run_prompt?: string; run_label?: string; files?: string[];
   state?: Record<string, z.infer<typeof InputSchema>>; steps: Record<string, CurrentStep>;
 };
 function currentShape<T>(validate: any): z.ZodType<T> {

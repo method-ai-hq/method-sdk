@@ -147,15 +147,17 @@ export async function localAuthoring(args: string[]): Promise<boolean> {
       const agentName = agent === "claude" ? "Claude Code" : "Codex";
       const steps = Object.entries(workflow.steps).map(([id, step]: [string, any]) => {
         const exec = step.do, named = (workflow as any).models?.[exec?.model] ?? (isModelId(exec?.model) ? exec.model : undefined);
-        const profile = named?.agent ? { backend: named.agent, model: named.model } : named ? { backend: "method", model: typeof named === "string" ? named : named.model } : config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
+        const profile = named?.agent ? { backend: named.agent, model: named.model } : named?.provider ? { backend: named.provider, model: named.model, key: named.key as string } : named ? { backend: "method", model: typeof named === "string" ? named : named.model } : config.models?.[exec?.model] ?? (exec?.model === "default" ? undefined : config.models?.default);
         const runs = step.ask ? "asks the user"
           : exec.kind === "run" ? `${exec.runtime} ${exec.entrypoint}`
           : exec.kind === "classify" ? (config.classification?.api_key_env || ownKey ? "Jev through OpenRouter with your own key" : "Method's classifier")
+          : profile?.key ? `${profile.model} at ${profile.backend === "anthropic" ? "Anthropic" : "OpenAI"} with your own key (${profile.key})`
           : profile?.backend === "method" ? (ownKey ? `${profile.model} through OpenRouter with your own key` : `the hosted model ${profile.model}`)
           : profile ? `${profile.backend}${profile.model ? ` ${profile.model}` : ""}`
           : agent ? `${agentName} with your own subscription`
           : signedIn ? (ownKey ? "the account's default model through OpenRouter with your own key" : "the account's hosted model on account credit") : "Claude Code or Codex once one is signed in on this computer";
         const needs = [...(exec?.kind === "run" ? missingSecrets.map(name => `secret ${name}`) : []),
+          ...(profile?.key && missingSecrets.includes(profile.key) ? [`secret ${profile.key}`] : []),
           ...(!signedIn && (exec?.kind === "classify" && !config.classification?.api_key_env && !ownKey || ["call", "agent"].includes(exec?.kind) && !profile && !agent) ? [`method login (for ${exec.kind === "classify" ? "classification" : "hosted models"})`] : [])];
         return { id, runs, ...(needs.length ? { needs } : {}) };
       });

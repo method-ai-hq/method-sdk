@@ -46,8 +46,8 @@ export function hostedModelUses(method: any) {
   for (const [id, step] of Object.entries<any>(method.steps ?? {})) for (const [field, exec] of [['do.model', step.do], ['check.model', step.check]] as const) {
     if (!exec || !['call', 'agent'].includes(exec.kind) || typeof exec.model !== 'string') continue;
     const named = method.models?.[exec.model];
-    // A local-agent entry ({agent: codex | claude}) is not a hosted model.
-    if (named?.agent) continue;
+    // A local-agent entry ({agent: codex | claude}) and a direct provider entry ({provider, key}) are not hosted models.
+    if (named?.agent || named?.provider) continue;
     const model = typeof named === 'string' ? named : typeof named?.model === 'string' ? named.model : isModelId(exec.model) ? exec.model : undefined;
     if (model) uses.push({ step: id, field, model, ...(named ? { name: exec.model } : {}) });
   }

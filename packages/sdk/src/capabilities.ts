@@ -39,8 +39,9 @@ export function accountNeeds(method: any, config: any) {
   const steps = Object.values(method.steps ?? {}) as any[];
   const execs = steps.flatMap(step => [step.do, step.check]).filter(exec => exec?.kind);
   return {
-    // A step on a local-agent entry of the Method's models needs no account.
-    models: !config.models?.default && execs.some(exec => ['call', 'agent'].includes(exec.kind) && !config.models?.[exec.model] && !method.models?.[exec.model ?? 'default']?.agent),
+    // A step on a local-agent or direct-provider entry of the Method's models needs no account.
+    models: !config.models?.default && execs.some(exec => ['call', 'agent'].includes(exec.kind) && !config.models?.[exec.model]
+      && !method.models?.[exec.model ?? 'default']?.agent && !method.models?.[exec.model ?? 'default']?.provider),
     classification: execs.some(exec => exec.kind === 'classify') && !config.classification?.api_key_env && !env,
   };
 }
