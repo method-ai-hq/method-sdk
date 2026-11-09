@@ -2,6 +2,7 @@
 
 Use runtime 0.20.5.
 
+- **Direct providers.** A Method's `models:` can name a provider that the run calls with the operator's own key: `{provider: anthropic | openai, model, key: SECRET}`, where `key` names a declared secret. No request goes through the Method account or OpenRouter, so a Method can run where its keys are (for example inside an app's own worker). `method validate` checks the entry and the secret; a Method whose model steps all use direct providers or local agents needs no account model credit. The privacy of a direct provider (training, retention) is the operator's contract with that provider.
 - Changes preserve every affected saved example of a corrected part, including answers that were already right. They cannot skip those examples because the sample is full. Missing, stopped, duplicate or unsafe test results block acceptance.
 - Comparisons include the executable SDK and runtime code in their cache keys and record the build on the page. A changed learner starts a new comparison version and fresh treatment and measurement runs for both arms. An old plan cannot resume under changed code.
 - Redesign validation compares case identities, not only totals: no previously passing case may regress, every case must run, and the rewrite must improve accuracy within 1.2 times the tokens or reduce tokens at equal accuracy. A tie alone is discarded.
