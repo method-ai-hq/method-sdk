@@ -83,6 +83,8 @@ const unreachable = (error: any) => error?.code === 'network' || error?.code ===
  */
 export async function catchUp(client: Client, file: string, doing = 'running'): Promise<CatchUp> {
   const path = authoringPath(file), root = dirname(path);
+  // A child Method's resolved file is made from the child and its parent files; they are what changes, not this file.
+  if ((await import('./extends.js')).resolvedSource(path)) return { status: 'skipped' };
   const { methodContent, methodIdPattern, versionIdFor } = await import('./versions.js');
   let document: any;
   try { document = readDocument(path); if (typeof document.id !== 'string' || !methodIdPattern.test(document.id) || !client.token()) return { status: 'skipped' }; }

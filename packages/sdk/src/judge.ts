@@ -84,6 +84,9 @@ export function fileForJudgment(server: string, judgment: Pick<Judgment, 'method
 async function startFix(client: MethodClient, judgment: Pick<Judgment, 'id' | 'method_id'>, runFile: string | undefined, values: { json?: boolean }, line = workingLine) {
   const file = fileForJudgment(client.server, judgment, runFile);
   if (!file || !judgment.method_id) { print(values.json ? { judgment, fix: null } : [notHereLine]); return; }
+  // A child Method is resolved from its child and parent files; Method does not change those files by itself.
+  const inherited = (await import('./extends.js')).resolvedSource(file);
+  if (inherited) { const words = `Recorded. ${inherited.source} extends a parent Method, and Method does not change a child or a parent by itself: change the child (or the parent, for every child), then run method test on it.`; print(values.json ? { judgment, fix: null, note: words } : [words]); return; }
   // The fix starts from the newest version; a teammate's change of the same step stops it until the person combines them.
   const caught = await catchUp(client, file, 'fixing');
   if (caught.status === 'conflict') { print(values.json ? { judgment, fix: null, stopped: caught.result } : [caught.result.failure.headline]); process.exitCode = 2; return; }

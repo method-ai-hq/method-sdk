@@ -7,18 +7,22 @@ The canonical source for the JavaScript SDK, Python binding, and `method` CLI. B
 ## Install
 
 ```sh
-npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.40.1/method-ai-hq-sdk-0.40.1.tgz
+npm install -g https://github.com/method-ai-hq/method-sdk/releases/download/v0.41.0/method-ai-hq-sdk-0.41.0.tgz
 method --version
 ```
 
 Node.js 22 or later is required. Python 3.9 or later uses the installed Node package:
 
 ```sh
-pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.40.1/method_ai-0.40.1-py3-none-any.whl
+pip install https://github.com/method-ai-hq/method-sdk/releases/download/v0.41.0/method_ai-0.41.0-py3-none-any.whl
 withmethod authoring
 ```
 
 See [product docs](https://docs.withmethod.ai), the [CLI guide](docs/method-authoring.md), and [release changes](CHANGELOG.md).
+
+## Parent and child Methods
+
+One Method for many clients: a parent file holds the steps, scripts and shared prompts; each client is a child file with `extends: ../parent.method` that fills the parent's `params:` and changes only what differs. The CLI resolves a child into one ordinary Method before any command, so each child validates, runs, tests and publishes as its own Method, and `method test PARENT.method --children` runs every child's cases against a parent change. See [docs/parent-child.md](docs/parent-child.md) and [examples/invoice-coding](examples/invoice-coding).
 
 ## Build and test
 

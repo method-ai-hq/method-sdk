@@ -176,6 +176,7 @@ files               [PATH]                 helper files that scripts import or r
 steps               {ID: STEP}
 result              REF, or {NAME: REF}
 run_data            account (default) | device   device only when the user explicitly asks; it turns off dashboard results, improvements, Run now and Method Cloud
+extends             PATH                   a child of the parent .method file at PATH; params, abstract, remove_steps: method authoring parents
 
 DATA   {type: text | number | boolean | record | list | file, description,
         fields: {NAME: TYPE}   (a record, or a list of records)
@@ -437,6 +438,57 @@ For incremental exports, keep a declared state ledger of source IDs and evidence
 Resume continues the same input set and saved version. A new run can collect new files.
 To edit a failed method, read its exact saved version and logs, compare the current version, change it, and run it. Publish with --reason when the user wants to share the repair.
 
+
+
+# Parent and child Methods
+
+Use a parent when the same Method runs for several clients (or teams, or products) that differ only in their rules, constants, data files and cases. The parent holds the steps, scripts and shared prompt text once; each client is a child file of a few lines. Each child is its own Method: its own id:, versions, cases, runs and publish. A fix in the parent reaches every child, and `method test PARENT --children` runs every child's cases against it first.
+
+The CLI resolves a child into one ordinary Method before any command reads it, so validate, run, test, case, diff and publish see the same flat Method that the saved version holds. A saved version of a child contains the parent's steps and files; nothing else needs the parent.
+
+## The parent
+
+A parent is a normal Method file with `params:`. Each param has a type (text, number, boolean, list or record), a description and, optionally, a default. Use a param as {{params.NAME}} anywhere in the file: inside text (a prompt, a purpose, an args entry), or as a whole value, such as `files: ["{{params.data_file}}"]` or `default: "{{params.limit}}"`, where the value keeps its type. Mark the parent `abstract: true` when a param has no default: a template cannot run, be tested or be published by itself, and says so.
+
+## A child
+
+```yaml
+extends: ../../invoice-coding.method      # the parent file, relative to this file
+name: Invoice coding for Brightside       # id:, name and goal are the child's own; id: is never inherited
+params:
+  client_name: Brightside
+  coding_rules: {file: rules.md}          # a text param can be the text of a file beside this file
+  chart_of_accounts: accounts.json
+  late_fee_gl: "8040"                     # replaces the parent's default
+files: {append: [properties.json]}        # adds to the parent's files; a plain list would replace them
+steps:
+  code_lines:                             # a parent step: only the named fields change
+    prompt: |                             # prompt: replaces the prompt of the step's do
+      You code property invoices for {{params.client_name}}. ...
+  find_property:                          # a new step needs insert_after: or insert_before:
+    insert_after: code_lines
+    name: Find the property
+    purpose: Finds the property by its service address in properties.json. Changes nothing.
+    in: {invoice: inputs.invoice}
+    do: {kind: run, runtime: node, entrypoint: find-property.mjs}
+    out:
+      property: {type: text, description: The property ID.}
+remove_steps: [notify]                    # parent steps this child does not run
+```
+
+The rule: maps merge key by key and the child wins (steps, step fields, do, in, out, inputs, models, secrets, limits); a list replaces the parent's list unless the child writes {append: [...]}; null removes a key (for example when: null). A child step entry with replace: true replaces the parent's step whole. A child that names a parent step or param that does not exist is an error, which catches typos; so is a param left without a value. A chain (parent, child, grandchild) works the same way at each level; a nearer value wins.
+
+Files: a parent's files and scripts are found beside the parent file, a child's beside the child file. When both have a file of the same name, the child's wins. The child's cases/, learned.json and files-connection folders are its own.
+
+## Commands
+
+- method resolve CHILD.method [--out FILE]: the resolved Method as YAML. method show CHILD.method --resolved [--path POINTER] prints it as JSON; method show CHILD.method prints the child as written.
+- method validate, run, test, case, publish CHILD.method: act on the resolved Method. The first run or publish of a signed-in child writes the child's id: line into the child file.
+- method diff A.method B.method: compares the resolved Methods of two children (or a child and any Method).
+- method children PARENT.method [--dir ROOT]: the files under ROOT (default: this folder) that extend PARENT, directly or through another child.
+- method test PARENT.method --children [--dir ROOT] [--once]: resolves each child against the parent as it is now and runs each child's cases. It fails when a child does not resolve or a case fails. Run it after every parent change, then publish each child.
+
+Method does not change a child or a parent by itself: a correction of a child's run is recorded, and you change the child (one client) or the parent (every client), then run the tests.
 
 
 # Recovery
@@ -928,7 +980,7 @@ Read the installed authoring guide. Available offline.
 Usage:
 
 ```sh
-method authoring [start|concepts|execution|examples|recipes|recovery|comparisons|commands|all]
+method authoring [start|concepts|execution|examples|recipes|parents|recovery|comparisons|commands|all]
 method authoring example EXAMPLE_ID
 ```
 
@@ -979,11 +1031,11 @@ Read a draft or one field.
 Usage:
 
 ```sh
-method show FILE [--path POINTER]
+method show FILE [--path POINTER] [--resolved]
 ```
 
 Arguments and defaults:
-Default: the full document. Pointer example: /steps/search/do.
+Default: the full document as written. Pointer example: /steps/search/do. --resolved: a child Method (extends:) resolved with its parent, as it runs.
 
 Result and changes:
 Selected value as JSON. No changes.
@@ -1284,7 +1336,7 @@ method diff FILE OTHER_FILE
 ```
 
 Arguments and defaults:
-Both files required. Values are compared after parsing YAML or JSON.
+Both files required. Values are compared after parsing YAML or JSON. A child Method (extends:) is compared as resolved with its parent.
 
 Result and changes:
 JSON array of {path,before?,after?}. Empty means equal; exit 0 either way.
@@ -1999,6 +2051,56 @@ Example:
 method observe --pending .method-runs
 ```
 
+## children
+
+List the child Methods that extend a parent Method.
+
+Usage:
+
+```sh
+method children PARENT.method [--dir ROOT]
+```
+
+Arguments and defaults:
+Searches ROOT (default: this folder) and its subfolders for .method files whose extends: chain reaches PARENT. depth 1 is a direct child. Read method authoring parents.
+
+Result and changes:
+JSON {parent, searched, children: [{file, extends, depth, abstract, id?, name?}]}. No changes.
+
+Errors:
+The parent file does not exist.
+
+Example:
+
+```sh
+method children invoice-coding.method --dir clients
+```
+
+## resolve
+
+Print a child Method resolved with its parent: exactly what runs and what a saved version holds.
+
+Usage:
+
+```sh
+method resolve FILE.method [--out NEW_FILE]
+```
+
+Arguments and defaults:
+FILE is a child (extends:) or a parent (params:). A template (abstract: true) keeps its unfilled params as {{params.NAME}}. --out writes a new file instead of stdout.
+
+Result and changes:
+YAML on stdout, or JSON {file, from} with --out. No changes to the child or parent.
+
+Errors:
+The errors of resolution, each naming the file, the key and what to do: a missing parent, a cycle, an unknown step or param, a param without a value.
+
+Example:
+
+```sh
+method resolve clients/acme/acme-invoice-coding.method
+```
+
 ## test
 
 Replay recorded cases against this version of a Method. Every case must pass.
@@ -2007,10 +2109,11 @@ Usage:
 
 ```sh
 method test FILE [--case ID]... [--baseline OLD_FILE] [--new ID]... [--cases DIR] [--once | --runs N [--min-pass N]] [--live STEP]... [--no-judge-cache] [--keep-dir DIR]
+method test PARENT.method --children [--dir ROOT] [--once]
 ```
 
 Arguments and defaults:
-Cases are in cases/ beside the Method. Unchanged steps return their recorded outputs; changed steps run; each attempt works on its own copy of the files the recorded run read, so a changed step that writes files runs safely; a Method tool that sends or changes something returns a stand-in instead. Every case runs 3 times when a model step runs live, and every run must pass. A passing run keeps its model steps' outputs on this computer; with --baseline, a model step that is the same in both versions gives that output, so only the steps that the change touched, and the steps after them, run again. --baseline also runs each case on the old version, to show what the change fixed or broke, and answers which version is better: the new one when it fixes a case and breaks none, the old one when it breaks a case and fixes none, else can't tell yet. --once runs each case once; --runs N and --min-pass N replace each case's own counts. --live STEP runs that step live even when it matches the recording. --no-judge-cache judges again instead of reusing earlier judgments. --keep-dir keeps each attempt's run folder there.
+Cases are in cases/ beside the Method. With --children: each child Method under ROOT (default: this folder) that extends PARENT is resolved with the parent as it is now, and its cases run; it fails when a child does not resolve or a case fails. Unchanged steps return their recorded outputs; changed steps run; each attempt works on its own copy of the files the recorded run read, so a changed step that writes files runs safely; a Method tool that sends or changes something returns a stand-in instead. Every case runs 3 times when a model step runs live, and every run must pass. A passing run keeps its model steps' outputs on this computer; with --baseline, a model step that is the same in both versions gives that output, so only the steps that the change touched, and the steps after them, run again. --baseline also runs each case on the old version, to show what the change fixed or broke, and answers which version is better: the new one when it fixes a case and breaks none, the old one when it breaks a case and fixes none, else can't tell yet. --once runs each case once; --runs N and --min-pass N replace each case's own counts. --live STEP runs that step live even when it matches the recording. --no-judge-cache judges again instead of reusing earlier judgments. --keep-dir keeps each attempt's run folder there.
 
 Result and changes:
 JSON report with a verdict per case and passed:true when no case blocks the change; with --baseline also comparison: {answer, reason}. A case's first passing run shows its output; its other passing runs leave it out, and a passing criterion's reason is cut short. A failing run shows everything. Exit 0 or 1.

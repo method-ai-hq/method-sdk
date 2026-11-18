@@ -1,0 +1,2 @@
+- Software subscriptions go to 6420 Software, whatever the vendor calls them.
+- Freight on a parts invoice goes to 5100 Parts, with the parts.

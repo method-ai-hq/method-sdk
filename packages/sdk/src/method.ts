@@ -116,6 +116,8 @@ async function fixWaitingCorrections(args: string[], clientFactory: (server: str
   if (process.env.METHOD_RUN_WORKER === '1' || args.includes('--resume') || !existsSync(args[1]!)) return;
   const file = authoringPath(args[1]!), id = (() => { try { return readDocument(file).id; } catch { return undefined; } })();
   if (typeof id !== 'string' || !methodIdPattern.test(id)) return;
+  // A child Method's resolved file is made again from the child and its parent: a fix there would be lost.
+  if ((await import('./extends.js')).resolvedSource(file)) return;
   const outcomes = await import('./fix-outcomes.js');
   const server = parseArgs({ args: args.slice(2), strict: false, options: { server: { type: 'string' } } }).values.server;
   let client: MethodClient;
@@ -198,6 +200,10 @@ export async function methodMain(args = process.argv.slice(2), clientFactory: (s
   // An installed CLI keeps itself current in the background, with no output; this command is not delayed.
   void (await import('./update.js')).updateInBackground();
   const earlyHelp=methodHelp(args);if(earlyHelp!==undefined){process.stdout.write(earlyHelp);return;}
+  // A parent or child Method file (extends:, params:) becomes one resolved Method file first; other files are unchanged.
+  const inherited = await (await import('./extends.js')).resolveArgs(args);
+  if (inherited === undefined) return;
+  args = inherited;
   await routeAccount(args, clientFactory);
   if (args[0] === 'judge') return (await import('./judge.js')).judgeCommand(args.slice(1), clientFactory);
   if (args[0] === 'answer' && /^jdg_/.test(args[1] ?? '')) return (await import('./judge.js')).answerJudgmentCommand(args.slice(1), clientFactory);
