@@ -1,0 +1,7 @@
+extends: ../../invoice-coding.method
+name: Invoice coding for Acme
+goal: Code each line of an Acme vendor invoice to one of Acme's GL accounts.
+params:
+  client_name: Acme
+  coding_rules: {file: rules.md}
+  chart_of_accounts: accounts.json

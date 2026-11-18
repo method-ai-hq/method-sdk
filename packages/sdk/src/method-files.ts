@@ -6,6 +6,7 @@ import { MethodPackageSchema, packageDigest, packagePath, type MethodPackage } f
 import { readDocument } from './authoring.js';
 import type { MethodClient } from './method-client.js';
 import { lockDependencies } from './prepare.js';
+import { resolvedSource } from './extends.js';
 
 export const runtimeVersion: string = createRequire(import.meta.url)('@withmethod/runtime/package.json').version;
 export const fileHash = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
@@ -55,9 +56,12 @@ export async function buildPackage(file: string, workflow: any): Promise<{ pack:
   const root = dirname(resolve(file));
   await lockDependencies(root);
   const tooLarge: string[] = [];
-  const names = [...new Set([...packageFileNames(root, workflow), ...(workflow.run_data === 'device' ? [] : caseFileNames(root, tooLarge))])].sort();
+  // A child Method's resolved file links to the child's own cases/ folder: its cases are read there.
+  const inherited = resolvedSource(file), caseRoot = inherited ? dirname(inherited.source) : root;
+  const cases = workflow.run_data === 'device' ? [] : caseFileNames(caseRoot, tooLarge);
+  const names = [...new Set([...packageFileNames(root, workflow), ...cases])].sort();
   const sources: Record<string, string> = {};
-  const files = names.map(path => { const source = contained(root, path), bytes = readFileSync(source), sha256 = fileHash(bytes); sources[sha256] = source; return {path, sha256, size: bytes.length}; });
+  const files = names.map(path => { const source = contained(cases.includes(path) ? caseRoot : root, path), bytes = readFileSync(source), sha256 = fileHash(bytes); sources[sha256] = source; return {path, sha256, size: bytes.length}; });
   const pack = MethodPackageSchema.parse({schema:'method-package/1', runtime:runtimeVersion, files, digest:packageDigest(workflow, {runtime:runtimeVersion, files})});
   return { pack, sources, tooLarge };
 }

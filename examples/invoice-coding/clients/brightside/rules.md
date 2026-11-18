@@ -1,0 +1,2 @@
+- Water, gas and electricity go to 6110 Utilities.
+- Repairs under $500 go to 6200 Repairs; larger repairs go to 1600 Improvements.

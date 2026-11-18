@@ -1,3 +1,9 @@
+# Unreleased
+
+- **Parent and child Methods.** A child file names its parent with `extends: PATH` (relative to the child) and fills the parent's declared `params:` (`{{params.NAME}}` in text, or as a whole value; a text param can come from a file with `{file: PATH}`). Maps merge key by key with the child winning; lists replace unless written `{append: [...]}`; `null` removes a key. A child step entry patches the parent step (`prompt:` replaces its `do.prompt`), `replace: true` replaces it, a new step needs `insert_after:` or `insert_before:`, and `remove_steps:` removes parent steps. A parent with unfilled params is `abstract: true` and cannot run, be tested or be published by itself. Chains (parent, child, grandchild) work; cycles, a missing parent, an unknown step or param, and an unfilled param are errors that name the file, the key and what to do.
+- The CLI resolves a child into one ordinary `method/3.4` document (in `~/.cache/method/resolved/`) before `validate`, `check`, `run`, `steps`, `prompt`, `test`, `case`, `diff`, `explain` and `publish`. A saved version holds the resolved Method and the parent's files, so the server and workers need no change. Each file comes from the nearest folder that has it, the child's first. The child keeps its own `id:`, `cases/`, `learned.json` and files-connection folders. The version's save and publish reason ends with the files it was resolved from. Files without `extends:`, `params:`, `abstract:` or `remove_steps:` are not touched.
+- New commands: `method resolve FILE [--out NEW_FILE]`, `method show FILE --resolved`, `method children PARENT [--dir ROOT]`, and `method test PARENT --children [--dir ROOT] [--once]`, which resolves every child against the parent as it is now and runs each child's cases; it fails when a child does not resolve or a case fails. The guide has a new topic: `method authoring parents`. Example: `examples/invoice-coding`.
+
 # 0.40.1
 
 Use runtime 0.20.6.

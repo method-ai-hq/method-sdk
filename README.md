@@ -20,6 +20,10 @@ withmethod authoring
 
 See [product docs](https://docs.withmethod.ai), the [CLI guide](docs/method-authoring.md), and [release changes](CHANGELOG.md).
 
+## Parent and child Methods
+
+One Method for many clients: a parent file holds the steps, scripts and shared prompts; each client is a child file with `extends: ../parent.method` that fills the parent's `params:` and changes only what differs. The CLI resolves a child into one ordinary Method before any command, so each child validates, runs, tests and publishes as its own Method, and `method test PARENT.method --children` runs every child's cases against a parent change. See [docs/parent-child.md](docs/parent-child.md) and [examples/invoice-coding](examples/invoice-coding).
+
 ## Build and test
 
 ```sh

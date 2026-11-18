@@ -1,0 +1,30 @@
+extends: ../../invoice-coding.method
+name: Invoice coding for Brightside
+goal: Code each line of a Brightside property invoice to a GL account and the property it belongs to.
+params:
+  client_name: Brightside
+  coding_rules: {file: rules.md}
+  chart_of_accounts: accounts.json
+  late_fee_gl: "8040"
+files: {append: [properties.json]}
+steps:
+  # A patch: only the prompt of the parent's step changes; its model, inputs and outputs stay.
+  code_lines:
+    prompt: |
+      You code property invoices for {{params.client_name}}. Give each invoice line one GL account from the accounts list.
+      Late fees and interest always go to {{params.late_fee_gl}}. Utilities follow the rules below before anything else.
+
+      {{params.client_name}}'s coding rules:
+      {{params.coding_rules}}
+  # A new step, placed after the parent's code_lines step.
+  find_property:
+    insert_after: code_lines
+    name: Find the property
+    purpose: Finds the property of the invoice by its service address in properties.json. Changes nothing.
+    in: {invoice: inputs.invoice}
+    do: {kind: run, runtime: node, entrypoint: find-property.mjs}
+    out:
+      property: {type: text, description: "The property ID, or none when no address matches."}
+result:
+  entry: entry
+  property: property

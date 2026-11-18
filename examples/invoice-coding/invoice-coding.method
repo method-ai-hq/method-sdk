@@ -1,0 +1,60 @@
+format: method/3.4
+# A template: each client is a child file that extends it. method children invoice-coding.method lists them.
+abstract: true
+name: Invoice coding
+goal: Code each line of a vendor invoice to one of the client's GL accounts.
+params:
+  client_name:
+    type: text
+    description: The client's name, as the prompts say it.
+  coding_rules:
+    type: text
+    description: The client's coding rules, word for word.
+  chart_of_accounts:
+    type: text
+    description: The client's chart of accounts (a JSON file beside the child file).
+  late_fee_gl:
+    type: text
+    description: The GL account for late fees and interest.
+    default: "7190"
+models:
+  coder: anthropic/claude-haiku-4.5
+inputs:
+  invoice:
+    type: text
+    description: The text of one vendor invoice.
+files:
+  - "{{params.chart_of_accounts}}"
+steps:
+  read_lines:
+    name: Read the invoice lines
+    purpose: Splits the invoice text into lines that end in an amount and reads the client's chart of accounts. Changes nothing.
+    in: {invoice: inputs.invoice}
+    do: {kind: run, runtime: node, entrypoint: scripts/read-lines.mjs, args: ["{{params.chart_of_accounts}}"]}
+    out:
+      lines: {type: list, description: The invoice lines with their amounts., items: {type: record, fields: {text: text, amount: number}}}
+      accounts: {type: list, description: The client's GL accounts., items: {type: record, fields: {gl: text, name: text}}}
+
+  code_lines:
+    name: Code each line
+    in: {lines: lines, accounts: accounts}
+    do:
+      kind: call
+      model: coder
+      prompt: |
+        You code vendor invoices for {{params.client_name}}. Give each invoice line one GL account from the accounts list.
+        Late fees and interest always go to {{params.late_fee_gl}}.
+
+        {{params.client_name}}'s coding rules:
+        {{params.coding_rules}}
+    out:
+      coded: {type: list, description: Each line with its GL account and a one-sentence reason., items: {type: record, fields: {text: text, amount: number, gl: text, reason: text}}}
+
+  check_totals:
+    name: Check the totals
+    purpose: Confirms that the coded lines add up to the invoice lines and that every GL account is in the chart. Fails when they do not. Changes nothing.
+    in: {lines: lines, coded: coded, accounts: accounts}
+    do: {kind: run, runtime: node, entrypoint: scripts/check-totals.mjs}
+    out:
+      entry: {type: record, description: The coded lines and their total., fields: {lines: {type: list, items: {type: record, fields: {text: text, amount: number, gl: text, reason: text}}}, total: number}}
+result: entry

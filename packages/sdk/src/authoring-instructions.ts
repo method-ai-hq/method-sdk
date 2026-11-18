@@ -131,6 +131,7 @@ files               [PATH]                 helper files that scripts import or r
 steps               {ID: STEP}
 result              REF, or {NAME: REF}
 run_data            account (default) | device   device only when the user explicitly asks; it turns off dashboard results, improvements, Run now and Method Cloud
+extends             PATH                   a child of the parent .method file at PATH; params, abstract, remove_steps: method authoring parents
 
 DATA   {type: text | number | boolean | record | list | file, description,
         fields: {NAME: TYPE}   (a record, or a list of records)

@@ -8,6 +8,7 @@ import { buildPackage } from './method-files.js';
 import { authoringPath, readDocument } from './authoring.js';
 import { Outbox, accountOf, lastSaved, savedVersions } from './outbox.js';
 import { claimHome } from './home.js';
+import { provenanceLine, resolvedSource } from './extends.js';
 
 export const methodIdPattern = /^wf_[a-f0-9]{32}$/;
 /** A new account Method ID, made on this computer. The first save of this ID creates the Method. */
@@ -57,6 +58,11 @@ export function ensureMethodId(file: string): string {
   return created;
 }
 
+/** A child Method's version says which child and parent files it was resolved from; the format has no field for it. */
+function withProvenance(file: string, reason: string) {
+  const source = resolvedSource(file);
+  return source ? `${reason} ${provenanceLine(source)}` : reason;
+}
 /** Name the steps that differ from the previous version. */
 function changeReason(before: any, after: any) {
   if (!before) return 'Created with Method CLI.';
@@ -94,7 +100,7 @@ export async function prepareVersion(client: MethodClient, outbox: Outbox, file:
   outbox.add({ kind: 'version', server: client.server, method_id: id, version_id: versionId, file: authoringPath(file), body: {
     workflow, package: pack, ...(previous?.version_id && previous.version_id !== versionId ? { parent_version_id: previous.version_id } : {}),
     ...(previous?.merged_version_id && previous.merged_version_id !== versionId ? { merged_version_id: previous.merged_version_id } : {}),
-    reason: reason ?? changeReason(previous?.workflow, workflow),
+    reason: withProvenance(file, reason ?? changeReason(previous?.workflow, workflow)),
   } });
   return { method_id: id, version_id: versionId, url, unchanged: false, workflow };
 }
@@ -124,7 +130,7 @@ export async function publish(client: MethodClient, file: string, reason?: strin
   await outbox.drain();
   if (!await outbox.whenSaved(version.version_id)) throw Error(`${outbox.failure(version.version_id) ?? 'Method cannot be reached, so the version is not uploaded yet.'} Nothing was published. Run method publish again.`);
   const gate = await (await import('./quality.js')).caseGate(authoringPath(file), accepted, reason);
-  const publishReason = [reason ?? 'Published.', gate.line].filter(Boolean).join(' ');
+  const publishReason = withProvenance(file, [reason ?? 'Published.', gate.line].filter(Boolean).join(' '));
   const published = await client.request<any>(`/api/cli/methods/${encodeURIComponent(version.method_id)}/versions/${encodeURIComponent(version.version_id)}/publish`, 'POST', { reason: publishReason });
   // Script cards never hold up a publish: cards that a run did not make yet are made in the background.
   startBackgroundExplain(file, version.workflow, version.version_id, client.server);
